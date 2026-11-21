@@ -62,6 +62,15 @@ function devstack_csrf_valid(mixed $token): bool
         hash_equals($_SESSION['csrf'], $token);
 }
 
+/**
+ * Encode RPC data as a JSON object even when the PHP array is empty.
+ * Python devstackd validates that the "data" member is an object, not [].
+ */
+function devstack_rpc_wire(string $op, array $data): string
+{
+    return json_encode(['op' => $op, 'data' => (object) $data], JSON_THROW_ON_ERROR);
+}
+
 function devstack_rpc(string $op, array $data): array
 {
     $stream = @stream_socket_client('unix:///run/devstack/control.sock', $errno, $errstr, 3.0);
@@ -69,7 +78,7 @@ function devstack_rpc(string $op, array $data): array
         throw new RuntimeException('Pomocnik systemowy DevStack jest niedostępny.');
     }
     stream_set_timeout($stream, 30);
-    $wire = json_encode(['op' => $op, 'data' => $data], JSON_THROW_ON_ERROR);
+    $wire = devstack_rpc_wire($op, $data);
     if (strlen($wire) > 65536) {
         fclose($stream);
         throw new InvalidArgumentException('Żądanie jest zbyt długie.');
