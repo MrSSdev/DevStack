@@ -5,7 +5,7 @@
 ## Safeguards
 
 - Nginx listens only on WSL loopback. Windows localhost forwarding is still available; host firewall/network policy must remain enabled.
-- Authentication via Argon2id hash, secure HttpOnly SameSite Strict session cookies, 8-hour inactivity cutoff, CSRF token, origin checking and a 15-minute login throttle.
+- By default, authentication via Argon2id hash, secure HttpOnly SameSite Strict session cookies, 8-hour inactivity cutoff, CSRF token, origin checking and a 15-minute login throttle. An **explicit root-enabled passwordless local mode** bypasses login and reauthentication; TLS, strict host checks and CSRF remain enabled. Missing auth-mode configuration fails closed.
 - PHP-FPM web process under a dedicated `devstackweb` user with no login shell, separate from app PHP pools. Web process cannot directly write Nginx, databases, secret store, certificate keys or service units.
 - Root helper uses `SO_PEERCRED` UID verification and a fixed typed operation allowlist. No user-chosen command, Unix file path or raw Nginx directives are executed. Does not read environment-provided secrets into logs.
 - Generated Nginx site binds `127.0.0.1` and executes only `index.php`, denying other PHP endpoints; dotfiles denied.
@@ -13,6 +13,10 @@
 - mkcert CA private key is not copied to Windows or published. The Windows trust script requires explicit confirmation before importing the public root certificate.
 - Systemd helper has additional sandboxing (restricted address families, private temp and devices, kernel tunable protections), but **it is still a root process**.
 - CI uses `permissions: contents: read`, public GitHub-hosted runners, and no repository secrets or self-hosted agents.
+
+## Passwordless mode
+
+An operator who explicitly runs `sudo php /opt/devstack/scripts/configure-auth.php --no-password --i-understand-local-risk` disables the authentication gate. **Anyone able to connect to `https://devstack.test` from the host then has full administrative access to DevStack and can reveal database credentials.** This is not suitable for LAN exposure, untrusted programs running on the same machine, or shared Windows user sessions. Re-enable via `sudo php /opt/devstack/scripts/configure-auth.php --password`. The web UI cannot toggle authentication mode by itself.
 
 ## Known risk and safe-use boundaries
 
