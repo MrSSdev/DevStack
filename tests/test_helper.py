@@ -258,7 +258,7 @@ class ValidationTests(unittest.TestCase):
                 config_text = file.read_text()
                 self.assertEqual(config_text.splitlines(),
                                  ['[client]', 'user='+user, 'password='+password])
-                self.assertEqual(config_text.count('\\n'), 3)
+                self.assertTrue(config_text.endswith(chr(10)))
                 self.assertNotIn(password,' '.join(argv))
                 self.assertIn('CREATE TEMPORARY TABLE',input_text)
                 return '1'
