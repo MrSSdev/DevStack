@@ -1,0 +1,93 @@
+<?php
+declare(strict_types=1);
+require_once __DIR__ . '/../security.php';
+
+devstack_boot();
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+$path = is_string($path) ? rtrim($path, '/') ?: '/' : '/';
+$method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+
+if (!str_starts_with($path, '/api/')) {
+    if ($method !== 'GET' || !is_file(__DIR__ . '/index.html')) {
+        http_response_code(503);
+        exit('Frontend assets are not built. See installation guide.');
+    }
+    header('Content-Type: text/html; charset=utf-8');
+    readfile(__DIR__ . '/index.html');
+    exit;
+}
+
+if ($method === 'GET' && $path === '/api/session') {
+    devstack_json(200, ['ok' => true, 'authenticated' => devstack_is_authenticated(), 'csrf' => $_SESSION['csrf']]);
+}
+if ($method === 'POST') {
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? null;
+    if ($origin !== null && $origin !== 'https://devstack.test') {
+        devstack_json(403, ['ok' => false, 'error' => 'Nieprawidłowe pochodzenie żądania.']);
+    }
+    if (!devstack_csrf_valid($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) {
+        devstack_json(403, ['ok' => false, 'error' => 'Nieprawidłowy token CSRF. Odśwież stronę.']);
+    }
+    $body = devstack_body();
+    if ($path === '/api/login') {
+        if (!devstack_login_limit()) {
+            devstack_json(429, ['ok' => false, 'error' => 'Zbyt wiele prób. Spróbuj za 15 minut.']);
+        }
+        $password = $body['password'] ?? null;
+        if (!is_string($password) || strlen($password) > 300 || !devstack_password_valid($password)) {
+            devstack_login_limit(failure: true);
+            devstack_json(401, ['ok' => false, 'error' => 'Nieprawidłowe hasło.']);
+        }
+        devstack_login_limit(reset: true);
+        session_regenerate_id(true);
+        $_SESSION['authenticated'] = true;
+        $_SESSION['last_seen'] = time();
+        $_SESSION['csrf'] = bin2hex(random_bytes(32));
+        devstack_json(200, ['ok' => true, 'authenticated' => true, 'csrf' => $_SESSION['csrf']]);
+    }
+    if ($path === '/api/logout') {
+        $_SESSION = [];
+        session_regenerate_id(true);
+        $_SESSION['csrf'] = bin2hex(random_bytes(32));
+        devstack_json(200, ['ok' => true, 'authenticated' => false, 'csrf' => $_SESSION['csrf']]);
+    }
+}
+if (!devstack_is_authenticated()) {
+    devstack_json(401, ['ok' => false, 'error' => 'Zaloguj się do DevStack.']);
+}
+$_SESSION['last_seen'] = time();
+
+try {
+    if ($method === 'GET' && $path === '/api/state') {
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('status', [])]);
+    }
+    if ($method === 'POST' && $path === '/api/projects') {
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('create', [
+            'slug' => $body['slug'] ?? null,
+            'name' => $body['name'] ?? null,
+            'domain' => $body['domain'] ?? null,
+            'webroot' => $body['webroot'] ?? null,
+            'database' => $body['database'] ?? false,
+            'https' => $body['https'] ?? true,
+        ])]);
+    }
+    if ($method === 'POST' && $path === '/api/reveal') {
+        $pw = $body['password'] ?? null;
+        if (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw)) {
+            devstack_json(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu.']);
+        }
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('reveal', ['slug' => $body['slug'] ?? null])]);
+    }
+    if ($method === 'POST' && $path === '/api/config') {
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
+            'slug' => $body['slug'] ?? null,
+            'overrides' => $body['overrides'] ?? null,
+        ])]);
+    }
+} catch (InvalidArgumentException $e) {
+    devstack_json(422, ['ok' => false, 'error' => $e->getMessage()]);
+} catch (Throwable $e) {
+    error_log('DevStack error: ' . $e->getMessage());
+    devstack_json(422, ['ok' => false, 'error' => $e->getMessage()]);
+}
+devstack_json(404, ['ok' => false, 'error' => 'Nieznana operacja API.']);

@@ -1,0 +1,22 @@
+# Never commit machine-specific state or secrets.
+.env
+.env.*
+*.pem
+*.pfx
+*.p12
+*.key
+*.sqlite
+*.db
+credentials.json
+auth.hash
+rootCA-key.pem
+**/node_modules/
+**/dist/
+backend/public/index.html
+backend/public/assets/
+**/__pycache__/
+*.pyc
+*.log
+.DS_Store
+.vscode/
+.idea/
