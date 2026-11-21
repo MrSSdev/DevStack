@@ -116,6 +116,35 @@ sudo php-fpm8.5 -t && sudo systemctl reload php8.5-fpm
 
 Close the browser tab and reopen `https://devstack.test` with a hard reload. The browser obtains a new CSRF token for its new persistent session. The authentication mode and existing credentials are unchanged. New installations use the corrected session path automatically.
 
+### Eliminating the light flash on dark-theme page loads
+
+The server renders the saved light/dark choice directly into the initial HTML root class and the browser color scheme **before CSS/React paints**. No inline JavaScript, browser cookie, or localStorage is required. React initializes from the server-provided class instead of assuming light mode.
+
+On an already installed Ubuntu WSL2 DevStack (do not rerun the installer):
+
+```bash
+cd ~/projects/devstack-source
+git pull --ff-only
+php tests/php-security.php
+python3 -m unittest discover -s tests -v
+bash scripts/build-frontend.sh
+sudo install -m 0644 -o root -g root backend/security.php /opt/devstack/security.php
+sudo install -m 0644 -o root -g root backend/public/index.php /opt/devstack/public/index.php
+sudo install -m 0644 -o root -g root daemon/devstackd.py /opt/devstack/daemon/devstackd.py
+sudo cp -a backend/public/index.html backend/public/assets /opt/devstack/public/
+sudo chown -R root:root /opt/devstack/public
+sudo systemctl restart devstackd
+sudo systemctl reload php8.5-fpm
+```
+
+Verify the returned HTML already contains the class:
+
+```bash
+curl -ksS --noproxy '*' --resolve devstack.test:443:127.0.0.1 https://devstack.test/ | head -n 8
+```
+
+The first HTML element must be `<html lang="pl" class="dark">` when dark mode is selected, and `class="light"` otherwise. In Windows, use Ctrl+F5 once to update cached assets, then reload normally and verify there is no bright flash. The local TLS certificate, Nginx virtual host and MariaDB are unchanged.
+
 ### Updating the existing WSL installation (UI and preference bugfix)
 
 For a workstation already running DevStack v0.1, do **not** rerun the first-install script. From Ubuntu as your normal Linux user:
