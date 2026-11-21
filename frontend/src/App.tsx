@@ -231,7 +231,7 @@ export function App() {
     if(!current || (passwordRequired && !fullPassword))return
     setBusy(true)
     try {
-      const result=await request<{message:string;overrides:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword})
+      const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword})
       setOverrides(result.overrides)
       setExtraLocations(result.extra_locations)
       setFullPassword('')
