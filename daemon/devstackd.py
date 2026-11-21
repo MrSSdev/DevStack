@@ -397,7 +397,8 @@ def create_db(slug: str) -> tuple[str, str, str]:
 def drop_db(name: str, user: str) -> None:
     if not re.fullmatch(r'[a-z0-9_]{1,64}', name) or not re.fullmatch(r'[a-z0-9_]{1,64}', user):
         raise InputError('Nieprawidlowe nazwy zasobow MariaDB.')
-    mariadb_execute(f"DROP USER IF EXISTS '{user}'@'127.0.0.1'; DROP DATABASE IF EXISTS `{name}`;")
+    # First drop database; a database error must not revoke user access.
+    mariadb_execute(f"DROP DATABASE IF EXISTS `{name}`; DROP USER IF EXISTS '{user}'@'127.0.0.1';")
 
 
 def create(data: dict[str, Any]) -> dict[str, str]:
@@ -593,14 +594,15 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
 
             # A delayed reload avoids interrupting this live API request.
             defer_php_fpm_reload()
+            del state[slug]
+            secrets_state.pop(slug, None)
+            # Complete metadata writes before irreversible SQL removal.
+            write_json_atomic(SECRET_FILE, secrets_state)
+            write_json_atomic(STATE_FILE, state)
+
             if database:
                 drop_db(expected_name, expected_user)
                 db_dropped = True
-
-            del state[slug]
-            secrets_state.pop(slug, None)
-            write_json_atomic(STATE_FILE, state)
-            write_json_atomic(SECRET_FILE, secrets_state)
         except Exception:
             # Roll back the hosting configuration without touching user files.
             if saved_site.is_file():
