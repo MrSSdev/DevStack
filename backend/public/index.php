@@ -148,6 +148,7 @@ try {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
             'slug' => $body['slug'] ?? null,
             'overrides' => $body['overrides'] ?? null,
+            'extra_locations' => $body['extra_locations'] ?? '',
         ])]);
     }
 } catch (InvalidArgumentException $e) {
