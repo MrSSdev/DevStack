@@ -30,6 +30,7 @@ jobs:
           php -l backend/public/index.php
           php -l backend/security.php
           php -l scripts/set-password.php
+          php -l scripts/configure-auth.php
           bash -n scripts/install.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh
           python3 -m py_compile daemon/devstackd.py scripts/list-domains.py
       - name: Backend unit tests
