@@ -36,8 +36,8 @@ class ValidationTests(unittest.TestCase):
                 d.check_webroot(value)
 
     def test_safe_nginx_overrides(self):
-        raw = '# Project settings\nclient_max_body_size 64m;\nfastcgi_read_timeout 120s;\n'
-        self.assertEqual(d.check_overrides(raw), 'client_max_body_size 64m;\nfastcgi_read_timeout 120s;')
+        raw = '# Project settings\nclient_max_body_size 64m;\nclient_body_timeout 120s;\n'
+        self.assertEqual(d.check_overrides(raw), 'client_max_body_size 64m;\nclient_body_timeout 120s;')
         for value in (
             'include /etc/shadow;', 'access_log /tmp/hack;', 'server { listen 0.0.0.0:80; }',
             'client_max_body_size 0m;', 'fastcgi_read_timeout 9999s;', 'client_max_body_size 50m;\nclient_max_body_size 99m;',
@@ -57,15 +57,30 @@ class ValidationTests(unittest.TestCase):
             self.assertFalse(json.loads(d.handle(raw))['ok'])
 
     def test_generated_nginx_contains_loopback_and_strict_php(self):
-        conf = d.nginx_conf('optiti', 'optiti.test', Path('/home/ubuntu/projects/optiti/public'), True, 'client_max_body_size 64m;\nfastcgi_read_timeout 120s;')
+        conf = d.nginx_conf('optiti', 'optiti.test', Path('/home/ubuntu/projects/optiti/public'), True, 'client_max_body_size 64m;\nclient_body_timeout 120s;')
         self.assertIn('listen 127.0.0.1:443 ssl;', conf)
         self.assertIn('listen 127.0.0.1:80;', conf)
         self.assertIn('server_name optiti.test;', conf)
-        self.assertIn('fastcgi_read_timeout 120s;', conf)
+        self.assertIn('client_body_timeout 120s;', conf)
         self.assertIn('location ~ \\.php$ { return 404; }', conf)
         self.assertIn('location ~ ^/index\\.php$ {', conf)
         self.assertNotIn('listen 0.0.0.0', conf)
         self.assertNotIn('client_max_body_size 64m;\nclient_max_body_size', conf)
+
+    def test_full_editor_accepts_only_marked_location_rules(self):
+        p = {'path': '/home/ubuntu/projects/optiti', 'webroot': 'public', 'domain': 'optiti.test', 'https': True}
+        original = d.nginx_conf('optiti', p['domain'], Path(p['path']) / p['webroot'], True)
+        edited = original.replace(d.LOCATION_START, d.LOCATION_START + '        client_max_body_size 64m;\n')
+        self.assertEqual(d.check_full_config(edited, 'optiti', p), 'client_max_body_size 64m;')
+        for unsafe in (
+            edited.replace('listen 127.0.0.1:443 ssl;', 'listen 0.0.0.0:443 ssl;'),
+            edited.replace('root /home/ubuntu/projects/optiti/public;', 'root /etc;'),
+            edited.replace('fastcgi_pass unix:/run/php/devstack-optiti.sock;', 'fastcgi_pass 127.0.0.1:9000;'),
+            edited.replace('try_files $uri $uri/ /index.php?$query_string;', 'proxy_pass http://other.test;'),
+            edited.replace(d.LOCATION_END, '        include /etc/shadow;\n' + d.LOCATION_END),
+        ):
+            with self.assertRaises(d.InputError):
+                d.check_full_config(unsafe, 'optiti', p)
 
     def test_plain_nginx_has_no_cert(self):
         conf = d.nginx_conf('simple', 'simple.test', Path('/home/ubuntu/projects/simple/public'), False)
