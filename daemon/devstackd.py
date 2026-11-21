@@ -224,6 +224,23 @@ def status(_: dict[str, Any]) -> dict[str, Any]:
             'preferences': get_ui_preferences()}
 
 
+def mkdir_as_developer(path: pathlib.Path, dev_user: str) -> None:
+    """Ask systemd (PID 1) to create a folder as the validated developer.
+
+    The root helper runs with NoNewPrivileges=yes, so setuid in a child
+    via runuser may fail with EPERM. A short-lived systemd service gets
+    its User= identity BEFORE applying NoNewPrivileges to /usr/bin/mkdir.
+    The privileged helper never writes into the developer tree as root.
+    """
+    pwd.getpwnam(dev_user)  # Fail if the configured developer does not exist.
+    unit = 'devstack-mkdir-' + secrets.token_hex(8)
+    run(['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe',
+         '--collect', '--service-type=exec',
+         '--property=NoNewPrivileges=yes',
+         '--uid=' + dev_user, '--unit=' + unit,
+         '/usr/bin/mkdir', '--', str(path)])
+
+
 def ensure_project_paths(root: pathlib.Path, webroot: str, dev_user: str) -> pathlib.Path:
     base = pathlib.Path('/home') / dev_user / 'projects'
     if base.is_symlink() or not base.is_dir():
@@ -231,16 +248,16 @@ def ensure_project_paths(root: pathlib.Path, webroot: str, dev_user: str) -> pat
     if root.parent != base or root.is_symlink() or (root.exists() and not root.is_dir()):
         raise InputError('Projekt musi byc katalogiem bezposrednio w ~/projects.')
     # Mutations inside user-controlled directories run *as the developer*, never as root.
-    user = pwd.getpwnam(dev_user)
+    pwd.getpwnam(dev_user)
     if not root.exists():
-        run(['/usr/sbin/runuser', '-u', dev_user, '--', '/usr/bin/mkdir', '--', str(root)])
+        mkdir_as_developer(root, dev_user)
     public = root
     for part in pathlib.PurePosixPath(webroot).parts:
         public = public / part
         if public.is_symlink() or (public.exists() and not public.is_dir()):
             raise InputError('Nie mozna uzyc linku lub pliku jako folderu publicznego.')
         if not public.exists():
-            run(['/usr/sbin/runuser', '-u', dev_user, '--', '/usr/bin/mkdir', '--', str(public)])
+            mkdir_as_developer(public, dev_user)
     if root.resolve() != base.resolve() / root.name or not public.resolve().is_relative_to(root.resolve()):
         raise InputError('Sciezka wychodzi poza ~/projects.')
     return public
