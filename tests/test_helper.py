@@ -133,8 +133,108 @@ class ValidationTests(unittest.TestCase):
             self.assertFalse(site.exists())
             self.assertFalse(pool.exists())
 
+    def test_delete_requires_exact_slug_and_explicit_db_confirmation(self):
+        project = {'name':'Demo', 'path':'/home/ubuntu/projects/demo',
+                   'domain':'demo.test', 'webroot':'public', 'https':True,
+                   'database':True, 'db_name':d.db_identifiers('demo')[0],
+                   'db_user':d.db_identifiers('demo')[1]}
+        state = {'demo':project}
+        with patch.object(d,'config',return_value={'projects_dir':'/home/ubuntu/projects'}), \
+             patch.object(d,'read_json',return_value=state):
+            for body in (
+                {'slug':'demo','confirmation':'wrong','delete_database':True},
+                {'slug':'demo','confirmation':'demo','delete_database':False},
+                {'slug':'demo','confirmation':'demo','delete_database':'true'},
+                {'slug':'demo','confirmation':'demo','delete_database':True,'extra':1},
+            ):
+                with self.assertRaises(d.InputError, msg=str(body)):
+                    d.delete_project(body)
+        with patch.object(d,'read_json',return_value={}), \
+             patch.object(d,'config',return_value={'projects_dir':'/home/ubuntu/projects'}):
+            with self.assertRaises(d.InputError):
+                d.delete_project({'slug':'missing','confirmation':'missing','delete_database':False})
+
+    def test_delete_rollback_preserves_source_and_managed_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            statefile = folder / 'projects.json'
+            secretfile = folder / 'credentials.json'
+            root = folder / 'projects' / 'demo'
+            root.mkdir(parents=True)
+            (root / 'index.php').write_text('<?php echo "KEEP";')
+            site = folder / 'devstack-demo.conf'
+            enabled = folder / 'enabled-demo.conf'
+            pool = folder / 'devstack-demo-pool.conf'
+            site.write_text('original nginx config')
+            pool.write_text('original php pool')
+            enabled.symlink_to(site)
+            meta = {'name':'Demo','domain':'demo.test','path':str(root),
+                    'webroot':'public','https':False,'database':False,
+                    'db_name':'','db_user':'','overrides':''}
+            statefile.write_text(json.dumps({'demo':meta}))
+            secretfile.write_text('{}')
+            cmds=[]
+            def fake_run(args,*a,**kw):
+                cmds.append(args)
+                if args == ['/usr/sbin/nginx','-t']:
+                    raise RuntimeError('nginx verification failed')
+                return ''
+            with patch.object(d,'config',return_value={'projects_dir':str(root.parent)}), \
+                 patch.object(d,'STATE_FILE',statefile), \
+                 patch.object(d,'SECRET_FILE',secretfile), \
+                 patch.object(d,'site_path',return_value=site), \
+                 patch.object(d,'site_link_path',return_value=enabled), \
+                 patch.object(d,'pool_path',return_value=pool), \
+                 patch.object(d,'run',side_effect=fake_run):
+                with self.assertRaisesRegex(RuntimeError,'nginx verification failed'):
+                    d.delete_project({'slug':'demo','confirmation':'demo','delete_database':False})
+            self.assertEqual(json.loads(statefile.read_text()), {'demo':meta})
+            self.assertTrue(enabled.is_symlink())
+            self.assertEqual(enabled.resolve(),site)
+            self.assertEqual(site.read_text(),'original nginx config')
+            self.assertEqual(pool.read_text(),'original php pool')
+            self.assertEqual((root/'index.php').read_text(),'<?php echo "KEEP";')
+            self.assertFalse(any(a[0]=='/usr/bin/systemd-run' for a in cmds))
+
+    def test_db_smoke_test_refuses_non_project_and_never_returns_password(self):
+        slug='demo'
+        name,user=d.db_identifiers(slug)
+        with patch.object(d,'STATE_FILE',Path('/tmp/projects.json')), \
+             patch.object(d,'read_json',return_value={'demo':{'database':False}}):
+            with self.assertRaises(d.InputError):
+                d.test_project_database({'slug':slug})
+        password='a'*48
+        with tempfile.TemporaryDirectory() as tmp:
+            def fake_read(path):
+                if path==d.STATE_FILE:
+                    return {slug:{'database':True,'db_name':name,'db_user':user}}
+                return {slug:{'password':password}}
+            args_seen=[]
+            def fake_run(argv, input_text=None, **kw):
+                args_seen.append((argv,input_text))
+                opts=next(x for x in argv if x.startswith('--defaults-extra-file=')).split('=',1)[1]
+                file=Path(opts)
+                self.assertEqual(file.stat().st_mode & 0o777,0o600)
+                self.assertIn('password='+password,file.read_text())
+                self.assertNotIn(password,' '.join(argv))
+                self.assertIn('CREATE TEMPORARY TABLE',input_text)
+                return '1'
+            # A read-only test environment has no /run/devstack. Redirect temp
+            # dir via a small wrapper; no system daemon or database is used.
+            original_tempdir=tempfile.TemporaryDirectory
+            def temp_factory(*args,**kwargs):
+                kwargs['dir']=tmp
+                return original_tempdir(*args,**kwargs)
+            with patch.object(d,'read_json',side_effect=fake_read), \
+                 patch.object(d.tempfile,'TemporaryDirectory',side_effect=temp_factory), \
+                 patch.object(d,'run',side_effect=fake_run):
+                result=d.test_project_database({'slug':slug})
+            self.assertIn('dzialaja poprawnie',result['message'])
+            self.assertNotIn(password,str(result))
+            self.assertEqual(len(args_seen),1)
+
     def test_no_arbitrary_operations(self):
-        for op in ('shell', 'delete', 'change_password', 'exec', 'reload', 'writefile', 'sudo'):
+        for op in ('shell', 'delete_all', 'change_password', 'exec', 'reload', 'writefile', 'sudo'):
             result = json.loads(d.handle(json.dumps({'op': op, 'data': {'cmd': 'id'}}).encode()))
             self.assertFalse(result['ok'])
 
