@@ -67,7 +67,11 @@ export function App() {
   const [passwordRequired,setPasswordRequired]=useState(true)
   const [initializing,setInitializing]=useState(true)
   const [loginPassword,setLoginPassword]=useState('')
-  const [theme,setTheme]=useState<'light'|'dark'>('light')
+  // The server sets the theme class in <html> before CSS/JS load.
+  // Hydrate React from that exact value to avoid a light-mode flash.
+  const [theme,setTheme]=useState<'light'|'dark'>(()=>
+    document.documentElement.classList.contains('dark')?'dark':'light'
+  )
   const [savingTheme,setSavingTheme]=useState(false)
   const [refreshing,setRefreshing]=useState(false)
   const [lastRefreshed,setLastRefreshed]=useState<Date|null>(null)
