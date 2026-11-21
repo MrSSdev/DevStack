@@ -25,8 +25,8 @@ function Invoke-DevStackHostsSync {
     $next = Get-DevStackManagedHostsContent -Original $original -Domains $domains
     if ($next -cne $original) {
         # Back up before modifying a Windows system file. Never touch unrelated entries.
-        [System.IO.File]::WriteAllText($backup, $original, (New-Object System.Text.UTF8Encoding($false)))
-        [System.IO.File]::WriteAllText($hosts, $next, (New-Object System.Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllText($backup, $original, ([System.Text.UTF8Encoding]::new($false)))
+        [System.IO.File]::WriteAllText($hosts, $next, ([System.Text.UTF8Encoding]::new($false)))
         Write-Output ('DevStack hosts updated: ' + ($domains -join ', '))
     }
 }
