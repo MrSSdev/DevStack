@@ -47,6 +47,7 @@ cp -a "$SRC/backend/security.php" /opt/devstack/security.php
 cp -a "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
 cp -a "$SRC/scripts/list-domains.py" /opt/devstack/scripts/list-domains.py
 cp -a "$SRC/scripts/set-password.php" /opt/devstack/scripts/set-password.php
+cp -a "$SRC/scripts/configure-auth.php" /opt/devstack/scripts/configure-auth.php
 # Source is immutable to the web user; only explicit session files are web-writable.
 chown -R root:root /opt/devstack
 find /opt/devstack -type d -exec chmod 0755 {} +
@@ -141,8 +142,8 @@ ProtectControlGroups=true
 [Install]
 WantedBy=multi-user.target
 UNIT
-printf '[7/8] Set administrator password (never stored in Git)...\n'
-/usr/bin/php /opt/devstack/scripts/set-password.php
+printf '[7/8] Select local panel authentication (password is recommended)...\n'
+/usr/bin/php /opt/devstack/scripts/configure-auth.php --setup
 printf '[8/8] Validating and starting services...\n'
 php-fpm8.5 -t
 nginx -t
