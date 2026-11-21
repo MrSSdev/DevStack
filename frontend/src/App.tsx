@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
   Activity, ArrowLeft, ArrowRight, Blocks, Check, ChevronRight, CircleAlert, Code2,
-  Copy, Database, ExternalLink, FileCode2, FolderCode, Globe2, HardDrive,
+  Copy, Database, ExternalLink, FileCode2, FolderCode, Globe2, HardDrive, Pencil, ChevronDown, ChevronUp,
   LayoutDashboard, LockKeyhole, LogOut, Menu, Moon, Plus, RefreshCw,
   Settings2, ShieldCheck, Sun, X,
 } from 'lucide-react'
@@ -76,6 +76,10 @@ export function App() {
   const [busy,setBusy]=useState(false)
   const [draft,setDraft]=useState<Draft>(blank)
   const [overrides,setOverrides]=useState('')
+  const [fullOpen,setFullOpen]=useState(false)
+  const [fullEditing,setFullEditing]=useState(false)
+  const [fullConfig,setFullConfig]=useState('')
+  const [fullPassword,setFullPassword]=useState('')
   const [revealPassword,setRevealPassword]=useState('')
   const [dbSecret,setDbSecret]=useState('')
 
@@ -109,9 +113,13 @@ export function App() {
   },[authenticated,refresh])
   useEffect(()=>{
     setOverrides(current?.overrides??'')
+    setFullOpen(false)
+    setFullEditing(false)
+    setFullPassword('')
     setDbSecret('')
     setRevealPassword('')
   },[selected])
+  useEffect(()=>{if(!fullEditing)setFullConfig(current?.nginx_config??'')},[current?.nginx_config,fullEditing])
   useEffect(()=>{if(!dbSecret)return;const timer=window.setTimeout(()=>setDbSecret(''),20000);return ()=>window.clearTimeout(timer)},[dbSecret])
 
   async function login(e:FormEvent<HTMLFormElement>){
@@ -140,6 +148,26 @@ export function App() {
       const result=await request<{message:string}>('POST','/api/config',csrf,{slug:current.slug,overrides})
       await refresh();notify(result.message)
     }catch(e){fail(e)}finally{setBusy(false)}
+  }
+  async function saveFullConfig(){
+    if(!current || !fullPassword)return
+    setBusy(true)
+    try {
+      const result=await request<{message:string;overrides:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword})
+      setOverrides(result.overrides)
+      setFullPassword('')
+      setFullEditing(false)
+      await refresh()
+      notify(result.message)
+    }catch(e){fail(e)}finally{setBusy(false)}
+  }
+  function toggleFullEdit(){
+    if(!current)return
+    if(fullEditing){setFullEditing(false);setFullConfig(current.nginx_config);setFullPassword('');return}
+    if(overrides!==current.overrides){fail(new Error('Najpierw zapisz lub cofnij niezapisane zmiany w location /.'));return}
+    setFullConfig(current.nginx_config)
+    setFullPassword('')
+    setFullEditing(true)
   }
   async function reveal(e:FormEvent<HTMLFormElement>){
     e.preventDefault();if(!current)return;setBusy(true);setError('')
@@ -177,7 +205,29 @@ export function App() {
       {view==='projects'&&<Card><CardHeader><CardTitle>Wszystkie projekty</CardTitle><CardDescription>Każdy projekt ma niezależną konfigurację Nginx i opcjonalnie własną bazę.</CardDescription></CardHeader><CardContent>{projects.length===0?<p className="py-8 text-center text-sm text-muted-foreground">Jeszcze nie dodano projektów.</p>:<div className="divide-y">{projects.map(p=><button key={p.slug} className="flex w-full flex-wrap items-center gap-4 py-4 text-left hover:opacity-75" onClick={()=>details(p.slug)}><IconBox><FolderCode className="size-5"/></IconBox><div className="min-w-40 flex-1"><div className="font-medium">{p.name}</div><span className="text-sm text-muted-foreground">{p.domain}</span></div><div className="flex items-center gap-2"><Badge>{p.database?'MariaDB':'Bez bazy'}</Badge>{p.https&&<Dot state="active"/>}<ChevronRight className="size-4 text-muted-foreground"/></div></button>)}</div>}</CardContent></Card>}
       {view==='new'&&<div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]"><Card><CardHeader><CardTitle>Konfiguracja projektu</CardTitle><CardDescription>Przygotuj Nginx, katalog publiczny, opcjonalną bazę i SSL.</CardDescription></CardHeader><CardContent><form className="space-y-5" onSubmit={create}><Field label="Nazwa projektu"><Input placeholder="Np. Optiti" required maxLength={70} value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value,slug:d.slug || e.target.value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}))}/></Field><Field label="Identyfikator katalogu" hint="Katalog: /home/ubuntu/projects/{identyfikator}"><Input value={draft.slug} required pattern="[a-z][a-z0-9-]{1,39}" title="2–40 małych liter, cyfr lub myślników" onChange={e=>setDraft(d=>({...d,slug:e.target.value}))}/></Field><Field label="Domena .test"><Input value={draft.domain} placeholder={`${draft.slug||'projekt'}.test`} onChange={e=>setDraft(d=>({...d,domain:e.target.value}))}/></Field><Field label="Katalog publiczny" hint="Ścieżka względna projektu — dla Laravel: public"><Input value={draft.webroot} required onChange={e=>setDraft(d=>({...d,webroot:e.target.value}))}/></Field><div className="space-y-4 rounded-xl border p-4"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-medium">Utwórz bazę MariaDB</div><p className="text-xs text-muted-foreground">Oddzielny użytkownik i hasło w panelu.</p></div><Switch aria-label="Utwórz bazę danych" checked={draft.database} onCheckedChange={v=>setDraft(d=>({...d,database:v}))}/></div><div className="border-t pt-4"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-medium">Auto SSL (HTTPS)</div><p className="text-xs text-muted-foreground">mkcert i przekierowanie HTTP → HTTPS.</p></div><Switch aria-label="Włącz Auto SSL" checked={draft.https} onCheckedChange={v=>setDraft(d=>({...d,https:v}))}/></div></div></div><Button type="submit" className="w-full" disabled={busy}><Plus/>{busy?'Tworzenie…':'Utwórz projekt'}</Button></form></CardContent></Card><div className="space-y-5"><Card><CardHeader><CardTitle>Podgląd</CardTitle><CardDescription>Parametry nowego środowiska</CardDescription></CardHeader><CardContent className="space-y-4"><Info label="Domena" value={`${draft.https?'https':'http'}://${draft.domain||`${draft.slug||'projekt'}.test`}`}/><Info label="Katalog" value={`/home/ubuntu/projects/${draft.slug||'projekt'}/${draft.webroot}`}/><Info label="Baza" value={draft.database?'Nowa MariaDB':'Bez bazy'}/><Info label="Certyfikat" value={draft.https?'mkcert · Auto SSL':'Wyłączony'}/></CardContent></Card><div className="rounded-xl border bg-secondary/40 p-5 text-sm text-muted-foreground"><ShieldCheck className="mb-3 size-5 text-foreground"/><strong className="text-foreground">Bezpieczne wykonanie</strong><p className="mt-2">Żądanie przejmie odizolowany pomocnik. Po utworzeniu projektu uruchom skrypt synchronizacji domen w Windows.</p></div></div></div>}
       {view==='project'&&current&&<div className="space-y-5"><Button variant="ghost" size="sm" onClick={()=>go('projects')}><ArrowLeft/>Wszystkie projekty</Button><div className="grid gap-5 xl:grid-cols-2"><Card><CardHeader><div className="flex items-center justify-between gap-3"><CardTitle>Projekt</CardTitle>{current.https&&<Dot state="active"/>}</div></CardHeader><CardContent className="space-y-4"><Info label="Domena" value={current.domain} action={<Button variant="ghost" size="icon" aria-label="Otwórz stronę" onClick={()=>window.open(`${current.https?'https':'http'}://${current.domain}`,'_blank','noopener,noreferrer')}><ExternalLink/></Button>}/><Info label="Folder" value={current.path}/><Info label="Webroot" value={current.webroot}/><Info label="Auto SSL" value={current.https?'Włączone':'Wyłączone'}/></CardContent></Card><Card><CardHeader><CardTitle>MariaDB</CardTitle><CardDescription>Konto przypisane tylko do tej bazy</CardDescription></CardHeader><CardContent className="space-y-4">{current.database?<><Info label="Host" value="127.0.0.1" action={<Button variant="ghost" size="icon" aria-label="Kopiuj host" onClick={()=>{void copy('127.0.0.1')}}><Copy/></Button>}/><Info label="Port" value="3306"/><Info label="Baza" value={current.db_name} action={<Button variant="ghost" size="icon" aria-label="Kopiuj bazę" onClick={()=>{void copy(current.db_name)}}><Copy/></Button>}/><Info label="Użytkownik" value={current.db_user} action={<Button variant="ghost" size="icon" aria-label="Kopiuj użytkownika" onClick={()=>{void copy(current.db_user)}}><Copy/></Button>}/><form onSubmit={reveal} className="rounded-xl border bg-secondary/30 p-3"><Field label="Potwierdź hasło panelu, aby zobaczyć hasło bazy"><div className="flex gap-2"><Input type="password" autoComplete="off" aria-label="Hasło panelu" value={revealPassword} onChange={e=>setRevealPassword(e.target.value)} required/><Button type="submit" disabled={busy}>Pokaż</Button></div></Field>{dbSecret&&<div className="mt-3 flex items-center gap-2"><code className="min-w-0 flex-1 select-all break-all rounded-md bg-background p-3 text-xs">{dbSecret}</code><Button size="icon" variant="outline" aria-label="Kopiuj hasło" onClick={()=>{void copy(dbSecret)}}><Copy/></Button><Button size="icon" variant="outline" aria-label="Ukryj hasło" onClick={()=>setDbSecret('')}><X/></Button></div>}<p className="mt-2 text-xs text-muted-foreground">Hasło znika po 20 sekundach, zapisane jest tylko w magazynie serwera.</p></form></>:<p className="text-sm text-muted-foreground">Ten projekt nie ma bazy danych.</p>}</CardContent></Card></div>
-        <Card><CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Konfiguracja Nginx</CardTitle><CardDescription>Podgląd wygenerowanego pliku oraz bezpieczny edytor limitów.</CardDescription></div><Badge><FileCode2 className="size-3"/>Zarządzana</Badge></div></CardHeader><CardContent className="space-y-5"><Field label="Aktywna konfiguracja (odczyt)"><Textarea className="font-mono text-xs leading-relaxed" value={current.nginx_config} readOnly rows={14} spellCheck={false}/></Field><Field label="Dodatkowe dozwolone dyrektywy" hint="Tylko: client_max_body_size (1–999m), client_body_timeout, send_timeout i fastcgi_read_timeout (1–999s). Pozostałe dyrektywy są blokowane dla bezpieczeństwa."><Textarea className="font-mono text-xs" spellCheck={false} value={overrides} onChange={e=>setOverrides(e.target.value)} rows={5} placeholder={'client_max_body_size 64m;\nfastcgi_read_timeout 120s;'}/></Field><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Po zapisaniu: kopia → nginx -t → reload lub rollback.</p><Button disabled={busy} onClick={()=>{void saveConfig()}}><Check/>{busy?'Zapisywanie…':'Sprawdź i zastosuj'}</Button></div></CardContent></Card></div>}
+        <Card><CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Konfiguracja Nginx</CardTitle><CardDescription>Reguły wewnątrz pierwszego <code>location /</code>; pełny plik domyślnie ukryty.</CardDescription></div><Badge><FileCode2 className="size-3"/>Zarządzana</Badge></div></CardHeader><CardContent className="space-y-5">
+          <Field label="Dodatkowe reguły — location /" hint="Tekst trafia do pierwszego location /. Dozwolone: client_max_body_size (1–999m), client_body_timeout i send_timeout (1–999s). Domyślnego try_files nie wpisuj.">
+            <div className="rounded-lg border bg-secondary/40 p-3 font-mono text-xs text-muted-foreground">location / {'{'}</div>
+            <Textarea className="min-h-30 font-mono text-xs" spellCheck={false} value={overrides} onChange={e=>setOverrides(e.target.value)} rows={5} placeholder={'client_max_body_size 64m;\nclient_body_timeout 120s;'}/>
+            <div className="whitespace-pre-wrap rounded-lg border bg-secondary/40 p-3 font-mono text-xs text-muted-foreground">{'    try_files $uri $uri/ /index.php?$query_string;\n}'}</div>
+          </Field>
+          <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Kopia → nginx -t → reload albo cofnięcie.</p><Button disabled={busy || fullEditing} onClick={()=>{void saveConfig()}}><Check/>{busy?'Zapisywanie…':'Sprawdź i zastosuj'}</Button></div>
+          <div className="border-t pt-4">
+            <Button variant="outline" className="w-full justify-between" onClick={()=>setFullOpen(v=>!v)} aria-expanded={fullOpen}>
+              <span className="flex items-center gap-2"><FileCode2 className="size-4"/> {fullOpen?'Ukryj pełną konfigurację':'Pokaż pełną konfigurację'}</span>
+              {fullOpen?<ChevronUp className="size-4"/>:<ChevronDown className="size-4"/>}
+            </Button>
+            {fullOpen&&<div className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Pełny plik Nginx</h3><p className="text-xs text-muted-foreground">Podgląd i ograniczona edycja zaawansowana.</p></div><Button variant="outline" size="sm" disabled={busy} onClick={toggleFullEdit}><Pencil className="size-4"/>{fullEditing?'Anuluj edycję':'Edytuj'}</Button></div>
+              <Textarea aria-label="Pełna konfiguracja Nginx" className="font-mono text-xs leading-relaxed" rows={18} spellCheck={false} value={fullEditing?fullConfig:current.nginx_config} readOnly={!fullEditing} onChange={e=>setFullConfig(e.target.value)}/>
+              {fullEditing&&<div className="space-y-3 rounded-lg border p-4">
+                <p className="text-xs leading-relaxed text-muted-foreground">Obecnie możesz zmieniać wyłącznie reguły między znacznikami <code>devstack:location:start</code> i <code>devstack:location:end</code>. Domena, SSL, root i PHP-FPM pozostają chronione.</p>
+                <Field label="Potwierdź hasło administratora"><Input type="password" autoComplete="off" value={fullPassword} onChange={e=>setFullPassword(e.target.value)} required/></Field>
+                <div className="flex justify-end"><Button onClick={()=>{void saveFullConfig()}} disabled={busy||!fullPassword}><Check/>{busy?'Sprawdzanie…':'Sprawdź i zapisz zmiany'}</Button></div>
+              </div>}
+            </div>}
+          </div>
+        </CardContent></Card></div>}
       {view==='settings'&&<div className="grid gap-5 lg:grid-cols-2"><Card><CardHeader><CardTitle>Parametry środowiska</CardTitle><CardDescription>Utrzymywane na Ubuntu WSL2</CardDescription></CardHeader><CardContent className="space-y-4"><Info label="Panel" value="https://devstack.test"/><Info label="Backend" value="PHP-FPM 8.5 + Unix socket"/><Info label="SSL" value="mkcert (prywatny lokalny CA)"/><Info label="Usługi" value="systemd"/></CardContent></Card><Card><CardHeader><CardTitle>Synchronizacja Windows</CardTitle><CardDescription>Zmiana domeny wymaga aktualizacji pliku hosts.</CardDescription></CardHeader><CardContent className="space-y-3 text-sm text-muted-foreground"><p>Po dodaniu projektu uruchom w PowerShell jako administrator skrypt <code className="rounded bg-secondary px-1 py-0.5">windows/sync-hosts.ps1</code>.</p><p>Skrypt aktualizuje wyłącznie lokalne domeny i po potwierdzeniu importuje publiczny certyfikat CA. Nigdy nie eksportuje klucza prywatnego.</p><p>Dodatkowe opcje administracyjne (backup bazy, usuwanie projektu, rotacja haseł) będą dodawane po osobnych testach procedur odtwarzania.</p></CardContent></Card></div>}
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t pt-5 text-xs text-muted-foreground"><span>DevStack · 0.1.0</span><span>React + shadcn/ui + Tailwind CSS · PHP 8.5 · tylko localhost</span></footer>
       </main></div>
