@@ -477,6 +477,164 @@ def create(data: dict[str, Any]) -> dict[str, str]:
     return {'message': 'Projekt zapisany. PHP-FPM uruchomi nowa pule za kilka sekund. Jezeli integracja Windows jest skonfigurowana, domena zostanie zsynchronizowana automatycznie.'}
 
 
+def test_project_database(data: dict[str, Any]) -> dict[str, str]:
+    """Check the project's real MariaDB user via TCP, including write access.
+
+    Passwords are passed only through a short-lived root-owned 0600 option
+    file, never through argv, API responses or subprocess error messages.
+    The TEMPORARY table disappears when the connection closes.
+    """
+    if set(data) != {'slug'}:
+        raise InputError('Nieprawidlowe dane testu bazy.')
+    slug = check_slug(data.get('slug'))
+    project = read_json(STATE_FILE).get(slug)
+    if not isinstance(project, dict) or project.get('database') is not True:
+        raise InputError('Projekt nie posiada zarzadzanej bazy MariaDB.')
+    expected_name, expected_user = db_identifiers(slug)
+    if project.get('db_name') != expected_name or project.get('db_user') != expected_user:
+        raise InputError('Zapisane identyfikatory bazy sa niespojne.')
+    credential = read_json(SECRET_FILE).get(slug)
+    if not isinstance(credential, dict):
+        raise InputError('Brakuje danych polaczenia z baza.')
+    password = credential.get('password')
+    if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9_-]{40,80}', password):
+        raise InputError('Nieprawidlowe dane polaczenia z baza.')
+
+    with tempfile.TemporaryDirectory(prefix='db-check-', dir='/run/devstack') as temp_dir:
+        opts = pathlib.Path(temp_dir) / 'client.cnf'
+        fd = os.open(opts, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='ascii') as handle:
+            handle.write('[client]\\nuser=' + expected_user + '\\npassword=' + password + '\\n')
+        sql = ('CREATE TEMPORARY TABLE devstack_connection_check (v INTEGER NOT NULL); '
+               'INSERT INTO devstack_connection_check (v) VALUES (1); '
+               'SELECT v FROM devstack_connection_check; '
+               'DROP TEMPORARY TABLE devstack_connection_check;')
+        try:
+            result = run(['/usr/bin/mariadb', '--defaults-extra-file=' + str(opts),
+                          '--protocol=TCP', '--host=127.0.0.1', '--port=3306',
+                          '--database=' + expected_name, '--batch',
+                          '--skip-column-names', '--silent'], input_text=sql)
+        except RuntimeError:
+            raise RuntimeError('Test MariaDB nie powiodl sie. Sprawdz stan uslugi i uprawnienia konta.') from None
+    if result.strip() != '1':
+        raise RuntimeError('MariaDB nie zwrocila oczekiwanej wartosci testowej.')
+    return {'message': 'MariaDB: polaczenie TCP, zapis i odczyt danych dzialaja poprawnie.'}
+
+
+def delete_project(data: dict[str, Any]) -> dict[str, str]:
+    """Remove only managed hosting resources; NEVER delete the source tree.
+
+    A MariaDB project requires explicit acknowledgement of permanent database
+    removal. Staged Nginx/PHP configs are restored if a pre-commit step fails.
+    """
+    if set(data) != {'slug', 'confirmation', 'delete_database'}:
+        raise InputError('Nieprawidlowe dane usuwania projektu.')
+    slug = check_slug(data.get('slug'))
+    if data.get('confirmation') != slug:
+        raise InputError('Wpisz dokladny identyfikator projektu, aby potwierdzic usuniecie.')
+    delete_database = data.get('delete_database')
+    if not isinstance(delete_database, bool):
+        raise InputError('Nieprawidlowe potwierdzenie usuniecia bazy.')
+
+    cfg = config()
+    state = read_json(STATE_FILE)
+    project = state.get(slug)
+    if not isinstance(project, dict):
+        raise InputError('Nie ma takiego projektu.')
+    expected_root = pathlib.Path(cfg['projects_dir']) / slug
+    if project.get('path') != str(expected_root):
+        raise InputError('Sciezka projektu w stanie DevStack jest nieprawidlowa.')
+    check_domain(project.get('domain'))
+    check_webroot(project.get('webroot'))
+    database = project.get('database') is True
+    if database != delete_database:
+        if database:
+            raise InputError('Aby usunac ten projekt, zaznacz potwierdzenie trwalego usuniecia jego bazy MariaDB.')
+        raise InputError('Ten projekt nie ma bazy MariaDB.')
+
+    site_file = site_path(slug)
+    site_link = site_link_path(slug)
+    pool_file = pool_path(slug)
+    if (not site_file.is_file() or site_file.is_symlink()
+            or not pool_file.is_file() or pool_file.is_symlink()
+            or not site_link.is_symlink() or site_link.readlink() != site_file):
+        raise InputError('Niepelna lub zmieniona konfiguracja projektu. Niczego nie usunieto.')
+
+    cert_files = []
+    if project.get('https') is True:
+        cert_dir = pathlib.Path('/etc/devstack/certs')
+        cert_files = [cert_dir / (slug + '.pem'), cert_dir / (slug + '-key.pem')]
+        if any(not path.is_file() or path.is_symlink() for path in cert_files):
+            raise InputError('Brakuje zarzadzanego certyfikatu projektu. Niczego nie usunieto.')
+
+    secrets_state = read_json(SECRET_FILE)
+    if database:
+        expected_name, expected_user = db_identifiers(slug)
+        if (project.get('db_name') != expected_name
+                or project.get('db_user') != expected_user
+                or slug not in secrets_state):
+            raise InputError('Niespojne dane MariaDB. Niczego nie usunieto.')
+
+    with tempfile.TemporaryDirectory(prefix='.delete-' + slug + '-', dir=STATE_FILE.parent) as work:
+        staged = pathlib.Path(work)
+        saved_site = staged / 'nginx.conf'
+        saved_pool = staged / 'fpm.conf'
+        link_removed = False
+        db_dropped = False
+        original_state = dict(state)
+        original_secrets = dict(secrets_state)
+        try:
+            site_link.unlink()
+            link_removed = True
+            site_file.rename(saved_site)
+            pool_file.rename(saved_pool)
+            run(['/usr/sbin/nginx', '-t'])
+            run(['/usr/bin/systemctl', 'reload', 'nginx'])
+
+            # A delayed reload avoids interrupting this live API request.
+            defer_php_fpm_reload()
+            if database:
+                drop_db(expected_name, expected_user)
+                db_dropped = True
+
+            del state[slug]
+            secrets_state.pop(slug, None)
+            write_json_atomic(STATE_FILE, state)
+            write_json_atomic(SECRET_FILE, secrets_state)
+        except Exception:
+            # Roll back the hosting configuration without touching user files.
+            if saved_site.is_file():
+                saved_site.rename(site_file)
+            if saved_pool.is_file():
+                saved_pool.rename(pool_file)
+            if link_removed and not site_link.exists() and not site_link.is_symlink():
+                site_link.symlink_to(site_file)
+            if STATE_FILE.exists() and read_json(STATE_FILE) != original_state:
+                write_json_atomic(STATE_FILE, original_state)
+            if SECRET_FILE.exists() and read_json(SECRET_FILE) != original_secrets:
+                write_json_atomic(SECRET_FILE, original_secrets)
+            try:
+                run(['/usr/sbin/nginx', '-t'])
+                run(['/usr/bin/systemctl', 'reload', 'nginx'])
+            except Exception:
+                print('Critical: DevStack deletion rollback needs manual Nginx recovery', file=sys.stderr)
+            if db_dropped:
+                print('Critical: MariaDB was removed before metadata rollback; restore a database backup.', file=sys.stderr)
+            raise
+
+    # Remove generated TLS files only AFTER the project is committed as gone.
+    # On filesystem errors, leave orphaned certs rather than endangering user code.
+    for certificate in cert_files:
+        try:
+            certificate.unlink()
+        except OSError:
+            print('Warning: leftover generated project certificate ' + slug, file=sys.stderr)
+
+    return {'message': 'Projekt usuniety z Nginx, PHP-FPM i DevStack' +
+            (' wraz z baza MariaDB.' if database else '.') +
+            ' Pliki projektu pozostaly na dysku. Windows hosts zsynchronizuje sie automatycznie.'}
+
+
 def reveal(data: dict[str, Any]) -> dict[str, str]:
     slug = check_slug(data.get('slug'))
     if slug not in read_json(STATE_FILE):
@@ -535,6 +693,7 @@ def update_full_config(data: dict[str, Any]) -> dict[str, str]:
 
 
 OPS = {'status': status, 'create': create, 'reveal': reveal,
+       'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,
        'set_preferences': set_ui_preferences, 'get_preferences': preferences}
 
