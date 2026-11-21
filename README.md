@@ -165,6 +165,24 @@ sudo systemctl reload php8.5-fpm
 
 Then refresh `https://devstack.test` with Ctrl+F5. Check that changing the theme persists after restarting the browser, and that the refresh button shows progress plus an updated timestamp. This update requires no Nginx config, database, CA or auth mode changes. If the helper fails to restart, inspect `sudo journalctl -u devstackd -n 50 --no-pager`.
 
+### Project creation returns HTTP 502 (earlier v0.1)
+
+Older builds reloaded `php8.5-fpm` synchronously while the DevStack web request was waiting for a reply. This could reset its FastCGI connection and mask the **real cause of a failed project creation**, including errors during rollback.
+
+The helper now schedules an isolated, delayed `php8.5-fpm` reload (using a transient systemd timer) after returning the API response. Nginx is still validated using `nginx -t`, and failed operations roll back the generated configuration. Any error occurring before the reload is returned normally to the web UI.
+
+**Update an existing installed helper** from Ubuntu, without rerunning the installer:
+
+```bash
+cd ~/projects/devstack-source
+git pull --ff-only
+python3 -m unittest discover -s tests -v
+sudo install -m 0644 -o root -g root daemon/devstackd.py /opt/devstack/daemon/devstackd.py
+sudo systemctl restart devstackd
+```
+
+Do not blindly retry project creation after an HTTP 502. First verify the project list and inspect `/var/lib/devstack/projects.json` **locally as root** (never share its secrets), the generated files in `/etc/nginx/sites-available`, and `sudo journalctl -u devstackd -n 40 --no-pager`. The project slug entered in the form may differ from the folder you expect. Do not delete directories, databases or certificates manually without identifying what was created.
+
 ### Diagnostics
 
 ```bash
