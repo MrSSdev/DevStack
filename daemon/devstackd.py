@@ -163,6 +163,26 @@ def site_path(slug: str) -> pathlib.Path:
     return pathlib.Path('/etc/nginx/sites-available') / f'devstack-{slug}.conf'
 
 
+def site_link_path(slug: str) -> pathlib.Path:
+    return pathlib.Path('/etc/nginx/sites-enabled') / f'devstack-{slug}.conf'
+
+
+def pool_path(slug: str) -> pathlib.Path:
+    return pathlib.Path('/etc/php/8.5/fpm/pool.d') / f'devstack-{slug}.conf'
+
+
+def defer_php_fpm_reload() -> None:
+    """Schedule reload after the PHP request completes to avoid Nginx 502.
+
+    systemd's transient timer runs independently of the current FastCGI request.
+    The unit name is random and contains no user-controlled input.
+    """
+    unit = 'devstack-fpm-reload-' + secrets.token_hex(8)
+    run(['/usr/bin/systemd-run', '--quiet', '--collect', '--on-active=8s',
+         '--timer-property=AccuracySec=1s', '--unit=' + unit,
+         '/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
+
+
 def public_projects() -> list[dict[str, Any]]:
     output = []
     for slug, p in sorted(read_json(STATE_FILE).items()):
@@ -377,8 +397,8 @@ def create(data: dict[str, Any]) -> dict[str, str]:
         raise InputError('Projekt lub domena juz istnieje.')
     root = pathlib.Path(cfg['projects_dir']) / slug
     site_file = site_path(slug)
-    site_link = pathlib.Path('/etc/nginx/sites-enabled') / site_file.name
-    pool_file = pathlib.Path(f'/etc/php/8.5/fpm/pool.d/devstack-{slug}.conf')
+    site_link = site_link_path(slug)
+    pool_file = pool_path(slug)
     if any(p.exists() or p.is_symlink() for p in [site_file, site_link, pool_file]):
         raise InputError('Istnieja juz pliki konfiguracyjne dla tego projektu.')
     generated: list[pathlib.Path] = []
@@ -399,8 +419,10 @@ def create(data: dict[str, Any]) -> dict[str, str]:
         site_link.symlink_to(site_file)
         link_created = True
         run(['/usr/sbin/nginx', '-t'])
-        run(['/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
         run(['/usr/bin/systemctl', 'reload', 'nginx'])
+        # A synchronous FPM reload kills the live FastCGI request (HTTP 502).
+        # Validate now, schedule the actual reload for after the API response.
+        defer_php_fpm_reload()
         state[slug] = {
             'name': name, 'domain': domain, 'path': str(root), 'webroot': webroot,
             'https': https, 'database': database,
@@ -426,13 +448,16 @@ def create(data: dict[str, Any]) -> dict[str, str]:
                 drop_db(db_info[0], db_info[1])
             except Exception:
                 print('Warning: manual database cleanup needed for ' + slug, file=sys.stderr)
-        try:
-            run(['/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
-            run(['/usr/bin/systemctl', 'reload', 'nginx'])
-        except Exception:
-            pass
+        # The failed pool was never reloaded synchronously, so no FPM reload
+        # is needed. In particular, do NOT kill the PHP request which must
+        # deliver the real error to the UI (instead of an HTTP 502).
+        if site_created or link_created:
+            try:
+                run(['/usr/bin/systemctl', 'reload', 'nginx'])
+            except Exception:
+                print('Warning: Nginx rollback reload failed', file=sys.stderr)
         raise
-    return {'message': 'Projekt utworzony. Zsynchronizuj domene w Windows przez skrypt sync-hosts.ps1.'}
+    return {'message': 'Projekt zapisany. PHP-FPM uruchomi nowa pule za kilka sekund. Zsynchronizuj domene w Windows przez skrypt sync-hosts.ps1.'}
 
 
 def reveal(data: dict[str, Any]) -> dict[str, str]:
