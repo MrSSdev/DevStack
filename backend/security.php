@@ -33,8 +33,19 @@ function devstack_boot(): void
     }
 }
 
-function devstack_is_authenticated(): bool
+/**
+ * Explicit opt-in for passwordless localhost operation.
+ * Missing/unreadable/invalid mode files require authentication (fail closed).
+ */
+function devstack_password_required(?string $modeFile = null): bool
 {
+    $mode = @file_get_contents($modeFile ?? '/etc/devstack/auth.mode');
+    return !is_string($mode) || trim($mode) !== 'disabled';
+}
+
+function devstack_is_authenticated(?bool $passwordRequired = null): bool
+{
+    if (($passwordRequired ?? devstack_password_required()) === false) return true;
     return ($_SESSION['authenticated'] ?? false) === true &&
         (time() - (int)($_SESSION['last_seen'] ?? 0) < 28800);
 }
