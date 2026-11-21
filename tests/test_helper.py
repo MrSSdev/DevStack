@@ -47,6 +47,33 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(d.InputError, msg=value):
                 d.check_overrides(value)
 
+    def test_theme_defaults_and_persists_server_side(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pref = Path(tmp) / 'preferences.json'
+            with patch.object(d, 'PREFERENCES_FILE', pref):
+                self.assertEqual(d.get_ui_preferences(), {'theme': 'light'})
+                self.assertEqual(d.set_ui_preferences({'theme': 'dark'}), {'theme': 'dark'})
+                self.assertEqual(d.get_ui_preferences(), {'theme': 'dark'})
+                self.assertEqual(json.loads(pref.read_text()), {'theme': 'dark'})
+                self.assertEqual(pref.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(d.set_ui_preferences({'theme': 'light'}), {'theme': 'light'})
+                self.assertEqual(d.get_ui_preferences(), {'theme': 'light'})
+                for bad in ('auto', 'system', 'DARK', '', None, 1, [], {'theme':'dark'}):
+                    with self.assertRaises(d.InputError, msg=str(bad)):
+                        d.set_ui_preferences({'theme': bad})
+                for malformed in ({}, {'theme':'dark', 'path':'/etc/shadow'}):
+                    with self.assertRaises(d.InputError):
+                        d.set_ui_preferences(malformed)
+                pref.write_text('{"theme":"invalid"}')
+                with self.assertRaises(RuntimeError):
+                    d.get_ui_preferences()
+
+    def test_status_includes_server_theme(self):
+        with patch.object(d,'service_status',return_value={'nginx':'active'}), \
+             patch.object(d,'public_projects',return_value=[]), \
+             patch.object(d,'get_ui_preferences',return_value={'theme':'dark'}):
+            self.assertEqual(d.status({})['preferences'], {'theme': 'dark'})
+
     def test_no_arbitrary_operations(self):
         for op in ('shell', 'delete', 'change_password', 'exec', 'reload', 'writefile', 'sudo'):
             result = json.loads(d.handle(json.dumps({'op': op, 'data': {'cmd': 'id'}}).encode()))
