@@ -255,7 +255,10 @@ class ValidationTests(unittest.TestCase):
                 opts=next(x for x in argv if x.startswith('--defaults-extra-file=')).split('=',1)[1]
                 file=Path(opts)
                 self.assertEqual(file.stat().st_mode & 0o777,0o600)
-                self.assertIn('password='+password,file.read_text())
+                config_text = file.read_text()
+                self.assertEqual(config_text.splitlines(),
+                                 ['[client]', 'user='+user, 'password='+password])
+                self.assertEqual(config_text.count('\\n'), 3)
                 self.assertNotIn(password,' '.join(argv))
                 self.assertIn('CREATE TEMPORARY TABLE',input_text)
                 return '1'
