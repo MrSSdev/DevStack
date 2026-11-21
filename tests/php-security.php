@@ -36,4 +36,22 @@ check(is_object($statusRpc->data), 'Empty PHP array encoded as JSON object');
 check($statusRpc->op === 'status', 'RPC operation is preserved');
 $createRpc = json_decode(devstack_rpc_wire('create', ['slug' => 'demo']));
 check(is_object($createRpc->data) && $createRpc->data->slug === 'demo', 'Non-empty RPC data is preserved');
+// First-paint HTML must use the server theme before React renders.
+$htmlTemplate = '<html class="__DEVSTACK_THEME_CLASS__"><head><meta name="color-scheme" content="__DEVSTACK_SCHEME__"><meta name="theme-color" content="__DEVSTACK_THEME_COLOR__"></head></html>';
+$darkHtml = devstack_theme_html($htmlTemplate, 'dark');
+check(str_contains($darkHtml, 'class="dark"'), 'Dark class rendered server-side');
+check(str_contains($darkHtml, 'name="color-scheme" content="dark"'), 'Dark native color scheme');
+check(str_contains($darkHtml, 'content="#1c2028"'), 'Dark browser theme color');
+check(!str_contains($darkHtml, '__DEVSTACK_'), 'No unresolved placeholders in dark HTML');
+$lightHtml = devstack_theme_html($htmlTemplate, 'light');
+check(str_contains($lightHtml, 'class="light"'), 'Light class rendered server-side');
+check(str_contains($lightHtml, 'name="color-scheme" content="light"'), 'Light native color scheme');
+check(str_contains($lightHtml, 'content="#f8fafc"'), 'Light browser theme color');
+check(str_contains(devstack_theme_html($htmlTemplate, 'unrecognized'), 'class="light"'), 'Unknown theme fails to light');
+try {
+    devstack_theme_html('<html></html>', 'dark');
+    check(false, 'Missing placeholder must fail');
+} catch (RuntimeException $e) {
+    check(str_contains($e->getMessage(), 'placeholder'), 'Missing placeholder detected');
+}
 echo "PHP session/CSRF tests: OK\n";
