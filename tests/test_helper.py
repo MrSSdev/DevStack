@@ -101,13 +101,13 @@ class ValidationTests(unittest.TestCase):
                 if argv[:2] == ['/usr/bin/setfacl', '-m']:
                     raise RuntimeError('Cannot grant public access')
                 return ''
-            with patch.object(d, 'config', return_value={'dev_user':'ubuntu','projects_dir':str(project_dir)}), \\
-                 patch.object(d, 'STATE_FILE', state_file), \\
-                 patch.object(d, 'SECRET_FILE', secret_file), \\
-                 patch.object(d, 'site_path', return_value=site), \\
-                 patch.object(d, 'site_link_path', return_value=link), \\
-                 patch.object(d, 'pool_path', return_value=pool), \\
-                 patch.object(d, 'ensure_project_paths', return_value=public), \\
+            with patch.object(d, 'config', return_value={'dev_user':'ubuntu','projects_dir':str(project_dir)}), \
+                 patch.object(d, 'STATE_FILE', state_file), \
+                 patch.object(d, 'SECRET_FILE', secret_file), \
+                 patch.object(d, 'site_path', return_value=site), \
+                 patch.object(d, 'site_link_path', return_value=link), \
+                 patch.object(d, 'pool_path', return_value=pool), \
+                 patch.object(d, 'ensure_project_paths', return_value=public), \
                  patch.object(d, 'run', side_effect=fake_run):
                 with self.assertRaisesRegex(RuntimeError, 'Cannot grant public access'):
                     d.create({'slug':'demo', 'name':'Demo', 'domain':'demo.test',
