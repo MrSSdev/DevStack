@@ -101,6 +101,25 @@ try {
             'https' => $body['https'] ?? true,
         ])]);
     }
+    if ($method === 'POST' && $path === '/api/projects/test-db') {
+        if (count($body) !== 1 || !is_string($body['slug'] ?? null)) {
+            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowe dane testu MariaDB.']);
+        }
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('test_project_database', ['slug' => $body['slug']])]);
+    }
+    if ($method === 'POST' && $path === '/api/projects/delete') {
+        if (count($body) !== 3 ||
+            !is_string($body['slug'] ?? null) ||
+            !is_string($body['confirmation'] ?? null) ||
+            !is_bool($body['delete_database'] ?? null)) {
+            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowe dane usuwania projektu.']);
+        }
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('delete_project', [
+            'slug' => $body['slug'],
+            'confirmation' => $body['confirmation'],
+            'delete_database' => $body['delete_database'],
+        ])]);
+    }
     if ($method === 'POST' && $path === '/api/reveal') {
         $pw = $body['password'] ?? null;
         if (devstack_password_required() && (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw))) {
