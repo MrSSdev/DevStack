@@ -17,7 +17,7 @@ type View = 'dashboard' | 'projects' | 'new' | 'project' | 'settings'
 type Project = {
   slug: string; name: string; domain: string; path: string; webroot: string
   database: boolean; https: boolean; db_name: string; db_user: string
-  nginx_config: string; overrides: string
+  nginx_config: string; overrides: string; extra_locations?: string
 }
 type State = { services: Record<string,string>; projects: Project[]; preferences: { theme: 'light'|'dark' } }
 type Envelope<T> = { ok: boolean; result?: T; error?: string; authenticated?: boolean; csrf?: string }
@@ -86,6 +86,7 @@ export function App() {
   const [busy,setBusy]=useState(false)
   const [draft,setDraft]=useState<Draft>(blank)
   const [overrides,setOverrides]=useState('')
+  const [extraLocations,setExtraLocations]=useState('')
   const [fullOpen,setFullOpen]=useState(false)
   const [fullEditing,setFullEditing]=useState(false)
   const [fullConfig,setFullConfig]=useState('')
@@ -160,6 +161,7 @@ export function App() {
   },[authenticated,refresh])
   useEffect(()=>{
     setOverrides(current?.overrides??'')
+    setExtraLocations(current?.extra_locations??'')
     setFullOpen(false)
     setFullEditing(false)
     setFullPassword('')
@@ -221,7 +223,7 @@ export function App() {
   async function saveConfig(){
     if(!current)return;setBusy(true)
     try {
-      const result=await request<{message:string}>('POST','/api/config',csrf,{slug:current.slug,overrides})
+      const result=await request<{message:string}>('POST','/api/config',csrf,{slug:current.slug,overrides,extra_locations:extraLocations})
       await refresh();notify(result.message)
     }catch(e){fail(e)}finally{setBusy(false)}
   }
@@ -231,6 +233,7 @@ export function App() {
     try {
       const result=await request<{message:string;overrides:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword})
       setOverrides(result.overrides)
+      setExtraLocations(result.extra_locations)
       setFullPassword('')
       setFullEditing(false)
       await refresh()
@@ -240,7 +243,7 @@ export function App() {
   function toggleFullEdit(){
     if(!current)return
     if(fullEditing){setFullEditing(false);setFullConfig(current.nginx_config);setFullPassword('');return}
-    if(overrides!==current.overrides){fail(new Error('Najpierw zapisz lub cofnij niezapisane zmiany w location /.'));return}
+    if(overrides!==current.overrides || extraLocations!==(current.extra_locations??'')){fail(new Error('Najpierw zapisz lub cofnij niezapisane zmiany reguł Nginx.'));return}
     setFullConfig(current.nginx_config)
     setFullPassword('')
     setFullEditing(true)
@@ -286,6 +289,9 @@ export function App() {
             <div className="rounded-lg border bg-secondary/40 p-3 font-mono text-xs text-muted-foreground">location / {'{'}</div>
             <Textarea className="min-h-30 font-mono text-xs" spellCheck={false} value={overrides} onChange={e=>setOverrides(e.target.value)} rows={5} placeholder={'client_max_body_size 64m;\nclient_body_timeout 120s;'}/>
             <div className="whitespace-pre-wrap rounded-lg border bg-secondary/40 p-3 font-mono text-xs text-muted-foreground">{'    try_files $uri $uri/ /index.php?$query_string;\n}'}</div>
+          </Field>
+          <Field label="Dodatkowe lokalizacje zasobów JS/CSS" hint="Osobne bloki location na poziomie server, wstawiane przed regułami PHP. Obsługiwane: bezpieczne wzorce assetów, expires off oraz try_files. Przykład Flux poniżej.">
+            <Textarea aria-label="Dodatkowe lokalizacje Nginx" className="min-h-32 font-mono text-xs" spellCheck={false} value={extraLocations} onChange={e=>setExtraLocations(e.target.value)} rows={6} placeholder={"location ~* ^/flux/(flux|editor)(\\.min)?\\.(js|css)$ {\n    expires off;\n    try_files $uri $uri/ /index.php?$query_string;\n}"}/>
           </Field>
           <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Kopia → nginx -t → reload albo cofnięcie.</p><Button disabled={busy || fullEditing} onClick={()=>{void saveConfig()}}><Check/>{busy?'Zapisywanie…':'Sprawdź i zastosuj'}</Button></div>
           <div className="border-t pt-4">
