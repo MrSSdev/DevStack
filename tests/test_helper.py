@@ -74,6 +74,22 @@ class ValidationTests(unittest.TestCase):
              patch.object(d,'get_ui_preferences',return_value={'theme':'dark'}):
             self.assertEqual(d.status({})['preferences'], {'theme': 'dark'})
 
+    def test_mkdir_runs_under_developer_identity_without_setuid(self):
+        from types import SimpleNamespace
+        with patch.object(d.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1000)), \
+             patch.object(d, 'run') as mock_run:
+            d.mkdir_as_developer(Path('/home/ubuntu/projects/demo'), 'ubuntu')
+        argv = mock_run.call_args.args[0]
+        self.assertEqual(argv[0], '/usr/bin/systemd-run')
+        self.assertIn('--wait', argv)
+        self.assertIn('--pipe', argv)
+        self.assertIn('--collect', argv)
+        self.assertIn('--uid=ubuntu', argv)
+        self.assertIn('--property=NoNewPrivileges=yes', argv)
+        self.assertTrue(any(arg.startswith('--unit=devstack-mkdir-') for arg in argv))
+        self.assertEqual(argv[-3:], ['/usr/bin/mkdir','--','/home/ubuntu/projects/demo'])
+        self.assertNotIn('runuser', ' '.join(argv))
+
     def test_fpm_reload_is_delayed_and_not_exposed_to_user_parameters(self):
         with patch.object(d, 'run') as mock_run:
             d.defer_php_fpm_reload()
