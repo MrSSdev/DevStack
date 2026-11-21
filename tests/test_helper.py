@@ -323,7 +323,51 @@ class ValidationTests(unittest.TestCase):
                             '', normalized)
         self.assertIn(d.EXTRA_START, conf)
         self.assertLess(conf.index('location ~* ^/flux'), conf.index('location ~ ^/index'))
-        self.assertLess(conf.index('location ~* ^/flux'), conf.index('location ~ \\.php
+        self.assertLess(conf.index('location ~* ^/flux'), conf.index('location ~ \\.php$'))
+        self.assertIn('server_name demo.test;', conf)
+
+    def test_asset_locations_reject_protected_or_arbitrary_rules(self):
+        valid = (r'location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {'
+                 ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        for bad in (
+            'location / { proxy_pass http://untrusted.test; }',
+            'location ~* ^/assets/.*$ { expires off; try_files $uri $uri/ /index.php?$query_string; }',
+            'location ~* ^/flux/.*\\.php$ { expires off; try_files $uri $uri/ /index.php?$query_string; }',
+            valid.replace('expires off;', 'expires 1y;'),
+            valid.replace('try_files', 'rewrite /something last; try_files'),
+            valid.replace('/index.php?$query_string;', '/secret.php?$query_string;'),
+            valid.replace('}', 'location /admin { deny all; } }'),
+            valid + ' include /etc/shadow;',
+            valid + '\n' + valid,
+            'location ~* ^/foo/bar\\.js$ { root /etc; }',
+            'location ~* ^/foo/bar\\.js$ { fastcgi_pass unix:/tmp/a.sock; }',
+            'location ~* ^/foo/bar\\.js$ { alias /etc/shadow; }',
+        ):
+            with self.assertRaises(d.InputError, msg=bad):
+                d.check_extra_locations(bad)
+        with self.assertRaises(d.InputError):
+            d.check_extra_locations(None)
+
+    def test_full_editor_allows_only_two_safe_regions(self):
+        p = {'path':'/home/ubuntu/projects/optiti','webroot':'public',
+             'domain':'optiti.test','https':True}
+        original = d.nginx_conf('optiti','optiti.test',
+                                Path(p['path'])/'public', True)
+        flux = (r'location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {'
+                ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        edited = original.replace(d.EXTRA_START, d.EXTRA_START + '    ' + flux + '\n')
+        result = d.check_full_config(edited, 'optiti', p)
+        self.assertIn('location ~* ^/flux', result['extra_locations'])
+        self.assertEqual(result['overrides'], '')
+        for unsafe in (
+            edited.replace('server_name optiti.test;', 'server_name malicious.test;'),
+            edited.replace('fastcgi_pass unix:/run/php/devstack-optiti.sock;', 'fastcgi_pass 127.0.0.1:9000;'),
+            edited.replace(d.EXTRA_END, '# other\n' + d.EXTRA_END),
+        ):
+            with self.assertRaises(d.InputError, msg=unsafe):
+                d.check_full_config(unsafe, 'optiti', p)
+
+    def test_plain_nginx_has_no_cert(self):
         conf = d.nginx_conf('simple', 'simple.test', Path('/home/ubuntu/projects/simple/public'), False)
         self.assertNotIn('ssl_certificate', conf)
         self.assertNotIn('127.0.0.1:443', conf)
