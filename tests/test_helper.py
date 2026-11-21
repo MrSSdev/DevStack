@@ -75,7 +75,9 @@ class ValidationTests(unittest.TestCase):
     def test_db_credentials_names_are_stable_and_safe(self):
         name, user = d.db_identifiers('test-project')
         self.assertEqual((name, user), d.db_identifiers('test-project'))
-        self.assertRegex(name, r'^[a-z0-9]{1,64}
+        self.assertRegex(name, r'^[a-z0-9]{1,64}$')
+        self.assertRegex(user, r'^[a-z0-9]{1,64}$')
+        self.assertNotIn('_', name)
         self.assertNotEqual(name, d.db_identifiers('test-project2')[0])
 
     def test_secret_not_in_mariadb_error(self):
