@@ -51,6 +51,7 @@ cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
 cp -a "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
 cp -a "$SRC/scripts/list-domains.py" /opt/devstack/scripts/list-domains.py
+cp -a "$SRC/scripts/watch-domains.py" /opt/devstack/scripts/watch-domains.py
 cp -a "$SRC/scripts/set-password.php" /opt/devstack/scripts/set-password.php
 cp -a "$SRC/scripts/configure-auth.php" /opt/devstack/scripts/configure-auth.php
 # Source is immutable to the web user; only explicit session files are web-writable.
