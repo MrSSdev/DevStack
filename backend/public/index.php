@@ -18,7 +18,7 @@ if (!str_starts_with($path, '/api/')) {
 }
 
 if ($method === 'GET' && $path === '/api/session') {
-    devstack_json(200, ['ok' => true, 'authenticated' => devstack_is_authenticated(), 'csrf' => $_SESSION['csrf']]);
+    devstack_json(200, ['ok' => true, 'authenticated' => devstack_is_authenticated(), 'password_required' => devstack_password_required(), 'csrf' => $_SESSION['csrf']]);
 }
 if ($method === 'POST') {
     $origin = $_SERVER['HTTP_ORIGIN'] ?? null;
@@ -30,6 +30,9 @@ if ($method === 'POST') {
     }
     $body = devstack_body();
     if ($path === '/api/login') {
+        if (!devstack_password_required()) {
+            devstack_json(200, ['ok' => true, 'authenticated' => true, 'password_required' => false, 'csrf' => $_SESSION['csrf']]);
+        }
         if (!devstack_login_limit()) {
             devstack_json(429, ['ok' => false, 'error' => 'Zbyt wiele prób. Spróbuj za 15 minut.']);
         }
@@ -46,6 +49,9 @@ if ($method === 'POST') {
         devstack_json(200, ['ok' => true, 'authenticated' => true, 'csrf' => $_SESSION['csrf']]);
     }
     if ($path === '/api/logout') {
+        if (!devstack_password_required()) {
+            devstack_json(403, ['ok' => false, 'error' => 'W trybie bez hasła wylogowanie nie ma zastosowania.']);
+        }
         $_SESSION = [];
         session_regenerate_id(true);
         $_SESSION['csrf'] = bin2hex(random_bytes(32));
@@ -73,21 +79,23 @@ try {
     }
     if ($method === 'POST' && $path === '/api/reveal') {
         $pw = $body['password'] ?? null;
-        if (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw)) {
+        if (devstack_password_required() && (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw))) {
             devstack_json(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu.']);
         }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('reveal', ['slug' => $body['slug'] ?? null])]);
     }
     if ($method === 'POST' && $path === '/api/config/full') {
-        if (!devstack_login_limit()) {
+        if (devstack_password_required() && !devstack_login_limit()) {
             devstack_json(429, ['ok' => false, 'error' => 'Zbyt wiele prób uwierzytelnienia.']);
         }
         $pw = $body['password'] ?? null;
-        if (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw)) {
-            devstack_login_limit(failure: true);
-            devstack_json(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu, aby zapisać zaawansowaną konfigurację.']);
+        if (devstack_password_required()) {
+            if (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw)) {
+                devstack_login_limit(failure: true);
+                devstack_json(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu, aby zapisać zaawansowaną konfigurację.']);
+            }
+            devstack_login_limit(reset: true);
         }
-        devstack_login_limit(reset: true);
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_full_config', [
             'slug' => $body['slug'] ?? null,
             'full_config' => $body['full_config'] ?? null,
