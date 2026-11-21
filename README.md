@@ -53,7 +53,7 @@ You need: Windows 11 + WSL2 + Ubuntu 26.04, `systemd`, a Linux user with `sudo`,
 4. In **Windows PowerShell as Administrator**, review and run the one-time bootstrap:
 
    ```powershell
-   $setup = '\\\\wsl.localhost\\Ubuntu-26.04\\home\\ubuntu\\projects\\devstack-source\\windows\\setup-windows.ps1'
+   $setup = '\\wsl.localhost\Ubuntu-26.04\home\ubuntu\projects\devstack-source\windows\setup-windows.ps1'
    Get-Content -LiteralPath $setup
    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
    & $setup
