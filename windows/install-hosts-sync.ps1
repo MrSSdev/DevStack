@@ -63,6 +63,11 @@ $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable
+# Replace the previously queued or running version cleanly on upgrades.
+$previous = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($null -ne $previous) {
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+}
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Event-based .test domain sync, only when DevStack projects change; no timer polling.' -Force | Out-Null
 
 # Start immediately; it will also reconnect after WSL shutdown or resume.
