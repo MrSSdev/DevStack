@@ -75,7 +75,7 @@ The hosts file will contain:
 
 Open `https://devstack.test` in the Windows browser. Creating a project through the dashboard updates the root-owned `/var/lib/devstack/projects.json` atomically. A long-lived, read-only WSL `inotify` watcher emits a constant `SYNC` marker; the Windows scheduled task retrieves the validated domain list and updates **only its own marked block** in `hosts` (with a local backup).
 
-No further manual PowerShell commands or CA prompts are needed after new projects are created. Stale managed entries are removed when the trusted state no longer contains the domain. The panel's project deletion and domain-change actions are **not implemented yet**; the bridge is prepared for those future features.
+No further manual PowerShell commands or CA prompts are needed after new projects are created. Stale managed entries are removed when the trusted state no longer contains the domain. The panel supports guarded project deletion, including optional irreversible database removal confirmation; domain changes are not yet implemented. The bridge automatically removes the deleted project's Windows hosts entry.
 
 **Resilience:** The task performs a full synchronization when it starts, including after Windows logon; its worker reconnects after WSL shutdown. If the Windows account is logged out, no live task is running until the next logon.
 
