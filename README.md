@@ -14,6 +14,7 @@
 - **Nginx editor:** the main textarea configures three validated directives **inside the first `location /`**. The complete virtual host is collapsed by default and available under **Pokaż pełną konfigurację → Edytuj**. Advanced changes require re-authentication and may affect only the marked `location /` region; `listen`, SSL, `root`, and PHP settings are protected. Every write performs `nginx -t`, reload and rollback. Free-form directives are deliberately not allowed.
 - mkcert-based local HTTPS, Windows hosts and CA-trust synchronization script.
 - Standalone PHP backend without long-running Node or JavaScript server. Node is needed **only at build time**.
+- Optional passwordless mode for a trusted local workstation, enabled only through a deliberate root-only Ubuntu command. Password authentication remains the default; both modes retain HTTPS, strict host checking, and CSRF protection.
 
 ## Installation: clean WSL2 workstation
 
@@ -47,7 +48,7 @@ You need: Windows 11 + WSL2 + Ubuntu 26.04, `systemd`, a Linux user with `sudo`,
    sudo bash scripts/install.sh
    ```
 
-   The installer requests a new strong DevStack login password (at least 14 bytes). Do not share that password or store it in Git.
+   The installer lets you choose **password login** (recommended, at least 14 bytes) or **passwordless local mode**, which requires typing `DISABLE`. Do not share passwords or store them in Git.
 
 4. In **Windows PowerShell as Administrator**, inspect and run `windows/sync-hosts.ps1` from the WSL checkout. Example:
 
@@ -60,6 +61,46 @@ You need: Windows 11 + WSL2 + Ubuntu 26.04, `systemd`, a Linux user with `sudo`,
    The script adds the local domains to Windows hosts (with backup) and **asks for confirmation** before trusting the local CA public certificate. Trusting any CA is a sensitive, machine-wide operation; check the printed SHA-256 fingerprint first. The private CA key is never copied to Windows.
 
 5. Open **https://devstack.test** in the Windows browser and sign in. After adding each project, re-run the Windows script as Administrator to add the new `.test` domain to hosts. The new project's webroot is initially empty; an HTTP 404 is expected until you put your application files there.
+
+### Authentication modes (Ubuntu only)
+
+The default is **password required**, and missing or malformed authentication settings fail closed. Passwordless mode is only appropriate on a trusted local workstation. **Anyone who can access the local HTTPS panel can create projects, change Nginx and reveal local database passwords in this mode.** Never expose DevStack on LAN, Internet, shared workstations or untrusted Windows/WSL environments.
+
+Run as the ordinary Linux user with sudo, never in PowerShell:
+
+```bash
+sudo php /opt/devstack/scripts/configure-auth.php --status
+sudo php /opt/devstack/scripts/configure-auth.php --no-password --i-understand-local-risk
+# Re-enable and set a strong password:
+sudo php /opt/devstack/scripts/configure-auth.php --password
+```
+
+Reloading PHP-FPM is usually unnecessary for the mode file (read on every request), but refresh the browser so it re-checks `/api/session`. The panel's Settings screen shows the current authentication mode; changes require Ubuntu administrator access rather than a browser toggle.
+
+**Recovering from an interrupted v0.1 installation at password setup (step 7/8)**: Do not re-run `install.sh` because it is first-install-only. With the current Git checkout, first update installed application files, then choose your mode:
+
+```bash
+cd ~/projects/devstack-source
+git pull --ff-only
+bash scripts/build-frontend.sh
+sudo install -m 0644 -o root -g root backend/security.php /opt/devstack/security.php
+sudo install -m 0644 -o root -g root backend/public/index.php /opt/devstack/public/index.php
+sudo install -m 0644 -o root -g root scripts/configure-auth.php /opt/devstack/scripts/configure-auth.php
+sudo cp -a backend/public/index.html backend/public/assets /opt/devstack/public/
+sudo chown -R root:root /opt/devstack/public
+sudo chown root:devstackweb /etc/devstack
+sudo chmod 0710 /etc/devstack
+sudo php /opt/devstack/scripts/configure-auth.php --setup
+sudo php-fpm8.5 -t
+sudo nginx -t
+sudo systemctl daemon-reload
+sudo systemctl enable --now nginx php8.5-fpm mariadb redis-server
+sudo systemctl reload php8.5-fpm
+sudo systemctl reload nginx
+sudo systemctl enable --now devstackd
+```
+
+Check `systemctl is-active devstackd` and the localhost curl command below. This recovery is only for an installation known to have stopped at the password prompt; do not use it as a generic migration procedure.
 
 ### Diagnostics
 
