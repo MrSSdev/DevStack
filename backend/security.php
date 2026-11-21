@@ -104,6 +104,25 @@ function devstack_rpc(string $op, array $data): array
     return is_array($decoded['result'] ?? null) ? $decoded['result'] : [];
 }
 
+/**
+ * Replace build-time HTML placeholders with the trusted server-side UI theme.
+ * No inline script, cookie or client-side prepaint request is needed.
+ */
+function devstack_theme_html(string $html, string $theme): string
+{
+    foreach (['__DEVSTACK_THEME_CLASS__', '__DEVSTACK_SCHEME__', '__DEVSTACK_THEME_COLOR__'] as $marker) {
+        if (!str_contains($html, $marker)) {
+            throw new RuntimeException('Frontend HTML is missing a theme placeholder. Rebuild the frontend.');
+        }
+    }
+    $dark = $theme === 'dark';
+    return str_replace(
+        ['__DEVSTACK_THEME_CLASS__', '__DEVSTACK_SCHEME__', '__DEVSTACK_THEME_COLOR__'],
+        [$dark ? 'dark' : 'light', $dark ? 'dark' : 'light', $dark ? '#1c2028' : '#f8fafc'],
+        $html,
+    );
+}
+
 function devstack_json(int $status, array $value): never
 {
     http_response_code($status);
