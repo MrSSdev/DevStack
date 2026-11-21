@@ -12,8 +12,25 @@ if (!str_starts_with($path, '/api/')) {
         http_response_code(503);
         exit('Frontend assets are not built. See installation guide.');
     }
+    // Render the saved theme into <html> before any stylesheet or React loads.
+    // The helper owns the preference file; PHP never gets filesystem access to root-only state.
+    $html = file_get_contents(__DIR__ . '/index.html');
+    if (!is_string($html)) {
+        http_response_code(503);
+        exit('Frontend assets are not readable.');
+    }
+    $theme = 'light';
+    try {
+        $preferences = devstack_rpc('get_preferences', []);
+        if (($preferences['theme'] ?? null) === 'dark') {
+            $theme = 'dark';
+        }
+    } catch (Throwable $e) {
+        // Keep the page usable if the helper is temporarily unavailable.
+        error_log('DevStack theme bootstrap: ' . $e->getMessage());
+    }
     header('Content-Type: text/html; charset=utf-8');
-    readfile(__DIR__ . '/index.html');
+    echo devstack_theme_html($html, $theme);
     exit;
 }
 
