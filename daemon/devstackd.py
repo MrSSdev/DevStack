@@ -23,6 +23,7 @@ from typing import Any
 CFG_FILE = pathlib.Path('/etc/devstack/server.json')
 STATE_FILE = pathlib.Path('/var/lib/devstack/projects.json')
 SECRET_FILE = pathlib.Path('/var/lib/devstack/credentials.json')
+PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 DOMAIN = re.compile(r'[a-z][a-z0-9-]{0,39}\.test\Z')
@@ -175,8 +176,27 @@ def public_projects() -> list[dict[str, Any]]:
     return output
 
 
+def get_ui_preferences() -> dict[str, str]:
+    """One shared UI theme for the local DevStack installation."""
+    stored = read_json(PREFERENCES_FILE)
+    theme = stored.get('theme', 'light')
+    if theme not in ('light', 'dark') or not isinstance(theme, str):
+        raise RuntimeError('Nieprawidlowe ustawienia interfejsu DevStack.')
+    return {'theme': theme}
+
+
+def set_ui_preferences(data: dict[str, Any]) -> dict[str, str]:
+    """Only allow an explicit light/dark value, never arbitrary files or commands."""
+    if set(data) != {'theme'} or not isinstance(data['theme'], str) or data['theme'] not in ('light', 'dark'):
+        raise InputError('Motyw musi miec wartosc light lub dark.')
+    result = {'theme': data['theme']}
+    write_json_atomic(PREFERENCES_FILE, result)
+    return result
+
+
 def status(_: dict[str, Any]) -> dict[str, Any]:
-    return {'services': service_status(), 'projects': public_projects()}
+    return {'services': service_status(), 'projects': public_projects(),
+            'preferences': get_ui_preferences()}
 
 
 def ensure_project_paths(root: pathlib.Path, webroot: str, dev_user: str) -> pathlib.Path:
@@ -468,7 +488,8 @@ def update_full_config(data: dict[str, Any]) -> dict[str, str]:
 
 
 OPS = {'status': status, 'create': create, 'reveal': reveal,
-       'update_config': update_config, 'update_full_config': update_full_config}
+       'update_config': update_config, 'update_full_config': update_full_config,
+       'set_preferences': set_ui_preferences}
 
 
 def handle(raw: bytes) -> bytes:
