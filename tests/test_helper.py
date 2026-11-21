@@ -154,6 +154,46 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(d.InputError):
                 d.delete_project({'slug':'missing','confirmation':'missing','delete_database':False})
 
+    def test_delete_success_preserves_source_and_reconciles_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp)
+            statefile=folder/'projects.json'
+            secretfile=folder/'credentials.json'
+            root=folder/'projects'/'demo'
+            root.mkdir(parents=True)
+            (root/'public').mkdir()
+            (root/'public'/'index.php').write_text('<?php echo "KEPT";')
+            site=folder/'devstack-demo.conf'
+            link=folder/'enabled.conf'
+            pool=folder/'fpm.conf'
+            site.write_text('nginx')
+            pool.write_text('fpm')
+            link.symlink_to(site)
+            p={'name':'Demo','domain':'demo.test','path':str(root),'webroot':'public',
+               'database':False,'https':False,'db_name':'','db_user':'','overrides':''}
+            d.write_json_atomic(statefile,{'demo':p})
+            d.write_json_atomic(secretfile,{})
+            commands=[]
+            def fake_run(argv,*args,**kwargs):
+                commands.append(argv)
+                return ''
+            with patch.object(d,'config',return_value={'projects_dir':str(root.parent)}), \
+                 patch.object(d,'STATE_FILE',statefile), \
+                 patch.object(d,'SECRET_FILE',secretfile), \
+                 patch.object(d,'site_path',return_value=site), \
+                 patch.object(d,'site_link_path',return_value=link), \
+                 patch.object(d,'pool_path',return_value=pool), \
+                 patch.object(d,'run',side_effect=fake_run):
+                result=d.delete_project({'slug':'demo','confirmation':'demo','delete_database':False})
+            self.assertIn('Pliki projektu pozostaly',result['message'])
+            self.assertEqual(d.read_json(statefile),{})
+            self.assertFalse(site.exists())
+            self.assertFalse(link.exists())
+            self.assertFalse(pool.exists())
+            self.assertEqual((root/'public'/'index.php').read_text(),'<?php echo "KEPT";')
+            self.assertIn(['/usr/sbin/nginx','-t'],commands)
+            self.assertTrue(any(argv[0]=='/usr/bin/systemd-run' for argv in commands))
+
     def test_delete_rollback_preserves_source_and_managed_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
