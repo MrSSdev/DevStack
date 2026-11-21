@@ -474,7 +474,7 @@ def create(data: dict[str, Any]) -> dict[str, str]:
             except Exception:
                 print('Warning: Nginx rollback reload failed', file=sys.stderr)
         raise
-    return {'message': 'Projekt zapisany. PHP-FPM uruchomi nowa pule za kilka sekund. Zsynchronizuj domene w Windows przez skrypt sync-hosts.ps1.'}
+    return {'message': 'Projekt zapisany. PHP-FPM uruchomi nowa pule za kilka sekund. Jezeli integracja Windows jest skonfigurowana, domena zostanie zsynchronizowana automatycznie.'}
 
 
 def reveal(data: dict[str, Any]) -> dict[str, str]:
