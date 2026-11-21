@@ -31,8 +31,8 @@ jobs:
           php -l backend/security.php
           php -l scripts/set-password.php
           php -l scripts/configure-auth.php
-          bash -n scripts/install.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh
-          python3 -m py_compile daemon/devstackd.py scripts/list-domains.py
+          bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh
+          python3 -m py_compile daemon/devstackd.py scripts/list-domains.py scripts/watch-domains.py
       - name: Backend unit tests
         run: |
           python3 -m unittest discover -s tests -v
@@ -80,5 +80,12 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'windows/sync-hosts.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count -ne 0) { $errors | Format-Table; exit 1 }
+          Get-ChildItem 'windows/*.ps1' | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -ne 0) { $errors | Format-Table; throw "PowerShell parse error in $($_.Name)" }
+          }
+      - name: Hosts transformation regression tests
+        shell: powershell
+        run: ./windows/test-hosts.ps1
