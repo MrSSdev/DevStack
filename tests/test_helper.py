@@ -74,6 +74,49 @@ class ValidationTests(unittest.TestCase):
              patch.object(d,'get_ui_preferences',return_value={'theme':'dark'}):
             self.assertEqual(d.status({})['preferences'], {'theme': 'dark'})
 
+    def test_fpm_reload_is_delayed_and_not_exposed_to_user_parameters(self):
+        with patch.object(d, 'run') as mock_run:
+            d.defer_php_fpm_reload()
+        argv = mock_run.call_args.args[0]
+        self.assertEqual(argv[0], '/usr/bin/systemd-run')
+        self.assertIn('--on-active=8s', argv)
+        self.assertEqual(argv[-3:], ['/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
+        self.assertTrue(any(arg.startswith('--unit=devstack-fpm-reload-') for arg in argv))
+
+    def test_creation_failure_does_not_reload_php_fpm_or_hide_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            temp = Path(tmp)
+            project_dir = temp / 'projects'
+            project_dir.mkdir()
+            state_file = temp / 'projects.json'
+            secret_file = temp / 'credentials.json'
+            site = temp / 'devstack-demo.conf'
+            link = temp / 'enabled-demo.conf'
+            pool = temp / 'pool-demo.conf'
+            public = project_dir / 'demo' / 'public'
+            public.mkdir(parents=True)
+            commands = []
+            def fake_run(argv, *args, **kwargs):
+                commands.append(argv)
+                if argv[:2] == ['/usr/bin/setfacl', '-m']:
+                    raise RuntimeError('Cannot grant public access')
+                return ''
+            with patch.object(d, 'config', return_value={'dev_user':'ubuntu','projects_dir':str(project_dir)}), \\
+                 patch.object(d, 'STATE_FILE', state_file), \\
+                 patch.object(d, 'SECRET_FILE', secret_file), \\
+                 patch.object(d, 'site_path', return_value=site), \\
+                 patch.object(d, 'site_link_path', return_value=link), \\
+                 patch.object(d, 'pool_path', return_value=pool), \\
+                 patch.object(d, 'ensure_project_paths', return_value=public), \\
+                 patch.object(d, 'run', side_effect=fake_run):
+                with self.assertRaisesRegex(RuntimeError, 'Cannot grant public access'):
+                    d.create({'slug':'demo', 'name':'Demo', 'domain':'demo.test',
+                              'webroot':'public', 'database':False, 'https':False})
+            self.assertFalse(any(argv[:3] == ['/usr/bin/systemctl','reload','php8.5-fpm'] for argv in commands))
+            self.assertFalse(any(argv[0] == '/usr/bin/systemd-run' for argv in commands))
+            self.assertFalse(site.exists())
+            self.assertFalse(pool.exists())
+
     def test_no_arbitrary_operations(self):
         for op in ('shell', 'delete', 'change_password', 'exec', 'reload', 'writefile', 'sudo'):
             result = json.loads(d.handle(json.dumps({'op': op, 'data': {'cmd': 'id'}}).encode()))
