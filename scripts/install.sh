@@ -40,7 +40,10 @@ if ! id devstackweb >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin devstackweb
 fi
 install -d -m 0755 -o root -g root /opt/devstack /opt/devstack/public /opt/devstack/backend /opt/devstack/daemon /opt/devstack/scripts
-install -d -m 0700 -o root -g root /var/lib/devstack /var/lib/devstack/ca /etc/devstack /etc/devstack/certs
+install -d -m 0700 -o root -g root /var/lib/devstack /var/lib/devstack/ca /etc/devstack/certs
+# The web worker must traverse /etc/devstack to read auth.mode and auth.hash,
+# but must not be allowed to list the directory or read private CA material.
+install -d -m 0710 -o root -g devstackweb /etc/devstack
 install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack/web-sessions
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
