@@ -30,4 +30,10 @@ try {
 } finally {
     if (is_file($modeFile)) unlink($modeFile);
 }
+$statusRpc = json_decode(devstack_rpc_wire('status', []));
+check(is_object($statusRpc), 'RPC request is a JSON object');
+check(is_object($statusRpc->data), 'Empty PHP array encoded as JSON object');
+check($statusRpc->op === 'status', 'RPC operation is preserved');
+$createRpc = json_decode(devstack_rpc_wire('create', ['slug' => 'demo']));
+check(is_object($createRpc->data) && $createRpc->data->slug === 'demo', 'Non-empty RPC data is preserved');
 echo "PHP session/CSRF tests: OK\n";
