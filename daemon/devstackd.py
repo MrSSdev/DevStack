@@ -194,6 +194,11 @@ def set_ui_preferences(data: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def preferences(_: dict[str, Any]) -> dict[str, str]:
+    """Read theme only; safe to call during initial HTML document response."""
+    return get_ui_preferences()
+
+
 def status(_: dict[str, Any]) -> dict[str, Any]:
     return {'services': service_status(), 'projects': public_projects(),
             'preferences': get_ui_preferences()}
@@ -489,7 +494,7 @@ def update_full_config(data: dict[str, Any]) -> dict[str, str]:
 
 OPS = {'status': status, 'create': create, 'reveal': reveal,
        'update_config': update_config, 'update_full_config': update_full_config,
-       'set_preferences': set_ui_preferences}
+       'set_preferences': set_ui_preferences, 'get_preferences': preferences}
 
 
 def handle(raw: bytes) -> bytes:
