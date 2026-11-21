@@ -44,7 +44,9 @@ install -d -m 0700 -o root -g root /var/lib/devstack /var/lib/devstack/ca /etc/d
 # The web worker must traverse /etc/devstack to read auth.mode and auth.hash,
 # but must not be allowed to list the directory or read private CA material.
 install -d -m 0710 -o root -g devstackweb /etc/devstack
-install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack/web-sessions
+# Keep PHP session storage OUTSIDE /var/lib/devstack (root-only system secrets).
+# The web user must traverse every parent directory to persist CSRF sessions.
+install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web /var/lib/devstack-web/sessions
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
 cp -a "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
@@ -77,7 +79,7 @@ pm.max_children = 3
 pm.process_idle_timeout = 15s
 pm.max_requests = 500
 clear_env = yes
-php_admin_value[session.save_path] = /var/lib/devstack/web-sessions
+php_admin_value[session.save_path] = /var/lib/devstack-web/sessions
 php_admin_value[expose_php] = Off
 php_admin_value[display_errors] = Off
 php_admin_value[log_errors] = On
