@@ -289,9 +289,11 @@ def mkcert_for(slug: str, domain: str) -> list[pathlib.Path]:
 
 
 def db_identifiers(slug: str) -> tuple[str, str]:
-    short = slug.replace('-', '_')[:21]
-    suffix = hashlib.sha256(slug.encode('ascii')).hexdigest()[:6]
-    return 'dev_' + short + '_' + suffix, 'ds_' + short + '_' + suffix
+    # GRANT treats '_' and '%' as SQL wildcards even inside backticks.
+    # Generate names using only letters and numbers to avoid cross-database grants.
+    short = slug.replace('-', '')[:21]
+    suffix = hashlib.sha256(slug.encode('ascii')).hexdigest()[:8]
+    return 'dev' + short + suffix, 'ds' + short + suffix
 
 
 def mariadb_execute(sql: str) -> None:
