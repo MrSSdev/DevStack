@@ -42,12 +42,27 @@ $powershell = Join-Path $PSHOME 'powershell.exe'
 if (-not (Test-Path -LiteralPath $powershell)) {
     $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 }
+# Verify actual Windows hosts write BEFORE reporting installation success.
+# This catches malformed legacy blocks, WSL errors, or ACL problems immediately.
+Write-Host 'Checking initial DevStack hosts synchronization...' -ForegroundColor Cyan
+& $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $watcherInstalled -Once
+if ($LASTEXITCODE -ne 0) {
+    throw 'Initial Windows hosts synchronization failed. Scheduled task not updated.'
+}
+
 $action = New-ScheduledTaskAction -Execute $powershell -Argument (
     '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watcherInstalled + '"'
 )
 $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Highest
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew
+# Keep the listener active on laptops, including battery-powered WSL workstations.
+# Windows Task Scheduler otherwise defaults to rejecting starts on battery power.
+$settings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+    -MultipleInstances IgnoreNew `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Event-based .test domain sync, only when DevStack projects change; no timer polling.' -Force | Out-Null
 
 # Start immediately; it will also reconnect after WSL shutdown or resume.
