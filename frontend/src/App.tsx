@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   Activity, ArrowLeft, ArrowRight, Blocks, Check, ChevronRight, CircleAlert, Code2,
   Copy, Database, ExternalLink, FileCode2, FolderCode, Globe2, HardDrive, Pencil, ChevronDown, ChevronUp,
@@ -19,7 +19,7 @@ type Project = {
   database: boolean; https: boolean; db_name: string; db_user: string
   nginx_config: string; overrides: string
 }
-type State = { services: Record<string,string>; projects: Project[] }
+type State = { services: Record<string,string>; projects: Project[]; preferences: { theme: 'light'|'dark' } }
 type Envelope<T> = { ok: boolean; result?: T; error?: string; authenticated?: boolean; csrf?: string }
 type Draft = { name: string; slug: string; domain: string; webroot: string; database: boolean; https: boolean }
 
@@ -68,9 +68,14 @@ export function App() {
   const [initializing,setInitializing]=useState(true)
   const [loginPassword,setLoginPassword]=useState('')
   const [theme,setTheme]=useState<'light'|'dark'>('light')
+  const [savingTheme,setSavingTheme]=useState(false)
+  const [refreshing,setRefreshing]=useState(false)
+  const [lastRefreshed,setLastRefreshed]=useState<Date|null>(null)
+  const themeSaveRef=useRef(false)
+  const refreshRef=useRef(false)
   const [navOpen,setNavOpen]=useState(false)
   const [view,setView]=useState<View>('dashboard')
-  const [server,setServer]=useState<State>({services:{},projects:[]})
+  const [server,setServer]=useState<State>({services:{},projects:[],preferences:{theme:'light'}})
   const [selected,setSelected]=useState('')
   const [notice,setNotice]=useState('')
   const [error,setError]=useState('')
@@ -90,10 +95,43 @@ export function App() {
   const notify=(message:string)=>{setNotice(message);setError('')}
   const fail=(reason:unknown)=>{setError(reason instanceof Error?reason.message:'Nieznany błąd.');setNotice('')}
 
-  const refresh=useCallback(async()=>{
-    try { setServer(await request<State>('GET','/api/state')) }
-    catch (e) { fail(e) }
+  const refresh=useCallback(async(manual=false)=>{
+    if(refreshRef.current)return
+    refreshRef.current=true
+    if(manual)setRefreshing(true)
+    try {
+      const next=await request<State>('GET','/api/state')
+      setServer(next)
+      if(!themeSaveRef.current && (next.preferences?.theme==='dark'||next.preferences?.theme==='light'))setTheme(next.preferences.theme)
+      setLastRefreshed(new Date())
+      if(manual){setNotice('Dane usług i projektów zostały odświeżone.');setError('')}
+    }catch(e){
+      setError(e instanceof Error?e.message:'Nie udało się odświeżyć danych.')
+      setNotice('')
+    }finally{
+      refreshRef.current=false
+      if(manual)setRefreshing(false)
+    }
   },[])
+  async function toggleTheme(){
+    if(savingTheme || themeSaveRef.current)return
+    const next=theme==='light'?'dark':'light'
+    themeSaveRef.current=true
+    setSavingTheme(true)
+    try{
+      const saved=await request<{theme:'light'|'dark'}>('POST','/api/preferences',csrf,{theme:next})
+      setTheme(saved.theme)
+      setServer(prev=>({...prev,preferences:{theme:saved.theme}}))
+      setNotice(saved.theme==='dark'?'Zapisano ciemny motyw na serwerze.':'Zapisano jasny motyw na serwerze.')
+      setError('')
+    }catch(e){
+      setError(e instanceof Error?e.message:'Nie udało się zapisać motywu.')
+      setNotice('')
+    }finally{
+      themeSaveRef.current=false
+      setSavingTheme(false)
+    }
+  }
   useEffect(()=>{
     let disposed=false
     void (async()=>{
@@ -133,7 +171,7 @@ export function App() {
   async function logout(){
     try {const info=await request<{csrf:string}>('POST','/api/logout',csrf,{});setCsrf(info.csrf)}
     catch(e){fail(e);return}
-    setAuthenticated(false);setDbSecret('');setServer({services:{},projects:[]});setSelected('');setView('dashboard')
+    setAuthenticated(false);setDbSecret('');setServer({services:{},projects:[],preferences:{theme:'light'}});setSelected('');setView('dashboard')
   }
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault();setBusy(true);setError('')
@@ -196,7 +234,7 @@ export function App() {
       <p className="px-3 pb-2 pt-8 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">System</p><button onClick={()=>go('settings')} className={linkStyle(view==='settings')}><Settings2 className="size-4"/>Ustawienia</button>
       <div className="mt-auto space-y-3 rounded-xl border bg-secondary/50 p-3"><div className="flex items-center gap-2 text-xs font-medium"><ShieldCheck className="size-4 text-emerald-600"/> Lokalnie · WSL2</div><div className="break-all text-xs text-muted-foreground">https://devstack.test</div>{passwordRequired?<Button className="w-full" variant="outline" size="sm" onClick={()=>{void logout()}}><LogOut/>Wyloguj</Button>:<Badge>Tryb bez hasła</Badge>}</div>
     </aside>
-    <div className="lg:pl-64"><header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur"><div className="mx-auto flex h-17 max-w-7xl items-center justify-between gap-3 px-5 sm:px-8"><div className="flex items-center gap-3"><Button size="icon" variant="ghost" className="lg:hidden" aria-label="Otwórz menu" onClick={()=>setNavOpen(true)}><Menu/></Button><span className="text-sm text-muted-foreground">DevStack</span><ChevronRight className="size-3 text-muted-foreground"/><span className="text-sm font-semibold">{title[view]}</span></div><div className="flex items-center gap-2"><Badge className="hidden sm:inline-flex">Ubuntu 26.04 · WSL2</Badge><Button variant="outline" size="icon" aria-label="Odśwież" onClick={()=>{void refresh()}}><RefreshCw/></Button><Button variant="outline" size="icon" aria-label={theme==='light'?'Ciemny motyw':'Jasny motyw'} onClick={()=>setTheme(t=>t==='light'?'dark':'light')}>{theme==='light'?<Moon/>:<Sun/>}</Button></div></div></header>
+    <div className="lg:pl-64"><header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur"><div className="mx-auto flex h-17 max-w-7xl items-center justify-between gap-3 px-5 sm:px-8"><div className="flex items-center gap-3"><Button size="icon" variant="ghost" className="lg:hidden" aria-label="Otwórz menu" onClick={()=>setNavOpen(true)}><Menu/></Button><span className="text-sm text-muted-foreground">DevStack</span><ChevronRight className="size-3 text-muted-foreground"/><span className="text-sm font-semibold">{title[view]}</span></div><div className="flex items-center gap-2"><Badge className="hidden sm:inline-flex">Ubuntu 26.04 · WSL2</Badge><span className="hidden text-xs text-muted-foreground md:inline" aria-live="polite">{lastRefreshed?'Aktualizacja: '+lastRefreshed.toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'Oczekiwanie na dane'}</span><Button variant="outline" size="icon" aria-label={refreshing?'Odświeżanie danych':'Odśwież dane usług i projektów'} title={refreshing?'Odświeżanie…':'Odśwież dane usług i projektów'} disabled={refreshing} onClick={()=>{void refresh(true)}}><RefreshCw className={refreshing?'animate-spin':''}/></Button><Button variant="outline" size="icon" aria-label={theme==='light'?'Włącz ciemny motyw':'Włącz jasny motyw'} title={savingTheme?'Zapisywanie motywu…':'Zmień i zapisz motyw'} disabled={savingTheme} onClick={()=>{void toggleTheme()}}>{theme==='light'?<Moon/>:<Sun/>}</Button></div></div></header>
       <main className="mx-auto max-w-7xl space-y-7 px-5 py-8 sm:px-8 sm:py-10"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-xs font-medium tracking-wide text-muted-foreground">LOKALNE ŚRODOWISKO PROGRAMISTYCZNE</p><h1 className="text-3xl font-semibold tracking-tight">{title[view]}</h1><p className="mt-2 text-sm text-muted-foreground">Zarządzaj projektami i usługami z jednego miejsca.</p></div>{view!=='new'&&<Button onClick={()=>go('new')}><Plus/>Nowy projekt</Button>}</div>
       {notice&&<div role="status" className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"><Check className="size-4 shrink-0"/>{notice}<button className="ml-auto" aria-label="Zamknij" onClick={()=>setNotice('')}><X className="size-4"/></button></div>}
       {error&&<div role="alert" className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><CircleAlert className="size-4 shrink-0"/>{error}<button className="ml-auto" aria-label="Zamknij" onClick={()=>setError('')}><X className="size-4"/></button></div>}
