@@ -102,6 +102,20 @@ sudo systemctl enable --now devstackd
 
 Check `systemctl is-active devstackd` and the localhost curl command below. This recovery is only for an installation known to have stopped at the password prompt; do not use it as a generic migration procedure.
 
+### Fixing CSRF errors on an existing WSL installation
+
+If GET refresh works but POST settings changes return `Nieprawidłowy token CSRF`, the initial installer may have put PHP sessions under root-only `/var/lib/devstack/web-sessions`. The web user cannot traverse that directory.
+
+In Ubuntu:
+
+```bash
+sudo install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web/sessions
+sudo sed -i 's|/var/lib/devstack/web-sessions|/var/lib/devstack-web/sessions|g' /etc/php/8.5/fpm/pool.d/devstack-manager.conf
+sudo php-fpm8.5 -t && sudo systemctl reload php8.5-fpm
+```
+
+Close the browser tab and reopen `https://devstack.test` with a hard reload. The browser obtains a new CSRF token for its new persistent session. The authentication mode and existing credentials are unchanged. New installations use the corrected session path automatically.
+
 ### Updating the existing WSL installation (UI and preference bugfix)
 
 For a workstation already running DevStack v0.1, do **not** rerun the first-install script. From Ubuntu as your normal Linux user:
