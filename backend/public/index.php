@@ -78,6 +78,21 @@ try {
         }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('reveal', ['slug' => $body['slug'] ?? null])]);
     }
+    if ($method === 'POST' && $path === '/api/config/full') {
+        if (!devstack_login_limit()) {
+            devstack_json(429, ['ok' => false, 'error' => 'Zbyt wiele prób uwierzytelnienia.']);
+        }
+        $pw = $body['password'] ?? null;
+        if (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw)) {
+            devstack_login_limit(failure: true);
+            devstack_json(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu, aby zapisać zaawansowaną konfigurację.']);
+        }
+        devstack_login_limit(reset: true);
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_full_config', [
+            'slug' => $body['slug'] ?? null,
+            'full_config' => $body['full_config'] ?? null,
+        ])]);
+    }
     if ($method === 'POST' && $path === '/api/config') {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
             'slug' => $body['slug'] ?? null,
