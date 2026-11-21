@@ -165,6 +165,24 @@ sudo systemctl reload php8.5-fpm
 
 Then refresh `https://devstack.test` with Ctrl+F5. Check that changing the theme persists after restarting the browser, and that the refresh button shows progress plus an updated timestamp. This update requires no Nginx config, database, CA or auth mode changes. If the helper fails to restart, inspect `sudo journalctl -u devstackd -n 50 --no-pager`.
 
+### Project creation fails: runuser cannot set user id (EPERM)
+
+The root-owned `devstackd` service has `NoNewPrivileges=yes`. In this security context, `runuser -u <developer>` is not able to switch user IDs using its setuid path, so creating a project folder can fail before any PHP/MariaDB/Nginx configuration.
+
+The helper now requests a **short-lived systemd service** with `--uid=<validated developer>`, `--wait`, `--pipe`, and `NoNewPrivileges=yes`. PID 1 applies the selected user identity to `mkdir` before the service is restricted. The privileged helper does not write project files as root, and the main `devstackd` security hardening remains enabled.
+
+Upgrade only the helper in Ubuntu:
+
+```bash
+cd ~/projects/devstack-source
+git pull --ff-only
+python3 -m unittest discover -s tests -v
+sudo install -m 0644 -o root -g root daemon/devstackd.py /opt/devstack/daemon/devstackd.py
+sudo systemctl restart devstackd
+```
+
+Before retrying the creation form, verify the project slug currently in the browser; the UI may automatically generate `devstack-test` from the name "DevStack Test", not `test-devstack`. Check the current project list and any partial folder. Do not manually remove folders, databases or generated configs without checking.
+
 ### Project creation returns HTTP 502 (earlier v0.1)
 
 Older builds reloaded `php8.5-fpm` synchronously while the DevStack web request was waiting for a reply. This could reset its FastCGI connection and mask the **real cause of a failed project creation**, including errors during rollback.
