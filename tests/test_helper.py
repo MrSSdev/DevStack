@@ -300,7 +300,7 @@ class ValidationTests(unittest.TestCase):
         p = {'path': '/home/ubuntu/projects/optiti', 'webroot': 'public', 'domain': 'optiti.test', 'https': True}
         original = d.nginx_conf('optiti', p['domain'], Path(p['path']) / p['webroot'], True)
         edited = original.replace(d.LOCATION_START, d.LOCATION_START + '        client_max_body_size 64m;\n')
-        self.assertEqual(d.check_full_config(edited, 'optiti', p), 'client_max_body_size 64m;')
+        self.assertEqual(d.check_full_config(edited, 'optiti', p), {'overrides':'client_max_body_size 64m;', 'extra_locations':''})
         for unsafe in (
             edited.replace('listen 127.0.0.1:443 ssl;', 'listen 0.0.0.0:443 ssl;'),
             edited.replace('root /home/ubuntu/projects/optiti/public;', 'root /etc;'),
@@ -310,6 +310,218 @@ class ValidationTests(unittest.TestCase):
         ):
             with self.assertRaises(d.InputError):
                 d.check_full_config(unsafe, 'optiti', p)
+
+    def test_flux_asset_location_and_server_order(self):
+        raw = (r'location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {'
+               ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        normalized = d.check_extra_locations(raw)
+        self.assertIn('expires off;', normalized)
+        self.assertIn('try_files $uri $uri/ /index.php?$query_string;', normalized)
+        self.assertEqual(d.check_extra_locations(normalized), normalized)
+        conf = d.nginx_conf('demo', 'demo.test',
+                            Path('/home/ubuntu/projects/demo/public'), True,
+                            '', normalized)
+        self.assertIn(d.EXTRA_START, conf)
+        self.assertLess(conf.index('location ~* ^/flux'), conf.index('location ~ ^/index'))
+        self.assertLess(conf.index('location ~* ^/flux'), conf.index('location ~ \\.php
+        conf = d.nginx_conf('simple', 'simple.test', Path('/home/ubuntu/projects/simple/public'), False)
+        self.assertNotIn('ssl_certificate', conf)
+        self.assertNotIn('127.0.0.1:443', conf)
+
+    def test_db_credentials_names_are_stable_and_safe(self):
+        name, user = d.db_identifiers('test-project')
+        self.assertEqual((name, user), d.db_identifiers('test-project'))
+        self.assertRegex(name, r'^[a-z0-9]{1,64}$')
+        self.assertRegex(user, r'^[a-z0-9]{1,64}$')
+        self.assertNotIn('_', name)
+        self.assertNotEqual(name, d.db_identifiers('test-project2')[0])
+
+    def test_secret_not_in_mariadb_error(self):
+        import subprocess
+        with patch.object(d, 'run', side_effect=RuntimeError("SQL with password secret-should-not-leak")):
+            with self.assertRaisesRegex(RuntimeError, 'Sprawdz log') as cm:
+                d.mariadb_execute("SELECT 'secret-should-not-leak'")
+            self.assertNotIn('secret-should-not-leak', str(cm.exception))
+
+    def test_atomic_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            d.write_json_atomic(path, {'key': 'value'})
+            self.assertEqual(d.read_json(path)['key'], 'value')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_nginx_config_rollback_on_validation_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'devstack-alpha.conf'
+            target.write_text('old config', encoding='utf-8')
+            state = Path(tmp) / 'state.json'
+            state.write_text(json.dumps({'alpha': {'domain':'alpha.test','path':'/home/ubuntu/projects/alpha', 'webroot':'public','https':True, 'overrides':''}}), encoding='utf-8')
+            backup = Path(tmp) / 'backup'
+            backup.mkdir()
+            commands=[]
+            def fake_run(argv, *a, **kw):
+                commands.append(argv)
+                if argv[-1]=='-t' and len(commands)==1: raise RuntimeError('test failed')
+                return ''
+            # update_config has an explicit backup file location: patch Path at the exact site_path only,
+            # no real /etc files are touched.
+            with patch.object(d, 'STATE_FILE', state), patch.object(d, 'site_path', return_value=target), patch.object(d, 'run', side_effect=fake_run), patch.object(d, 'pathlib') as dummy:
+                # Preserve pathlib.Path semantics for other uses and redirect only backup location.
+                dummy.Path.side_effect = lambda value: backup if value=='/var/lib/devstack' else Path(value)
+                with self.assertRaises(RuntimeError):
+                    d.update_config({'slug':'alpha','overrides':'client_max_body_size 64m;'})
+            self.assertEqual(target.read_text(), 'old config')
+            self.assertEqual(json.loads(state.read_text())['alpha']['overrides'], '')
+
+if __name__ == '__main__':
+    unittest.main()
+))
+        self.assertIn('server_name demo.test;', conf)
+
+    def test_asset_locations_reject_protected_or_arbitrary_rules(self):
+        valid = (r'location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {'
+                 ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        for bad in (
+            'location / { proxy_pass http://untrusted.test; }',
+            'location ~* ^/assets/.*$ { expires off; try_files $uri $uri/ /index.php?$query_string; }',
+            'location ~* ^/flux/.*\\.php$ { expires off; try_files $uri $uri/ /index.php?$query_string; }',
+            valid.replace('expires off;', 'expires 1y;'),
+            valid.replace('try_files', 'rewrite /something last; try_files'),
+            valid.replace('/index.php?$query_string;', '/secret.php?$query_string;'),
+            valid.replace('}', 'location /admin { deny all; } }'),
+            valid + ' include /etc/shadow;',
+            valid + '\n' + valid,
+            'location ~* ^/foo/bar\\.js$ { root /etc; }',
+            'location ~* ^/foo/bar\\.js$ { fastcgi_pass unix:/tmp/a.sock; }',
+            'location ~* ^/foo/bar\\.js$ { alias /etc/shadow; }',
+        ):
+            with self.assertRaises(d.InputError, msg=bad):
+                d.check_extra_locations(bad)
+        with self.assertRaises(d.InputError):
+            d.check_extra_locations(None)
+
+    def test_full_editor_allows_only_two_safe_regions(self):
+        p={'path':'/home/ubuntu/projects/optiti','webroot':'public',
+           'domain':'optiti.test','https':True}
+        original=d.nginx_conf('optiti','optiti.test',
+                              Path(p['path'])/'public',True)
+        flux=(r'location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {'
+              ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        edited=original.replace(d.EXTRA_START, d.EXTRA_START + '    ' + flux + '\n')
+        result=d.check_full_config(edited,'optiti',p)
+        self.assertIn('location ~* ^/flux',result['extra_locations'])
+        self.assertEqual(result['overrides'],'')
+        for unsafe in (
+            edited.replace('server_name optiti.test;', 'server_name malicious.test;'),
+            edited.replace('location ~ ^/index\\.php
+        conf = d.nginx_conf('simple', 'simple.test', Path('/home/ubuntu/projects/simple/public'), False)
+        self.assertNotIn('ssl_certificate', conf)
+        self.assertNotIn('127.0.0.1:443', conf)
+
+    def test_db_credentials_names_are_stable_and_safe(self):
+        name, user = d.db_identifiers('test-project')
+        self.assertEqual((name, user), d.db_identifiers('test-project'))
+        self.assertRegex(name, r'^[a-z0-9]{1,64}$')
+        self.assertRegex(user, r'^[a-z0-9]{1,64}$')
+        self.assertNotIn('_', name)
+        self.assertNotEqual(name, d.db_identifiers('test-project2')[0])
+
+    def test_secret_not_in_mariadb_error(self):
+        import subprocess
+        with patch.object(d, 'run', side_effect=RuntimeError("SQL with password secret-should-not-leak")):
+            with self.assertRaisesRegex(RuntimeError, 'Sprawdz log') as cm:
+                d.mariadb_execute("SELECT 'secret-should-not-leak'")
+            self.assertNotIn('secret-should-not-leak', str(cm.exception))
+
+    def test_atomic_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            d.write_json_atomic(path, {'key': 'value'})
+            self.assertEqual(d.read_json(path)['key'], 'value')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_nginx_config_rollback_on_validation_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'devstack-alpha.conf'
+            target.write_text('old config', encoding='utf-8')
+            state = Path(tmp) / 'state.json'
+            state.write_text(json.dumps({'alpha': {'domain':'alpha.test','path':'/home/ubuntu/projects/alpha', 'webroot':'public','https':True, 'overrides':''}}), encoding='utf-8')
+            backup = Path(tmp) / 'backup'
+            backup.mkdir()
+            commands=[]
+            def fake_run(argv, *a, **kw):
+                commands.append(argv)
+                if argv[-1]=='-t' and len(commands)==1: raise RuntimeError('test failed')
+                return ''
+            # update_config has an explicit backup file location: patch Path at the exact site_path only,
+            # no real /etc files are touched.
+            with patch.object(d, 'STATE_FILE', state), patch.object(d, 'site_path', return_value=target), patch.object(d, 'run', side_effect=fake_run), patch.object(d, 'pathlib') as dummy:
+                # Preserve pathlib.Path semantics for other uses and redirect only backup location.
+                dummy.Path.side_effect = lambda value: backup if value=='/var/lib/devstack' else Path(value)
+                with self.assertRaises(RuntimeError):
+                    d.update_config({'slug':'alpha','overrides':'client_max_body_size 64m;'})
+            self.assertEqual(target.read_text(), 'old config')
+            self.assertEqual(json.loads(state.read_text())['alpha']['overrides'], '')
+
+if __name__ == '__main__':
+    unittest.main()
+, 'location ~ ^/danger\\.php
+        conf = d.nginx_conf('simple', 'simple.test', Path('/home/ubuntu/projects/simple/public'), False)
+        self.assertNotIn('ssl_certificate', conf)
+        self.assertNotIn('127.0.0.1:443', conf)
+
+    def test_db_credentials_names_are_stable_and_safe(self):
+        name, user = d.db_identifiers('test-project')
+        self.assertEqual((name, user), d.db_identifiers('test-project'))
+        self.assertRegex(name, r'^[a-z0-9]{1,64}$')
+        self.assertRegex(user, r'^[a-z0-9]{1,64}$')
+        self.assertNotIn('_', name)
+        self.assertNotEqual(name, d.db_identifiers('test-project2')[0])
+
+    def test_secret_not_in_mariadb_error(self):
+        import subprocess
+        with patch.object(d, 'run', side_effect=RuntimeError("SQL with password secret-should-not-leak")):
+            with self.assertRaisesRegex(RuntimeError, 'Sprawdz log') as cm:
+                d.mariadb_execute("SELECT 'secret-should-not-leak'")
+            self.assertNotIn('secret-should-not-leak', str(cm.exception))
+
+    def test_atomic_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            d.write_json_atomic(path, {'key': 'value'})
+            self.assertEqual(d.read_json(path)['key'], 'value')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_nginx_config_rollback_on_validation_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'devstack-alpha.conf'
+            target.write_text('old config', encoding='utf-8')
+            state = Path(tmp) / 'state.json'
+            state.write_text(json.dumps({'alpha': {'domain':'alpha.test','path':'/home/ubuntu/projects/alpha', 'webroot':'public','https':True, 'overrides':''}}), encoding='utf-8')
+            backup = Path(tmp) / 'backup'
+            backup.mkdir()
+            commands=[]
+            def fake_run(argv, *a, **kw):
+                commands.append(argv)
+                if argv[-1]=='-t' and len(commands)==1: raise RuntimeError('test failed')
+                return ''
+            # update_config has an explicit backup file location: patch Path at the exact site_path only,
+            # no real /etc files are touched.
+            with patch.object(d, 'STATE_FILE', state), patch.object(d, 'site_path', return_value=target), patch.object(d, 'run', side_effect=fake_run), patch.object(d, 'pathlib') as dummy:
+                # Preserve pathlib.Path semantics for other uses and redirect only backup location.
+                dummy.Path.side_effect = lambda value: backup if value=='/var/lib/devstack' else Path(value)
+                with self.assertRaises(RuntimeError):
+                    d.update_config({'slug':'alpha','overrides':'client_max_body_size 64m;'})
+            self.assertEqual(target.read_text(), 'old config')
+            self.assertEqual(json.loads(state.read_text())['alpha']['overrides'], '')
+
+if __name__ == '__main__':
+    unittest.main()
+),
+            edited.replace(d.EXTRA_END,'# other\n'+d.EXTRA_END),
+        ):
+            with self.assertRaises(d.InputError,msg=unsafe):
+                d.check_full_config(unsafe,'optiti',p)
 
     def test_plain_nginx_has_no_cert(self):
         conf = d.nginx_conf('simple', 'simple.test', Path('/home/ubuntu/projects/simple/public'), False)
