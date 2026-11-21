@@ -505,7 +505,7 @@ def test_project_database(data: dict[str, Any]) -> dict[str, str]:
         opts = pathlib.Path(temp_dir) / 'client.cnf'
         fd = os.open(opts, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w', encoding='ascii') as handle:
-            handle.write('[client]\\nuser=' + expected_user + '\\npassword=' + password + '\\n')
+            handle.write('[client]\nuser=' + expected_user + '\npassword=' + password + '\n')
         sql = ('CREATE TEMPORARY TABLE devstack_connection_check (v INTEGER NOT NULL); '
                'INSERT INTO devstack_connection_check (v) VALUES (1); '
                'SELECT v FROM devstack_connection_check; '
