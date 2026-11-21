@@ -19,11 +19,14 @@ if (-not (Test-Path -LiteralPath $windowsWatcher -PathType Leaf) -or
     throw 'Missing Windows sync scripts. Use a complete DevStack Git checkout.'
 }
 $source = @('watch-hosts.ps1', 'hosts-lib.ps1')
-$watcherSource = '\\wsl.localhost\Ubuntu-26.04\home\ubuntu\projects\devstack-source\scripts\watch-domains.py'
-$domainsSource = '\\wsl.localhost\Ubuntu-26.04\home\ubuntu\projects\devstack-source\scripts\list-domains.py'
-if (-not (Test-Path -LiteralPath $watcherSource -PathType Leaf) -or
-    -not (Test-Path -LiteralPath $domainsSource -PathType Leaf)) {
-    throw 'WSL DevStack source is not accessible. Install it into Ubuntu first.'
+$wsl = Join-Path $env:WINDIR 'System32\wsl.exe'
+& $wsl -d Ubuntu-26.04 -u root -- test -f /opt/devstack/scripts/watch-domains.py
+if ($LASTEXITCODE -ne 0) {
+    throw 'WSL event watcher is missing. Install or upgrade DevStack inside Ubuntu first.'
+}
+& $wsl -d Ubuntu-26.04 -u root -- test -f /opt/devstack/scripts/list-domains.py
+if ($LASTEXITCODE -ne 0) {
+    throw 'WSL DevStack domain export script is missing.'
 }
 
 New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
