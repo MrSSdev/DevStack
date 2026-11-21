@@ -67,6 +67,13 @@ try {
     if ($method === 'GET' && $path === '/api/state') {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('status', [])]);
     }
+    if ($method === 'POST' && $path === '/api/preferences') {
+        $theme = $body['theme'] ?? null;
+        if (!is_string($theme) || !in_array($theme, ['light', 'dark'], true) || count($body) !== 1) {
+            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowa wartość motywu.']);
+        }
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('set_preferences', ['theme' => $theme])]);
+    }
     if ($method === 'POST' && $path === '/api/projects') {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('create', [
             'slug' => $body['slug'] ?? null,
