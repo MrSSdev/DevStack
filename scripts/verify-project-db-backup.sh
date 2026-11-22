@@ -36,8 +36,9 @@ gzip -t "$archive"
 # A checksum protects against corruption, not a maliciously constructed dump.
 echo 'Only run this command on a trusted dump created on your own workstation.'
 temp_db="devstackverify$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+created=0
 cleanup() {
-  if [[ -n "$temp_db" ]]; then
+  if [[ "$created" -eq 1 ]]; then
     mariadb --protocol=socket -e "DROP DATABASE IF EXISTS \`$temp_db\`;" ||
       echo "WARNING: temporary verification database $temp_db needs manual cleanup." >&2
   fi
@@ -45,6 +46,7 @@ cleanup() {
 trap cleanup EXIT
 
 mariadb --protocol=socket -e "CREATE DATABASE \`$temp_db\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+created=1
 gzip -dc -- "$archive" | mariadb --protocol=socket --database="$temp_db"
 tables="$(mariadb --protocol=socket --batch --skip-column-names -e \
   "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$temp_db';")"
