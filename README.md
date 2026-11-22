@@ -7,20 +7,20 @@
 ## What works
 
 - **Local dashboard:** React 19, TypeScript, Tailwind CSS 4; persisted light/dark theme; service status for Nginx, PHP-FPM, MariaDB and Redis.
-- **Project lifecycle:** create project in \`~/projects/<slug>\`, assign its \`.test\` domain, document root, optional HTTPS and isolated database account; remove managed project configuration through a confirmation flow **while preserving the source directory**.
+- **Project lifecycle:** create project in `~/projects/<slug>`, assign its `.test` domain, document root, optional HTTPS and isolated database account; remove managed project configuration through a confirmation flow **while preserving the source directory**.
 - **MariaDB:** cryptographically generated per-project credentials, password reveal behind panel authentication, and a TCP connection/read/write test using a temporary table.
-- **Nginx:** separate PHP-FPM socket per project, managed virtual hosts, protected \`location /\` directives and validated server-level JavaScript/CSS asset \`location\` blocks (including the documented Laravel Flux rule). A save runs \`nginx -t\` before reload and rolls back failed validation.
-- **Windows integration:** local mkcert CA trust with explicit consent; event-driven Windows \`hosts\` synchronization when project domains change. Only the DevStack-managed block is modified; unrelated hosts entries are preserved.
+- **Nginx:** separate PHP-FPM socket per project, managed virtual hosts, protected `location /` directives and validated server-level JavaScript/CSS asset `location` blocks (including the documented Laravel Flux rule). A save runs `nginx -t` before reload and rolls back failed validation.
+- **Windows integration:** local mkcert CA trust with explicit consent; event-driven Windows `hosts` synchronization when project domains change. Only the DevStack-managed block is modified; unrelated hosts entries are preserved.
 - **Security:** loopback-only Nginx listeners, dedicated non-root PHP web account, CSRF/session/origin protection, local Unix socket to a narrowly scoped root helper, root-only settings and credentials. Authentication is required by default, with a deliberate CLI opt-in for passwordless use on a trusted workstation.
 
-**Known limitations:** there is no tested automated in-place upgrade/rollback or scheduled backup/restore yet. Manual per-project MariaDB backups and disposable restore verification scripts are available, but still require a live WSL test. The current Windows scheduled hosts watcher starts at Windows login and can keep or restart WSL; on-demand-only lifecycle management is not implemented. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
+**Known limitations:** a staged in-place updater with rollback attempts is now included, but it still requires real-machine validation. MariaDB dump and disposable restore were tested on a WSL workstation; full WSL archive import was also verified for the key DevStack files. Scheduled backups and tested live service recovery from the imported distro are not yet available. The current Windows scheduled hosts watcher starts at Windows login and can keep or restart WSL; on-demand-only lifecycle management is not implemented. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
 
 ## Requirements
 
-- Windows 11 with WSL2, \`Ubuntu-26.04\`, \`systemd\`, and an ordinary Ubuntu user with \`sudo\`.
-- Developer projects stored under Linux \`~/projects\` on the WSL filesystem, **not under \`/mnt/c\`**.
+- Windows 11 with WSL2, `Ubuntu-26.04`, `systemd`, and an ordinary Ubuntu user with `sudo`.
+- Developer projects stored under Linux `~/projects` on the WSL filesystem, **not under `/mnt/c`**.
 - A supported current Node.js version for the frontend **build only**; no Node.js server runs at runtime.
-- Initial interactive Windows Administrator access for local CA trust and the managed \`hosts\` integration.
+- Initial interactive Windows Administrator access for local CA trust and the managed `hosts` integration.
 
 ## Fresh installation (new workstation only)
 
@@ -51,7 +51,7 @@ Get-Content -LiteralPath $setup
 & $setup
 ~~~
 
-Replace \`<ubuntu-user>\` with the actual Linux username. Review the CA fingerprint before approving trust. The private CA key stays inside Ubuntu.
+Replace `<ubuntu-user>` with the actual Linux username. Review the CA fingerprint before approving trust. The private CA key stays inside Ubuntu.
 
 Open **https://devstack.test** in a Windows browser.
 
@@ -59,19 +59,19 @@ Open **https://devstack.test** in a Windows browser.
 
 ## Existing installation — do not rerun the installer
 
-The bootstrap and \`scripts/install.sh\` are first-install-only and refuse to overwrite an existing installation. For an existing DevStack instance, run tests, build frontend assets as your normal user, then deploy the updated application as described in **[docs/UPGRADING.md](docs/UPGRADING.md)**.
+The bootstrap and `scripts/install.sh` are first-install-only and refuse to overwrite an existing installation. For an existing DevStack instance, run `bash scripts/update.sh` **as your normal Ubuntu user** to test, build, stage and deploy the update with a protected code backup and health checks. The updater has not yet been validated on every workstation; review its code and make backups first. Details: **[docs/UPGRADING.md](docs/UPGRADING.md)**.
 
 ## Common tasks
 
-**Create a project:** open the dashboard, select new project, choose a folder, relative webroot (typically \`public\`), local domain, HTTPS and optional MariaDB.
+**Create a project:** open the dashboard, select new project, choose a folder, relative webroot (typically `public`), local domain, HTTPS and optional MariaDB.
 
 **Test MariaDB:** open the project detail view and choose **Sprawdź połączenie, zapis i odczyt MariaDB**.
 
-**Edit Nginx:** the basic field accepts a limited set of \`location /\` directives. The **Dodatkowe lokalizacje zasobów JS/CSS** field supports validated extra server-level asset routing. An example for Flux is documented in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+**Edit Nginx:** the basic field accepts a limited set of `location /` directives. The **Dodatkowe lokalizacje zasobów JS/CSS** field supports validated extra server-level asset routing. An example for Flux is documented in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 **Remove a project:** open its detail view, choose **Usuń projekt z DevStack**, type its exact identifier, and separately confirm destruction of its managed MariaDB database if present. **The project source directory stays on disk. Database removal is irreversible without a backup.**
 
-**Back up MariaDB (Ubuntu):** `sudo bash scripts/backup-project-db.sh <project-slug>`; validate the archive with `scripts/verify-project-db-backup.sh`. For WSL export and restoration procedures, see [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md). These commands require testing on your own machine before being relied upon.
+**Back up MariaDB (Ubuntu):** `sudo bash scripts/backup-project-db.sh <project-slug>`; validate the archive with `scripts/verify-project-db-backup.sh`. For WSL export and restoration procedures, see [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md). The MariaDB dump and temporary restore workflow has been tested on a WSL workstation; verify it on your own data as well.
 
 **Check services (Ubuntu):**
 
