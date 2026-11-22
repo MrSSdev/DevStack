@@ -20,3 +20,7 @@ backend/public/assets/
 .DS_Store
 .vscode/
 .idea/
+
+# Private planning documents belong in DevStackDoc, not public DevStack.
+/ROADMAP.md
+/ASUS/
