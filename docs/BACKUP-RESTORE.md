@@ -11,7 +11,7 @@ Backups contain private code, application data and potentially credentials or ce
 
 ## 1. Per-project MariaDB backup
 
-A registered project with a DevStack-managed MariaDB database is required. For example, replace \`my-project\` with the slug from your dashboard.
+A registered project with a DevStack-managed MariaDB database is required. For example, replace `my-project` with the slug from your dashboard.
 
 **Ubuntu (ordinary developer account):**
 
@@ -23,8 +23,8 @@ sudo bash scripts/backup-project-db.sh my-project
 The script:
 - Validates the project against root-owned DevStack state and the expected managed database name.
 - Uses the root MariaDB Unix socket, **not the project password**, and does not expose credentials on the command line.
-- Runs \`mariadb-dump --single-transaction --quick --routines --events --triggers --hex-blob\`; do not run concurrent schema-changing migrations while it works.
-- Writes a \`0600\` compressed dump and separate SHA-256 hash under \`~/devstack-backups\` (\`0700\` directory). It never overwrites a named backup.
+- Runs `mariadb-dump --single-transaction --quick --routines --events --triggers --hex-blob`; do not run concurrent schema-changing migrations while it works.
+- Writes a `0600` compressed dump and separate SHA-256 hash under `~/devstack-backups` (`0700` directory). It never overwrites a named backup.
 - Does not include the source tree, DevStack project metadata, database account/grants, or the mkcert CA. Use full WSL export for those items.
 
 **Verify backup readability and restore without touching the original database:**
@@ -37,7 +37,7 @@ sudo bash scripts/verify-project-db-backup.sh \
 
 Pass the **actual path reported by the backup script**. The verifier checks SHA-256 and gzip integrity, creates a random throwaway MariaDB database, imports the SQL and removes that scratch database afterwards. **Run it only on trusted backups you created yourself**, as it executes SQL with local MariaDB administrator privileges. Review messages for cleanup failures.
 
-For a **throwaway test project**, create a table named \`backup_probe\` with at least one row. Then pass \`backup_probe\` as a second argument to require the restored copy to contain rows:
+For a **throwaway test project**, create a table named `backup_probe` with at least one row. Then pass `backup_probe` as a second argument to require the restored copy to contain rows:
 
 ~~~bash
 sudo bash scripts/verify-project-db-backup.sh \
@@ -54,7 +54,7 @@ The scripts do not automatically schedule backups or copy them off the WSL disk.
 
 A full export is sensitive: it includes the local CA private key, passwords, project code, and all MariaDB storage. **Do not share the archive or its contents**.
 
-The current \`DevStack Hosts Event Sync\` Windows scheduled task starts a long-running Linux watcher and reconnects after WSL termination. Temporarily stop it first; otherwise the task can immediately restart Ubuntu.
+The current `DevStack Hosts Event Sync` Windows scheduled task starts a long-running Linux watcher and reconnects after WSL termination. Temporarily stop it first; otherwise the task can immediately restart Ubuntu.
 
 Close development tools, stop project jobs and database writes. In **Ubuntu**, stop services gracefully:
 
@@ -86,7 +86,7 @@ if (-not (Test-Path -LiteralPath $archive) -or (Get-Item -LiteralPath $archive).
 Get-FileHash -Algorithm SHA256 -LiteralPath $archive
 ~~~
 
-The archive may be large. Confirm enough free disk space first. Copy the resulting \`.tar\` to an off-machine location; an archive on the same physical SSD does not protect against disk loss.
+The archive may be large. Confirm enough free disk space first. Copy the resulting `.tar` to an off-machine location; an archive on the same physical SSD does not protect against disk loss.
 
 **Resume normal work** (Windows PowerShell; this intentionally starts Ubuntu again):
 
@@ -99,7 +99,7 @@ This restores the old watcher until its planned on-demand lifecycle improvement 
 
 ## 3. Non-destructive WSL import test
 
-**Never import over or unregister your existing \`Ubuntu-26.04\`** to verify a backup.
+**Never import over or unregister your existing `Ubuntu-26.04`** to verify a backup.
 
 An export is not fully verified until you can import it and read the expected files. Ensure there is enough extra storage space to unpack the tar. Prefer a separate throwaway Windows machine/VM to avoid local port conflicts; importing on the same laptop is possible, but don't run both DevStack server instances concurrently.
 
@@ -124,10 +124,10 @@ Importing proves the tar can be restored and its expected files are present; che
 
 ## 4. Restore overview (when needed)
 
-- **Full WSL:** import an archive as a **new distribution name** and new destination folder. Examine its files and data first; never overwrite the working distro blindly. Read Microsoft WSL documentation on \`wsl --import\` and \`wsl --export\`.
+- **Full WSL:** import an archive as a **new distribution name** and new destination folder. Examine its files and data first; never overwrite the working distro blindly. Read Microsoft WSL documentation on `wsl --import` and `wsl --export`.
 - **MariaDB only:** verify the dump first in an isolated scratch database. When restoring to a real project, take another backup and use the exact reviewed target schema; managed project accounts/credentials remain maintained separately by DevStack. The scratch verifier never overwrites project databases.
 - **Local CA:** a restored full export includes the mkcert root key; protect it carefully. Do not reinstall or re-trust certificate authorities just to test SQL restore.
-- **After restoring:** check \`nginx -t\`, \`php-fpm8.5 -t\`, service status, project content and Windows \`hosts\` synchronization.
+- **After restoring:** check `nginx -t`, `php-fpm8.5 -t`, service status, project content and Windows `hosts` synchronization.
 
 Official WSL reference: https://learn.microsoft.com/en-us/windows/wsl/basic-commands
 
