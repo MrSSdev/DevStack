@@ -56,7 +56,8 @@ gzip -dc -- "$archive" | mariadb --protocol=socket --database="$temp_db"
 tables="$(mariadb --protocol=socket --batch --skip-column-names -e \
   "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$temp_db';")"
 if [[ -n "$expected_table" ]]; then
-  rows="$(mariadb --protocol=socket --batch --skip-column-names -e     "SELECT COUNT(*) FROM \`$temp_db\`.\`$expected_table\`;")"
+  rows="$(mariadb --protocol=socket --batch --skip-column-names -e \
+    "SELECT COUNT(*) FROM \`$temp_db\`.\`$expected_table\`;")"
   if [[ ! "$rows" =~ ^[0-9]+$ || "$rows" -lt 1 ]]; then
     echo "Expected table '$expected_table' is empty or unreadable in restored backup." >&2
     exit 1
