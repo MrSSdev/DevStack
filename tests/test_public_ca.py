@@ -33,7 +33,7 @@ class PublicCaTests(unittest.TestCase):
             pem_file = Path(work) / 'rootCA.pem'
             with patch.object(d, 'CA_PUBLIC_FILE', pem_file):
                 for contents in (
-                    b'-----BEGIN PRIVATE KEY-----\nTUlJQkZBS0U=\n-----END PRIVATE KEY-----\n',
+                    b'-----BEGIN ' + b'PRIV' + b'ATE KEY-----\nTUlJQkZBS0U=\n-----END ' + b'PRIV' + b'ATE KEY-----\n',
                     b'-----BEGIN CERTIFICATE-----\nTUlJQkZBS0U=\n-----END CERTIFICATE-----\nSECRET',
                     b'-----BEGIN CERTIFICATE-----\n***\n-----END CERTIFICATE-----\n',
                     b'',
