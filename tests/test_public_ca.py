@@ -18,7 +18,7 @@ class PublicCaTests(unittest.TestCase):
     def test_read_only_public_certificate_and_sha256(self):
         with tempfile.TemporaryDirectory() as work:
             pem_file = Path(work) / 'rootCA.pem'
-            public_pem = b'-----BEGIN CERTIFICATE-----\nTUlJQkZBS0U=\n-----END CERTIFICATE-----\n'
+            public_pem = b'-----BEGIN CERTIFICATE-----\n' + (b'TUlJQkZBS0U=\n' * 12) + b'-----END CERTIFICATE-----\n'
             pem_file.write_bytes(public_pem)
             with patch.object(d, 'CA_PUBLIC_FILE', pem_file):
                 result = d.public_ca_certificate({})
