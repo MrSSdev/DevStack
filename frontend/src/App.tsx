@@ -97,6 +97,8 @@ export function App() {
   const [deleteConfirmation,setDeleteConfirmation]=useState('')
   const [deleteDbConfirm,setDeleteDbConfirm]=useState(false)
   const [testingDb,setTestingDb]=useState(false)
+  const [caFingerprint,setCaFingerprint]=useState('')
+  const [caInfoError,setCaInfoError]=useState(false)
 
   const projects=server.projects
   const current=projects.find(p=>p.slug===selected)
@@ -154,6 +156,16 @@ export function App() {
     return ()=>{disposed=true}
   },[refresh])
   useEffect(()=>{document.documentElement.classList.toggle('dark',theme==='dark')},[theme])
+  useEffect(()=>{
+    if(!authenticated || view!=='settings')return
+    let disposed=false
+    setCaFingerprint('')
+    setCaInfoError(false)
+    void request<{sha256:string}>('GET','/api/ca/info')
+      .then(info=>{if(!disposed)setCaFingerprint(info.sha256)})
+      .catch(()=>{if(!disposed)setCaInfoError(true)})
+    return ()=>{disposed=true}
+  },[authenticated,view])
   useEffect(()=>{
     if(!authenticated)return
     const id=window.setInterval(()=>{void refresh()},30000)
@@ -318,7 +330,20 @@ export function App() {
             <div className="flex flex-wrap gap-2"><Button type="submit" variant="destructive" disabled={busy||deleteConfirmation!==current.slug||(current.database&&!deleteDbConfirm)}><Trash2/>{busy?'Usuwanie…':'Potwierdź usunięcie'}</Button><Button variant="outline" type="button" disabled={busy} onClick={()=>{setDeleteOpen(false);setDeleteConfirmation('');setDeleteDbConfirm(false)}}>Anuluj</Button></div>
           </form>}
         </CardContent></Card></div>}
-      {view==='settings'&&<div className="grid gap-5 lg:grid-cols-2"><Card><CardHeader><CardTitle>Parametry środowiska</CardTitle><CardDescription>Utrzymywane na Ubuntu WSL2</CardDescription></CardHeader><CardContent className="space-y-4"><Info label="Panel" value="https://devstack.test"/><Info label="Backend" value="PHP-FPM 8.5 + Unix socket"/><Info label="SSL" value="mkcert (prywatny lokalny CA)"/><Info label="Usługi" value="systemd"/><Info label="Logowanie" value={passwordRequired?'Włączone (hasło)':'Wyłączone (tylko lokalnie)'}/><p className="text-xs text-muted-foreground">Zmień tryb logowania w Ubuntu poleceniem sudo php /opt/devstack/scripts/configure-auth.php --setup. To ustawienie wymaga uprawnień administratora systemu.</p></CardContent></Card><Card><CardHeader><CardTitle>Synchronizacja Windows</CardTitle><CardDescription>Integracja Windows automatycznie synchronizuje domeny projektów.</CardDescription></CardHeader><CardContent className="space-y-3 text-sm text-muted-foreground"><p>Przy zmianie listy projektów synchronizacja następuje automatycznie po jednorazowej instalacji integracji Windows. Skrypt awaryjny: <code className="rounded bg-secondary px-1 py-0.5">windows/sync-hosts.ps1</code>.</p><p>Integracja aktualizuje tylko zarządzany blok hosts; nie wymaga cyklicznych uruchomień ani ponownego potwierdzania CA. Pierwsza instalacja wymaga zgody administratora Windows.</p><p>Usuwanie projektu jest dostępne w jego szczegółach. Pliki źródłowe nie są usuwane; baza danych wymaga osobnego potwierdzenia. Kopie zapasowe i rotacja haseł nie są jeszcze zautomatyzowane.</p></CardContent></Card></div>}
+      {view==='settings'&&<div className="grid gap-5 lg:grid-cols-2"><Card><CardHeader><CardTitle>Parametry środowiska</CardTitle><CardDescription>Utrzymywane na Ubuntu WSL2</CardDescription></CardHeader><CardContent className="space-y-4"><Info label="Panel" value="https://devstack.test"/><Info label="Backend" value="PHP-FPM 8.5 + Unix socket"/><Info label="SSL" value="mkcert (prywatny lokalny CA)"/><Info label="Usługi" value="systemd"/><Info label="Logowanie" value={passwordRequired?'Włączone (hasło)':'Wyłączone (tylko lokalnie)'}/><p className="text-xs text-muted-foreground">Zmień tryb logowania w Ubuntu poleceniem sudo php /opt/devstack/scripts/configure-auth.php --setup. To ustawienie wymaga uprawnień administratora systemu.</p></CardContent></Card><Card><CardHeader><CardTitle>Synchronizacja Windows</CardTitle><CardDescription>Integracja Windows automatycznie synchronizuje domeny projektów.</CardDescription></CardHeader><CardContent className="space-y-3 text-sm text-muted-foreground"><p>Przy zmianie listy projektów synchronizacja następuje automatycznie po jednorazowej instalacji integracji Windows. Skrypt awaryjny: <code className="rounded bg-secondary px-1 py-0.5">windows/sync-hosts.ps1</code>.</p><p>Integracja aktualizuje tylko zarządzany blok hosts; nie wymaga cyklicznych uruchomień ani ponownego potwierdzania CA. Pierwsza instalacja wymaga zgody administratora Windows.</p><p>Usuwanie projektu jest dostępne w jego szczegółach. Pliki źródłowe nie są usuwane; baza danych wymaga osobnego potwierdzenia. Kopie zapasowe i rotacja haseł nie są jeszcze zautomatyzowane.</p></CardContent></Card>
+      <Card><CardHeader><CardTitle>Certyfikat CA w Windows</CardTitle><CardDescription>Pobierz publiczny certyfikat mkcert, gdy konfigurujesz Windows pierwszy raz lub utracono zaufanie CA.</CardDescription></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <p className="text-muted-foreground">Przeglądarka nie może bezpiecznie samodzielnie dodać CA do zaufanych urzędów Windows. Instalacja wymaga Twojego jawnego potwierdzenia w systemie.</p>
+          <Button type="button" variant="outline" onClick={()=>{window.location.assign('/api/ca')}}><ShieldCheck/>Pobierz publiczny certyfikat CA (.cer)</Button>
+          <p className="break-all text-xs text-muted-foreground">SHA-256 pobieranego pliku PEM: <code className="font-mono">{caFingerprint||'Odczytywanie…'}</code>{caInfoError?' (Brak dostępu do certyfikatu — sprawdź usługę DevStack.)':''}</p>
+          <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
+            <li>Zapisz pobrany <code>devstack-rootCA.cer</code>. W Windows PowerShell sprawdź hash: <code>Get-FileHash -Algorithm SHA256 -LiteralPath "$env:USERPROFILE\\Downloads\\devstack-rootCA.cer"</code>.</li>
+            <li>Porównaj hash z wartością powyżej i — przy pierwszej instalacji — także z wynikiem odczytu certyfikatu bezpośrednio z zaufanego Ubuntu: <code>wsl -d Ubuntu-26.04 -u root -- sha256sum /var/lib/devstack/ca/rootCA.pem</code>.</li>
+            <li>Uruchom w Windows <code>certmgr.msc</code>, przejdź do <strong>Zaufane główne urzędy certyfikacji → Certyfikaty → Importuj</strong> i wybierz plik .cer. Potwierdź świadomie dodanie zaufanego CA tylko dla Twojego DevStack.</li>
+            <li>Uruchom ponownie przeglądarkę lub odśwież stronę po imporcie.</li>
+          </ol>
+          <p className="text-xs text-muted-foreground">Gdy przeglądarka blokuje otwarcie strony z powodu brakującego CA, użyj wstępnego skryptu <code>windows/setup-windows.ps1</code> zgodnie z instrukcją instalacji. DevStack nie pobiera i nigdy nie udostępnia prywatnego klucza CA.</p>
+        </CardContent></Card></div>}
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t pt-5 text-xs text-muted-foreground"><span>DevStack · 0.1.0</span><span>React + shadcn/ui + Tailwind CSS · PHP 8.5 · tylko localhost</span></footer>
       </main></div>
   </div>
