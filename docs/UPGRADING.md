@@ -21,7 +21,7 @@ git pull --ff-only
 git log -3 --oneline
 ~~~
 
-Review incoming changes. The update script requires a clean tracked checkout on \`main\` in \`~/projects/devstack-source\`.
+Review incoming changes. The update script requires a clean tracked checkout on `main` in `~/projects/devstack-source`.
 
 ## 2. One-command deployment
 
@@ -33,14 +33,14 @@ bash scripts/update.sh
 The update entry point:
 
 1. Checks the normal user, expected checkout path, clean tracked tree and installed DevStack.
-2. Fast-forwards only the \`main\` branch.
+2. Fast-forwards only the `main` branch.
 3. Runs Python/PHP tests, PHP/Python syntax checks and the repository's security scan.
 4. Builds the frontend as the **ordinary user**, never with sudo.
-5. Asks for sudo only to run \`scripts/apply-update.sh\`, which validates the configured developer, stages a copy of \`/opt/devstack\`, updates only allowlisted application files, checks Nginx/PHP syntax, and makes a root-only backup at \`/var/backups/devstack/update-*/installed\`.
-6. Replaces the installed code, restarts \`devstackd\`, reloads PHP-FPM, and checks Nginx, PHP-FPM, MariaDB, Redis, the helper, and the HTTPS dashboard.
-7. On a detected failure during deployment, attempts to restore the previous \`/opt/devstack\` and restart the services.
+5. Asks for sudo only to run `scripts/apply-update.sh`, which validates the configured developer, stages a copy of `/opt/devstack`, updates only allowlisted application files, checks Nginx/PHP syntax, and makes a root-only backup at `/var/backups/devstack/update-*/installed`.
+6. Replaces the installed code, restarts `devstackd`, reloads PHP-FPM, and checks Nginx, PHP-FPM, MariaDB, Redis, the helper, and the HTTPS dashboard.
+7. On a detected failure during deployment, attempts to restore the previous `/opt/devstack` and restart the services.
 
-**The updater never reinitializes** \`/var/lib/devstack\`, \`/etc/devstack\`, the mkcert CA, project source directories, MariaDB accounts/databases, or Windows certificate trust. It updates only allowlisted application code and compiled frontend files in \`/opt/devstack\`.
+**The updater never reinitializes** `/var/lib/devstack`, `/etc/devstack`, the mkcert CA, project source directories, MariaDB accounts/databases, or Windows certificate trust. It updates only allowlisted application code and compiled frontend files in `/opt/devstack`.
 
 The protected code backup is not a complete system backup and should not be moved to public storage. Old backups are intentionally not deleted automatically.
 
@@ -67,7 +67,7 @@ If the updater returns an error, read its rollback message and check service sta
 
 The exact directory is printed by the script. **The archive from your offline WSL export remains the safest full-system rollback point.**
 
-If a hard power loss happened during a directory swap, inspect \`/opt/devstack\`, \`/opt/.devstack-stage.*\` and \`/var/backups/devstack\` before taking any action. Do **not** blindly delete anything or overwrite running databases. Restore only affected installed application code after inspecting the backup and paths. Verify \`nginx -t\`, \`php-fpm8.5 -t\`, \`systemctl\` status and dashboard access afterwards.
+If a hard power loss happened during a directory swap, inspect `/opt/devstack`, `/opt/.devstack-stage.*` and `/var/backups/devstack` before taking any action. Do **not** blindly delete anything or overwrite running databases. Restore only affected installed application code after inspecting the backup and paths. Verify `nginx -t`, `php-fpm8.5 -t`, `systemctl` status and dashboard access afterwards.
 
 Existing workstation updates must not involve the initial installation script.
 
