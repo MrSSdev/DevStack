@@ -13,7 +13,7 @@
 - **Windows integration:** local mkcert CA trust with explicit consent; event-driven Windows \`hosts\` synchronization when project domains change. Only the DevStack-managed block is modified; unrelated hosts entries are preserved.
 - **Security:** loopback-only Nginx listeners, dedicated non-root PHP web account, CSRF/session/origin protection, local Unix socket to a narrowly scoped root helper, root-only settings and credentials. Authentication is required by default, with a deliberate CLI opt-in for passwordless use on a trusted workstation.
 
-**Known limitations:** there is no tested automated in-place upgrade/rollback or managed database backup/restore yet. The current Windows scheduled hosts watcher starts at Windows login and can keep or restart WSL; on-demand-only lifecycle management is not implemented. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
+**Known limitations:** there is no tested automated in-place upgrade/rollback or scheduled backup/restore yet. Manual per-project MariaDB backups and disposable restore verification scripts are available, but still require a live WSL test. The current Windows scheduled hosts watcher starts at Windows login and can keep or restart WSL; on-demand-only lifecycle management is not implemented. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
 
 ## Requirements
 
@@ -71,6 +71,8 @@ The bootstrap and \`scripts/install.sh\` are first-install-only and refuse to ov
 
 **Remove a project:** open its detail view, choose **Usuń projekt z DevStack**, type its exact identifier, and separately confirm destruction of its managed MariaDB database if present. **The project source directory stays on disk. Database removal is irreversible without a backup.**
 
+**Back up MariaDB (Ubuntu):** `sudo bash scripts/backup-project-db.sh <project-slug>`; validate the archive with `scripts/verify-project-db-backup.sh`. For WSL export and restoration procedures, see [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md). These commands require testing on your own machine before being relied upon.
+
 **Check services (Ubuntu):**
 
 ~~~bash
@@ -117,6 +119,7 @@ CI checks TypeScript/Vite builds, Python/PHP validation, Windows PowerShell synt
 - [Windows 11 + Ubuntu WSL2 fresh installation](docs/INSTALL-WINDOWS-WSL.md)
 - [Updating an existing installation](docs/UPGRADING.md)
 - [Troubleshooting common problems](docs/TROUBLESHOOTING.md)
+- [Backups and disaster recovery](docs/BACKUP-RESTORE.md)
 - [Security policy and known risks](SECURITY.md)
 
 ## License
