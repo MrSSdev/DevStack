@@ -1,63 +1,78 @@
 # Updating an existing DevStack installation
 
-These instructions are for a **previously installed** DevStack on Ubuntu 26.04 under WSL2. This is a manually verified workflow, **not yet an automated, transaction-safe upgrade installer**.
+This guide is for a **previously installed** DevStack on Ubuntu 26.04 under WSL2. **Never rerun the first-install-only bootstrap or scripts/install.sh**.
 
-**Never run the first-install-only bootstrap or scripts/install.sh over an existing system.** Preserve copies of your WSL distribution and important MariaDB data before updating. Review repository changes before executing privileged commands.
+DevStack provides an updater that runs tests and builds as your ordinary Ubuntu user, stages the installed application under root, keeps a backup of the previous application code, verifies services, and attempts to roll back if deployment fails.
 
-## 1. Validate and build as your ordinary Ubuntu account
+**Important limitations:** This updater does not migrate service units, Nginx/FPM system configuration, the local CA, the Windows hosts scheduled task, or MariaDB schemas. It is not a substitute for a verified WSL export and SQL backups. Unexpected power loss or a forced process termination between two directory renames may require restoring from the root-only previous-code backup. The updater requires local WSL/Windows validation before being considered proven for a particular workstation.
+
+## 1. Back up and inspect
+
+Follow [BACKUP-RESTORE.md](BACKUP-RESTORE.md) before applying changes to an important workstation. A full offline WSL export can restore both the installed application and its private data. Never commit backups or mkcert private keys to Git.
+
+Close long-running project operations; updating the PHP-FPM manager pool and DevStack helper can briefly interrupt dashboard requests.
+
+In the **Ubuntu shell** as your ordinary account (not under sudo):
 
 ~~~bash
 cd ~/projects/devstack-source
 git status --short
 git pull --ff-only
-
-python3 -m unittest discover -s tests -v
-php tests/php-security.php
-bash scripts/build-frontend.sh
+git log -3 --oneline
 ~~~
 
-Stop if you have unexpected local changes, any test fails or the frontend build fails.
+Review incoming changes. The update script requires a clean tracked checkout on \`main\` in \`~/projects/devstack-source\`.
 
-## 2. Update the installed application
-
-The commands below do not change your projects, MariaDB credentials, local CA or Windows trust store.
+## 2. One-command deployment
 
 ~~~bash
-sudo install -m 0644 -o root -g root daemon/devstackd.py /opt/devstack/daemon/devstackd.py
-sudo install -m 0644 -o root -g root backend/security.php /opt/devstack/security.php
-sudo install -m 0644 -o root -g root backend/public/index.php /opt/devstack/public/index.php
-sudo install -m 0644 -o root -g root scripts/list-domains.py /opt/devstack/scripts/list-domains.py
-sudo install -m 0644 -o root -g root scripts/watch-domains.py /opt/devstack/scripts/watch-domains.py
-sudo install -m 0644 -o root -g root scripts/configure-auth.php /opt/devstack/scripts/configure-auth.php
-sudo install -m 0644 -o root -g root scripts/set-password.php /opt/devstack/scripts/set-password.php
-sudo cp -a backend/public/index.html backend/public/assets /opt/devstack/public/
-sudo chown -R root:root /opt/devstack/public
+cd ~/projects/devstack-source
+bash scripts/update.sh
+~~~
 
-sudo php-fpm8.5 -t
+The update entry point:
+
+1. Checks the normal user, expected checkout path, clean tracked tree and installed DevStack.
+2. Fast-forwards only the \`main\` branch.
+3. Runs Python/PHP tests, PHP/Python syntax checks and the repository's security scan.
+4. Builds the frontend as the **ordinary user**, never with sudo.
+5. Asks for sudo only to run \`scripts/apply-update.sh\`, which validates the configured developer, stages a copy of \`/opt/devstack\`, updates only allowlisted application files, checks Nginx/PHP syntax, and makes a root-only backup at \`/var/backups/devstack/update-*/installed\`.
+6. Replaces the installed code, restarts \`devstackd\`, reloads PHP-FPM, and checks Nginx, PHP-FPM, MariaDB, Redis, the helper, and the HTTPS dashboard.
+7. On a detected failure during deployment, attempts to restore the previous \`/opt/devstack\` and restart the services.
+
+**The updater never reinitializes** \`/var/lib/devstack\`, \`/etc/devstack\`, the mkcert CA, project source directories, MariaDB accounts/databases, or Windows certificate trust. It updates only allowlisted application code and compiled frontend files in \`/opt/devstack\`.
+
+The protected code backup is not a complete system backup and should not be moved to public storage. Old backups are intentionally not deleted automatically.
+
+## 3. Check after an update
+
+~~~bash
+systemctl is-active nginx php8.5-fpm mariadb redis-server devstackd
 sudo nginx -t
-sudo systemctl restart devstackd
-sudo systemctl reload php8.5-fpm
-systemctl is-active devstackd nginx php8.5-fpm mariadb redis-server
-~~~
-
-Refresh https://devstack.test with Ctrl+F5. Changes affecting Windows integration might require explicitly updating the installed scripts using the Windows integration section of INSTALL-WINDOWS-WSL.md; do not silently reinstall certificate trust.
-
-## 3. Basic smoke checks
-
-~~~bash
+sudo php-fpm8.5 -t
 curl -ksS --noproxy '*' --resolve devstack.test:443:127.0.0.1 https://devstack.test/api/session
-sudo journalctl -u devstackd -n 40 --no-pager
 ~~~
 
-The curl -k form is for a local pre-trust diagnostic only. Use normal certificate verification in real applications.
+Refresh https://devstack.test using Ctrl+F5. Use a disposable project to verify creation, database reads/writes, guarded removal, and Windows hosts changes if those parts were updated.
 
-A successful build or CI test is not equivalent to a working installation. Validate project creation, the database connection check, Nginx overrides, and the Windows hosts synchronization against a **disposable** project.
+The updater does not reconfigure the **Windows** hosts task or certificate trust. See [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md) for explicit changes to that integration.
 
-## Rollback
+## 4. Manual rollback / emergency recovery
 
-There is **no automated rollback** yet. Before changing installed files or service units, make an independent backup of the previous version and of important state. Restore affected application files from that copy if validation fails, then rerun Nginx/PHP syntax checks and inspect service logs. Do not restore old database state over live project data without a verified restoration procedure.
+If the updater returns an error, read its rollback message and check service status; do not assume every failed update rolled back perfectly. Its root-only installed-code backups are created under:
 
-Reference:
-- [Installation](INSTALL-WINDOWS-WSL.md)
+~~~text
+/var/backups/devstack/update-XXXXXXXX/installed
+~~~
+
+The exact directory is printed by the script. **The archive from your offline WSL export remains the safest full-system rollback point.**
+
+If a hard power loss happened during a directory swap, inspect \`/opt/devstack\`, \`/opt/.devstack-stage.*\` and \`/var/backups/devstack\` before taking any action. Do **not** blindly delete anything or overwrite running databases. Restore only affected installed application code after inspecting the backup and paths. Verify \`nginx -t\`, \`php-fpm8.5 -t\`, \`systemctl\` status and dashboard access afterwards.
+
+Existing workstation updates must not involve the initial installation script.
+
+References:
+- [Backups and restoration](BACKUP-RESTORE.md)
+- [Windows and Ubuntu fresh installation](INSTALL-WINDOWS-WSL.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Security](../SECURITY.md)
