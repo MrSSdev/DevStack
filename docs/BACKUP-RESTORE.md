@@ -37,6 +37,15 @@ sudo bash scripts/verify-project-db-backup.sh \
 
 Pass the **actual path reported by the backup script**. The verifier checks SHA-256 and gzip integrity, creates a random throwaway MariaDB database, imports the SQL and removes that scratch database afterwards. **Run it only on trusted backups you created yourself**, as it executes SQL with local MariaDB administrator privileges. Review messages for cleanup failures.
 
+For a **throwaway test project**, create a table named \`backup_probe\` with at least one row. Then pass \`backup_probe\` as a second argument to require the restored copy to contain rows:
+
+~~~bash
+sudo bash scripts/verify-project-db-backup.sh \
+  ~/devstack-backups/my-project-YYYYMMDDTHHMMSSZ-XXXXXXXX.sql.gz backup_probe
+~~~
+
+The command reports the number of restored rows; the scratch database is always removed after successful verification.
+
 A dump of an empty database can restore successfully but will have zero tables. To verify actual application data, create a disposable project, insert sample rows, dump it, and confirm they are present after restoration (or use a test with application-specific assertions).
 
 The scripts do not automatically schedule backups or copy them off the WSL disk. Both are future work.
