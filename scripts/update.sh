@@ -25,8 +25,13 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   echo 'Your tracked files have uncommitted changes. Commit or stash them before updating.' >&2
   exit 2
 fi
-if [[ ! -f /etc/devstack/server.json || ! -f /opt/devstack/daemon/devstackd.py ]]; then
-  echo 'This is not an installed DevStack workstation. Do not use the update script for a new install.' >&2
+# The ordinary Ubuntu developer cannot traverse /etc/devstack (0710,
+# root:devstackweb); server.json is intentionally 0600. Do NOT check it here:
+# the privileged helper validates the protected config after sudo.
+if [[ ! -f /opt/devstack/daemon/devstackd.py ||
+      ! -f /opt/devstack/public/index.php ]]; then
+  echo 'Installed application files are missing from /opt/devstack.' >&2
+  echo 'The protected /etc/devstack/server.json is checked later by the root helper.' >&2
   exit 2
 fi
 
