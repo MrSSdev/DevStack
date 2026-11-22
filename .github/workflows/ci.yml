@@ -31,12 +31,22 @@ jobs:
           php -l backend/security.php
           php -l scripts/set-password.php
           php -l scripts/configure-auth.php
-          bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh
+          bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh scripts/backup-project-db.sh scripts/verify-project-db-backup.sh
           python3 -m py_compile daemon/devstackd.py scripts/list-domains.py scripts/watch-domains.py
       - name: Backend unit tests
         run: |
           python3 -m unittest discover -s tests -v
           php tests/php-security.php
+      - name: Backup scripts reject invalid inputs
+        run: |
+          if bash scripts/backup-project-db.sh 'unsafe/slug'; then
+            echo 'Backup script unexpectedly accepted an invalid slug' >&2
+            exit 1
+          fi
+          if bash scripts/verify-project-db-backup.sh /path/that/does/not/exist.sql.gz; then
+            echo 'Restore script unexpectedly accepted a missing file' >&2
+            exit 1
+          fi
       - name: Public repository secret guard
         run: bash scripts/security-scan.sh
 
