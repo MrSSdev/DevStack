@@ -10,7 +10,7 @@
 - **Project lifecycle:** create project in `~/projects/<slug>`, assign its `.test` domain, document root, optional HTTPS and isolated database account; remove managed project configuration through a confirmation flow **while preserving the source directory**.
 - **MariaDB:** cryptographically generated per-project credentials, password reveal behind panel authentication, and a TCP connection/read/write test using a temporary table.
 - **Nginx:** separate PHP-FPM socket per project, managed virtual hosts, protected `location /` directives and validated server-level JavaScript/CSS asset `location` blocks (including the documented Laravel Flux rule). A save runs `nginx -t` before reload and rolls back failed validation.
-- **Windows integration:** local mkcert CA trust with explicit consent; event-driven Windows `hosts` synchronization when project domains change. Only the DevStack-managed block is modified; unrelated hosts entries are preserved.
+- **Windows integration:** local mkcert CA trust with explicit consent; event-driven Windows `hosts` synchronization when project domains change. Only the DevStack-managed block is modified; unrelated hosts entries are preserved. **Settings now provide a public CA certificate download and Windows import instructions**; they never silently trust or expose the CA private key.
 - **Security:** loopback-only Nginx listeners, dedicated non-root PHP web account, CSRF/session/origin protection, local Unix socket to a narrowly scoped root helper, root-only settings and credentials. Authentication is required by default, with a deliberate CLI opt-in for passwordless use on a trusted workstation.
 
 **Known limitations:** a staged in-place updater with rollback attempts is now included, but it still requires real-machine validation. MariaDB dump and disposable restore were tested on a WSL workstation; full WSL archive import was also verified for the key DevStack files. Scheduled backups and tested live service recovery from the imported distro are not yet available. The current Windows scheduled hosts watcher starts at Windows login and can keep or restart WSL; on-demand-only lifecycle management is not implemented. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
@@ -117,6 +117,7 @@ CI checks TypeScript/Vite builds, Python/PHP validation, Windows PowerShell synt
 ## Documentation
 
 - [Windows 11 + Ubuntu WSL2 fresh installation](docs/INSTALL-WINDOWS-WSL.md)
+- [Installing or restoring Windows local CA trust](docs/WINDOWS-CA.md)
 - [Updating an existing installation](docs/UPGRADING.md)
 - [Troubleshooting common problems](docs/TROUBLESHOOTING.md)
 - [Backups and disaster recovery](docs/BACKUP-RESTORE.md)
