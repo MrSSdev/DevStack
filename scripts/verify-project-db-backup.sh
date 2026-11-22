@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Verify a trusted DevStack MariaDB dump by restoring it into a temporary DB.
 # This NEVER modifies the project's original database.
-# Usage: sudo bash scripts/verify-project-db-backup.sh ~/devstack-backups/<file>.sql.gz
+# Usage: sudo bash scripts/verify-project-db-backup.sh <file.sql.gz> [expected_nonempty_table]
 set -Eeuo pipefail
 umask 077
 
-if [[ "$#" -ne 1 || ! -f "$1" || -L "$1" ]]; then
-  echo 'Usage: sudo bash scripts/verify-project-db-backup.sh <trusted-backup.sql.gz>' >&2
+if [[ "$#" -lt 1 || "$#" -gt 2 || ! -f "$1" || -L "$1" ]]; then
+  echo 'Usage: sudo bash scripts/verify-project-db-backup.sh <trusted-backup.sql.gz> [expected_nonempty_table]' >&2
+  exit 2
+fi
+expected_table="${2:-}"
+if [[ -n "$expected_table" && ! "$expected_table" =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]]; then
+  echo 'Invalid expected table name.' >&2
   exit 2
 fi
 if [[ "$EUID" -ne 0 ]]; then
@@ -50,5 +55,13 @@ created=1
 gzip -dc -- "$archive" | mariadb --protocol=socket --database="$temp_db"
 tables="$(mariadb --protocol=socket --batch --skip-column-names -e \
   "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$temp_db';")"
+if [[ -n "$expected_table" ]]; then
+  rows="$(mariadb --protocol=socket --batch --skip-column-names -e     "SELECT COUNT(*) FROM \`$temp_db\`.\`$expected_table\`;")"
+  if [[ ! "$rows" =~ ^[0-9]+$ || "$rows" -lt 1 ]]; then
+    echo "Expected table '$expected_table' is empty or unreadable in restored backup." >&2
+    exit 1
+  fi
+  echo "Verified restored rows in $expected_table: $rows"
+fi
 echo "Restore test passed. Temporary database: $temp_db; restored tables/views: $tables."
 echo 'The original managed project database was not modified.'
