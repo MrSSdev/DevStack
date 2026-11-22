@@ -75,6 +75,17 @@ Get-ScheduledTaskInfo -TaskName 'DevStack Hosts Event Sync'
 Get-Content "$env:WINDIR\System32\drivers\etc\hosts"
 ~~~
 
+If running `& "$env:ProgramData\DevStack\watch-hosts.ps1" -Once` directly fails with `PSSecurityException` / "running scripts is disabled on this system", start **Windows PowerShell as Administrator** and use a one-time child process instead:
+
+~~~powershell
+& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    -File "$env:ProgramData\DevStack\watch-hosts.ps1" -Once
+$LASTEXITCODE
+~~~
+
+Exit code `0` indicates successful reconciliation. This does not persistently relax PowerShell's execution policy, register a new scheduled task or launch the long-running watcher. It **does** contact Ubuntu and can start WSL if it is stopped — invoke it only when you intentionally need to synchronize DevStack domains.
+
 Avoid disabling a working bridge until a replacement has been tested. A future integration will start the observer only while WSL is active and avoid waking Linux at Windows login.
 
 ## Authentication and theme
