@@ -24,6 +24,7 @@ CFG_FILE = pathlib.Path('/etc/devstack/server.json')
 STATE_FILE = pathlib.Path('/var/lib/devstack/projects.json')
 SECRET_FILE = pathlib.Path('/var/lib/devstack/credentials.json')
 PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
+CA_PUBLIC_FILE = pathlib.Path('/var/lib/devstack/ca/rootCA.pem')  # Public cert ONLY; never expose rootCA-key.pem.
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 DOMAIN = re.compile(r'[a-z][a-z0-9-]{0,39}\.test\Z')
@@ -275,6 +276,33 @@ def preferences(_: dict[str, Any]) -> dict[str, str]:
 def status(_: dict[str, Any]) -> dict[str, Any]:
     return {'services': service_status(), 'projects': public_projects(),
             'preferences': get_ui_preferences()}
+
+
+
+def public_ca_certificate(data: dict[str, Any]) -> dict[str, str]:
+    """Return only this installation's public mkcert root certificate.
+
+    Not an arbitrary path read: never expose rootCA-key.pem or private state.
+    The Windows trust decision remains a separate interactive admin action.
+    """
+    if data:
+        raise InputError('Ta operacja nie przyjmuje parametrow.')
+    if CA_PUBLIC_FILE.is_symlink() or not CA_PUBLIC_FILE.is_file():
+        raise RuntimeError('Publiczny certyfikat CA DevStack nie jest dostepny.')
+    content = CA_PUBLIC_FILE.read_bytes()
+    if not 100 <= len(content) <= 16384:
+        raise RuntimeError('Nieprawidlowy rozmiar certyfikatu CA.')
+    try:
+        pem = content.decode('ascii')
+    except UnicodeDecodeError:
+        raise RuntimeError('Publiczny certyfikat CA nie jest w formacie PEM.') from None
+    if not re.fullmatch(
+        r'-----BEGIN CERTIFICATE-----\r?\n(?:[A-Za-z0-9+/=]{1,76}\r?\n)+'
+        r'-----END CERTIFICATE-----\r?\n?', pem
+    ):
+        raise RuntimeError('Nieprawidlowy format publicznego certyfikatu CA.')
+    return {'pem': pem, 'sha256': hashlib.sha256(content).hexdigest().upper()}
+
 
 
 def mkdir_as_developer(path: pathlib.Path, dev_user: str) -> None:
@@ -765,7 +793,8 @@ def update_full_config(data: dict[str, Any]) -> dict[str, str]:
 OPS = {'status': status, 'create': create, 'reveal': reveal,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,
-       'set_preferences': set_ui_preferences, 'get_preferences': preferences}
+       'set_preferences': set_ui_preferences, 'get_preferences': preferences,
+       'public_ca_certificate': public_ca_certificate}
 
 
 def handle(raw: bytes) -> bytes:
