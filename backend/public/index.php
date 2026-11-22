@@ -81,6 +81,24 @@ if (!devstack_is_authenticated()) {
 $_SESSION['last_seen'] = time();
 
 try {
+    if ($method === 'GET' && ($path === '/api/ca/info' || $path === '/api/ca')) {
+        // The user must already be authenticated; this is the public CA cert,
+        // NOT the private signing key. Windows trust is never changed here.
+        $ca = devstack_rpc('public_ca_certificate', []);
+        if ($path === '/api/ca/info') {
+            devstack_json(200, ['ok' => true, 'result' => ['sha256' => $ca['sha256']]]);
+        }
+        $pem = $ca['pem'] ?? null;
+        if (!is_string($pem) || strlen($pem) > 16384 ||
+            !str_starts_with($pem, "-----BEGIN CERTIFICATE-----\n")) {
+            throw new RuntimeException('Brak poprawnego publicznego certyfikatu CA.');
+        }
+        header('Content-Type: application/pkix-cert');
+        header('Content-Disposition: attachment; filename="devstack-rootCA.cer"');
+        header('Content-Length: ' . strlen($pem));
+        echo $pem;
+        exit;
+    }
     if ($method === 'GET' && $path === '/api/state') {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('status', [])]);
     }
