@@ -110,10 +110,16 @@ The task may briefly start WSL on Windows logon to perform its first reconciliat
 ```powershell
 Get-ScheduledTask -TaskName 'DevStack Hosts Event Sync'
 Get-ScheduledTaskInfo -TaskName 'DevStack Hosts Event Sync'
-& "$env:ProgramData\DevStack\watch-hosts.ps1" -Once
+
+# Run the installed watcher once in a NEW PowerShell process.
+# Avoids PSSecurityException if direct .ps1 invocation is disabled.
+& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    -File "$env:ProgramData\DevStack\watch-hosts.ps1" -Once
+$LASTEXITCODE
 ```
 
-The final command needs an elevated Windows PowerShell session and performs one safe synchronization. Use it only for diagnostics, not per project.
+The one-shot command requires an **elevated Windows PowerShell** session, and the exit code should be **0**. Using `-ExecutionPolicy Bypass` on the child `powershell.exe` process is temporary; it does **not** change the machine-wide execution policy. It performs exactly one synchronization without starting the long-running watcher. Use for diagnostics or manual reconciliation after changes while the scheduled observer is stopped.
 
 To stop the automatic bridge without touching Ubuntu or the CA:
 
