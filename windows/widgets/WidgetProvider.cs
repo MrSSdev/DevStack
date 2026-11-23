@@ -253,95 +253,150 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public void OnActionInvoked(WidgetActionInvokedArgs args)
     {
-        // C4.2 exposes no actions. Also reject stale actions cached by the host.
-        if (ReadOnlyStatusStage) return;
-
+        // Action.Execute sends an app-defined verb. Never trust it as a
+        // permission grant: reject unknown IDs, hidden cards, DevStack
+        // definitions, repeated clicks and unrecognized verbs.
         var widgetId = args.WidgetContext.Id;
         var verb = args.Verb;
-        Instance? widget;
+        bool publish = false, execute = false, start = false, refresh = false;
+
         lock (Gate)
         {
-            if (!Widgets.TryGetValue(widgetId, out widget)) return;
+            if (!WslControlStage ||
+                !Widgets.TryGetValue(widgetId, out var widget) ||
+                !widget.Active || widget.Definition != WidgetCards.WslId ||
+                widget.ActionBusy)
+                return;
+
             _lastUse = DateTimeOffset.UtcNow;
-            if (verb == "stop-ask" && widget.Definition == WidgetCards.WslId)
+            var knownState = _lastWslSnapshot?.WslRunning;
+            switch (verb)
             {
-                widget.StopConfirmationUntil = DateTimeOffset.UtcNow.AddSeconds(30);
-            }
-            else if (verb == "stop-cancel")
-            {
-                widget.StopConfirmationUntil = default;
+                case "start":
+                    if (knownState != false) return;
+                    widget.ActionBusy = true;
+                    widget.StopConfirmationUntil = default;
+                    widget.Message = "Uruchamianie Ubuntu...";
+                    execute = true;
+                    start = true;
+                    publish = true;
+                    break;
+
+                case "stop-ask":
+                    if (knownState != true) return;
+                    widget.StopConfirmationUntil = DateTimeOffset.UtcNow.AddSeconds(30);
+                    widget.Message = "";
+                    publish = true;
+                    break;
+
+                case "stop-cancel":
+                    widget.StopConfirmationUntil = default;
+                    widget.Message = "";
+                    publish = true;
+                    break;
+
+                case "stop-confirm":
+                    // A second, explicit click in a 30-second confirmation
+                    // window is mandatory before terminating the distro.
+                    if (knownState != true ||
+                        widget.StopConfirmationUntil <= DateTimeOffset.UtcNow)
+                    {
+                        widget.StopConfirmationUntil = default;
+                        widget.Message = "Potwierdzenie wygasło. Wybierz Zatrzymaj ponownie.";
+                        publish = true;
+                        break;
+                    }
+                    widget.ActionBusy = true;
+                    widget.StopConfirmationUntil = default;
+                    widget.Message = "Zatrzymywanie Ubuntu...";
+                    execute = true;
+                    publish = true;
+                    break;
+
+                case "refresh":
+                    refresh = true;
+                    break;
+
+                default:
+                    return;
             }
         }
 
-        if (verb == "refresh" || verb == "stop-ask" || verb == "stop-cancel")
-        {
+        // The button and confirmation update immediately, without waiting
+        // for the next status-poll tick.
+        if (publish)
+            SendImmediateCard(widgetId, WidgetCards.WslId, allowPlaceholder: false);
+
+        if (execute)
+            _ = Task.Run(() => RunActionAsync(widgetId, start));
+        else if (refresh)
             RequestRefresh();
-            return;
-        }
-
-        // Only the WSL widget can start or stop Ubuntu, never the DevStack widget.
-        if (widget.Definition != WidgetCards.WslId) return;
-
-        if (verb == "start")
-        {
-            _ = Task.Run(() => RunActionAsync(widget.Id, start: true));
-        }
-        else if (verb == "stop-confirm")
-        {
-            bool allowed;
-            lock (Gate)
-            {
-                allowed = widget.StopConfirmationUntil > DateTimeOffset.UtcNow;
-                widget.StopConfirmationUntil = default;
-            }
-            if (allowed)
-                _ = Task.Run(() => RunActionAsync(widget.Id, start: false));
-            else
-                RequestRefresh();
-        }
     }
 
     private static async Task RunActionAsync(string widgetId, bool start)
     {
+        string outcome = "";
         try
         {
-            var now = await StateProbe.CaptureAsync();
-            if (start && now.WslRunning != false)
+            // Recheck the state before any destructive or startup command.
+            // Passive check never invokes wsl.exe -d.
+            var current = await StateProbe.CaptureWslOnlyAsync();
+            if (start && current.WslRunning != false)
             {
-                SetMessage(widgetId, now.WslRunning == true
-                    ? "Ubuntu już działa." : "Nie można potwierdzić stanu WSL.");
-                return;
-            }
-            if (!start && now.WslRunning != true)
-            {
-                SetMessage(widgetId, "Ubuntu jest już zatrzymane lub stan jest nieznany.");
+                outcome = current.WslRunning == true
+                    ? "Ubuntu już działa."
+                    : "Nie udało się potwierdzić stanu WSL.";
                 return;
             }
 
-            SetMessage(widgetId, start ? "Uruchamianie Ubuntu..." : "Zatrzymywanie Ubuntu...");
-            var result = start ? await StateProbe.StartAsync() : await StateProbe.StopAsync();
-            SetMessage(widgetId, result.ExitCode == 0 ? ""
-                : "Niepowodzenie: " + result.Output[..Math.Min(result.Output.Length, 90)]);
+            if (!start && current.WslRunning != true)
+            {
+                outcome = "Ubuntu jest już zatrzymane lub stan jest nieznany.";
+                return;
+            }
+
+            // These are the only paths that deliberately start/stop Ubuntu.
+            var command = start ? await StateProbe.StartAsync()
+                                : await StateProbe.StopAsync();
+            if (command.ExitCode != 0)
+            {
+                outcome = string.IsNullOrWhiteSpace(command.Output)
+                    ? "Polecenie WSL zwróciło kod " + command.ExitCode
+                    : "Błąd WSL: " + command.Output[..Math.Min(command.Output.Length, 100)];
+                return;
+            }
+
+            // Verify the actual post-command state before showing controls
+            // again. Never infer success solely from a zero exit code.
+            var verified = await StateProbe.CaptureWslOnlyAsync();
+            lock (Gate)
+            {
+                _lastWslSnapshot = verified;
+                _lastServicesSnapshot = null; // Services status may be stale.
+            }
+
+            if (verified.WslRunning != start)
+                outcome = "Polecenie wykonano, ale stan Ubuntu wymaga ponownego sprawdzenia.";
         }
-        catch (Exception e)
+        catch (Exception error)
         {
-            SetMessage(widgetId, "Błąd operacji: " + e.GetType().Name);
+            outcome = "Błąd operacji: " + error.GetType().Name;
         }
         finally
         {
+            lock (Gate)
+            {
+                if (Widgets.TryGetValue(widgetId, out var widget))
+                {
+                    widget.ActionBusy = false;
+                    widget.StopConfirmationUntil = default;
+                    widget.Message = outcome;
+                }
+                _lastUse = DateTimeOffset.UtcNow;
+            }
+            SendImmediateCard(widgetId, WidgetCards.WslId, allowPlaceholder: false);
             RequestRefresh();
         }
-    }
-
-    private static void SetMessage(string widgetId, string message)
-    {
-        lock (Gate)
-        {
-            if (Widgets.TryGetValue(widgetId, out var widget))
-                widget.Message = message;
-            _lastUse = DateTimeOffset.UtcNow;
-        }
-        RequestRefresh();
     }
 
     private static void RequestRefresh()
