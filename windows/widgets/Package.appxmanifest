@@ -44,7 +44,13 @@
                 <Definitions>
                   <Definition Id="DevStack_WSL" DisplayName="WSL — Ubuntu"
                               Description="Stan Ubuntu-26.04 i świadome uruchamianie lub zatrzymywanie">
-                    <Capabilities><Capability><Size Name="medium" /></Capability></Capabilities>
+                    <Capabilities>
+                      <Capability>
+                        <Size Name="small" />
+                        <Size Name="medium" />
+                        <Size Name="large" />
+                      </Capability>
+                    </Capabilities>
                     <ThemeResources>
                       <Icons><Icon Path="ProviderAssets\WSL_Icon.png" /></Icons>
                       <Screenshots><Screenshot Path="ProviderAssets\WSL_Screenshot.png" DisplayAltText="Stan WSL i przyciski uruchamiania" /></Screenshots>
@@ -53,7 +59,13 @@
                   </Definition>
                   <Definition Id="DevStack_Services" DisplayName="DevStack — usługi"
                               Description="Dostępność usług DevStack i otwieranie panelu">
-                    <Capabilities><Capability><Size Name="medium" /></Capability></Capabilities>
+                    <Capabilities>
+                      <Capability>
+                        <Size Name="small" />
+                        <Size Name="medium" />
+                        <Size Name="large" />
+                      </Capability>
+                    </Capabilities>
                     <ThemeResources>
                       <Icons><Icon Path="ProviderAssets\DevStack_Icon.png" /></Icons>
                       <Screenshots><Screenshot Path="ProviderAssets\DevStack_Screenshot.png" DisplayAltText="Status połączeń DevStack i adres panelu" /></Screenshots>
