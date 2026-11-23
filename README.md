@@ -13,7 +13,7 @@
 - **Windows integration:** local mkcert CA trust with explicit consent; event-driven Windows `hosts` synchronization when project domains change. Only the DevStack-managed block is modified; unrelated hosts entries are preserved. **Settings now provide a public CA certificate download and Windows import instructions**; they never silently trust or expose the CA private key.
 - **Security:** loopback-only Nginx listeners, dedicated non-root PHP web account, CSRF/session/origin protection, local Unix socket to a narrowly scoped root helper, root-only settings and credentials. Authentication is required by default, with a deliberate CLI opt-in for passwordless use on a trusted workstation.
 
-**Known limitations:** a staged in-place updater with rollback attempts is now included, but it still requires real-machine validation. MariaDB dump and disposable restore were tested on a WSL workstation; full WSL archive import was also verified for the key DevStack files. Scheduled backups and tested live service recovery from the imported distro are not yet available. The current Windows scheduled hosts watcher starts at Windows login and can keep or restart WSL; on-demand-only lifecycle management is not implemented. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
+**Known limitations:** a staged in-place updater with rollback attempts is now included, but it still requires real-machine validation. MariaDB dump and disposable restore were tested on a WSL workstation; full WSL archive import was also verified for the key DevStack files. Scheduled backups and tested live service recovery from the imported distro are not yet available. The current Windows hosts watcher is Windows-only at login and does not wake a stopped Ubuntu; an optional on-demand Start-menu launcher is available for further workstation testing. Long-term memory overhead of the Windows listener and a complete on-demand lifecycle still require evaluation. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
 
 ## Requirements
 
@@ -53,7 +53,7 @@ Get-Content -LiteralPath $setup
 
 Replace `<ubuntu-user>` with the actual Linux username. Review the CA fingerprint before approving trust. The private CA key stays inside Ubuntu.
 
-Open **https://devstack.test** in a Windows browser.
+Open **https://devstack.test** in a Windows browser. For an optional per-user shortcut that starts Ubuntu on demand and then opens the panel, see [Windows Start-menu launcher](docs/START-DEVSTACK-WINDOWS.md).
 
 **For a detailed clean-install guide and verification:** [docs/INSTALL-WINDOWS-WSL.md](docs/INSTALL-WINDOWS-WSL.md).
 
