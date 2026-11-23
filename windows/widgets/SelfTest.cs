@@ -80,6 +80,30 @@ internal static class SelfTest
                 Assert(text.Contains("nie wynik systemctl", StringComparison.Ordinal), "C4.2 reachability disclaimer");
             }
 
+            // When the board is hidden, the provider cancels its visibility
+            // token: running service probes must not start. With WSL off, the
+            // probe must return immediately without touching HTTPS or TCP.
+            using (var closedBoard = new CancellationTokenSource())
+            {
+                closedBoard.Cancel();
+                var skipped = StateProbe.CaptureServicesAfterWslAsync(
+                    offline, closedBoard.Token).GetAwaiter().GetResult();
+                Assert(ReferenceEquals(skipped, offline),
+                    "C4.2 no network probes when Ubuntu is off");
+
+                bool canceled = false;
+                try
+                {
+                    _ = StateProbe.CaptureServicesAfterWslAsync(
+                        reachable, closedBoard.Token).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    canceled = true;
+                }
+                Assert(canceled, "C4.2 in-flight services canceled on board close");
+            }
+
             var unknown = new StateProbe.Snapshot(
                 null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now);
             using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(unknown)))
