@@ -60,7 +60,7 @@ internal static class SelfTest
             {
                 Assert(card.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "C4.2 offline format");
                 Assert(!card.RootElement.TryGetProperty("actions", out _), "C4.2 offline has no actions");
-                var text = card.RootElement.GetProperty("body").GetRawText();
+                var text = ReadCardText(card.RootElement);
                 Assert(text.Contains("WSL wyłączony — DevStack niedostępny", StringComparison.Ordinal),
                     "C4.2 offline message");
                 Assert(!text.Contains("Nginx:", StringComparison.Ordinal),
@@ -72,7 +72,7 @@ internal static class SelfTest
             using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(reachable)))
             {
                 Assert(!card.RootElement.TryGetProperty("actions", out _), "C4.2 online has no actions");
-                var text = card.RootElement.GetProperty("body").GetRawText();
+                var text = ReadCardText(card.RootElement);
                 Assert(text.Contains("Nginx: Odpowiada", StringComparison.Ordinal), "C4.2 Nginx true");
                 Assert(text.Contains("PHP-FPM: Brak połączenia", StringComparison.Ordinal), "C4.2 PHP false");
                 Assert(text.Contains("MariaDB: Odpowiada", StringComparison.Ordinal), "C4.2 MariaDB true");
@@ -84,7 +84,7 @@ internal static class SelfTest
                 null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now);
             using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(unknown)))
             {
-                var text = card.RootElement.GetProperty("body").GetRawText();
+                var text = ReadCardText(card.RootElement);
                 Assert(text.Contains("nie sprawdzono usług", StringComparison.Ordinal), "C4.2 unknown WSL");
                 Assert(!text.Contains("Nginx:", StringComparison.Ordinal), "C4.2 unknown no services");
             }
@@ -106,6 +106,12 @@ internal static class SelfTest
             return 1;
         }
     }
+
+    // Test decoded Adaptive Card text rather than escaped JSON source:
+    // System.Text.Json escapes Polish Unicode characters by default.
+    private static string ReadCardText(JsonElement card) =>
+        string.Join("\n", card.GetProperty("body").EnumerateArray()
+            .Select(item => item.GetProperty("text").GetString() ?? ""));
 
     private static void Assert(bool value, string message)
     {
