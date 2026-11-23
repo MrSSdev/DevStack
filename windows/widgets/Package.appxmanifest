@@ -42,7 +42,7 @@
                 <ProviderIcons><Icon Path="Assets\StoreLogo.png" /></ProviderIcons>
                 <Activation><CreateInstance ClassId="6DE550FB-ECB8-4955-87E2-4943E247E34A" /></Activation>
                 <Definitions>
-                  <Definition Id="DevStack_WSL" DisplayName="WSL — Ubuntu"
+                  <Definition Id="DevStack_WSL" DisplayName="Ubuntu"
                               Description="Stan Ubuntu-26.04 i świadome uruchamianie lub zatrzymywanie">
                     <Capabilities>
                       <Capability>
@@ -57,7 +57,7 @@
                       <DarkMode /><LightMode />
                     </ThemeResources>
                   </Definition>
-                  <Definition Id="DevStack_Services" DisplayName="DevStack — usługi"
+                  <Definition Id="DevStack_Services" DisplayName="DevStack"
                               Description="Dostępność usług DevStack i otwieranie panelu">
                     <Capabilities>
                       <Capability>
