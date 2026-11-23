@@ -18,6 +18,7 @@ public sealed class WidgetProvider : IWidgetProvider
         public bool Active { get; set; }
         public DateTimeOffset StopConfirmationUntil { get; set; }
         public string Message { get; set; } = "";
+        public bool ActionBusy { get; set; }
     }
 
     private static readonly object Gate = new();
@@ -32,10 +33,10 @@ public sealed class WidgetProvider : IWidgetProvider
     private static StateProbe.Snapshot? _lastWslSnapshot;
     private static StateProbe.Snapshot? _lastServicesSnapshot;
 
-    // Stage C4.2: retain the proven synchronous first card for both widgets.
-    // Read-only WSL and DevStack reachability are allowed while active,
-    // but Start/Stop and all Action.Execute handlers remain disabled.
-    private static readonly bool ReadOnlyStatusStage = true;
+    // C4.3: preserve verified C4.2 status/visibility refresh, but allow
+    // deliberate Start and confirmed Stop ONLY on the WSL card.
+    // The DevStack card remains read-only.
+    private static readonly bool WslControlStage = true;
 
     public static AutoResetEvent Wake { get; } = new(false);
 
@@ -489,7 +490,7 @@ public sealed class WidgetProvider : IWidgetProvider
         await RefreshGate.WaitAsync(cancellationToken);
         try
         {
-            if (ReadOnlyStatusStage)
+            if (WslControlStage)
             {
                 await RefreshReadOnlyStatusesAsync(cancellationToken);
                 return;
