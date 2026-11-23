@@ -23,6 +23,10 @@ internal static class SelfTest
             {
                 using var template = JsonDocument.Parse(WidgetCards.Template(name));
                 Assert(template.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "widget template");
+                using var firstCard = JsonDocument.Parse(WidgetCards.InitialTemplate(name));
+                Assert(firstCard.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "static initial card");
+                Assert(firstCard.RootElement.GetProperty("body")[0].GetProperty("text").GetString() is string title
+                    && title.Length > 0, "static card title");
             }
             return 0;
         }
