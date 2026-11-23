@@ -27,10 +27,10 @@ public sealed class WidgetProvider : IWidgetProvider
     private static DateTimeOffset _lastUse = DateTimeOffset.UtcNow;
     private static bool _recovered;
 
-    // TEMPORARY C4 SMOKE TEST: keep native cards static until we verify
-    // they pin, render and survive reopening the Widgets Board on ASUS.
-    // Restore live refresh only after pinning is proven reliable.
-    private static readonly bool StaticPinningSmokeTest = true;
+    // Stage C4.1: static first card is proven on ASUS. Refresh ONLY the
+    // Windows-only WSL state; DevStack and interactive actions remain disabled.
+    // Restore full data/actions only after separate ASUS verification.
+    private static readonly bool WslReadOnlyStage = true;
 
     public static AutoResetEvent Wake { get; } = new(false);
 
@@ -41,9 +41,9 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public static void Start()
     {
-        if (StaticPinningSmokeTest) return;
-        // The timer exists while the provider runs, but it queries Windows only
-        // while a widget is active in the board. No polling when the board is hidden.
+        // WSL is queried only while its card is active in the Widgets Board.
+        // This timer does nothing while the board is closed or only the DevStack
+        // diagnostic card is visible.
         _refreshTimer = new Timer(_ => RequestRefresh(), null,
             TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(20));
     }
@@ -111,7 +111,7 @@ public sealed class WidgetProvider : IWidgetProvider
             _lastUse = DateTimeOffset.UtcNow;
         }
         SendInitialCard(context.Id, context.DefinitionId);
-        if (!StaticPinningSmokeTest) RequestRefresh();
+        RequestRefresh();
     }
 
     public void DeleteWidget(string widgetId, string customState)
@@ -138,7 +138,7 @@ public sealed class WidgetProvider : IWidgetProvider
             _lastUse = DateTimeOffset.UtcNow;
         }
         SendInitialCard(context.Id, context.DefinitionId);
-        if (!StaticPinningSmokeTest) RequestRefresh();
+        RequestRefresh();
     }
 
     public void Deactivate(string widgetId)
@@ -154,10 +154,9 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public void OnWidgetContextChanged(WidgetContextChangedArgs args)
     {
-        if (StaticPinningSmokeTest)
+        if (WslReadOnlyStage)
             SendInitialCard(args.WidgetContext.Id, args.WidgetContext.DefinitionId);
-        else
-            RequestRefresh();
+        RequestRefresh();
     }
 
     private static void SendInitialCard(string widgetId, string definitionId)
@@ -174,6 +173,9 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public void OnActionInvoked(WidgetActionInvokedArgs args)
     {
+        // C4.1 exposes no actions. Also reject stale actions cached by the host.
+        if (WslReadOnlyStage) return;
+
         var widgetId = args.WidgetContext.Id;
         var verb = args.Verb;
         Instance? widget;
@@ -268,11 +270,58 @@ public sealed class WidgetProvider : IWidgetProvider
         Wake.Set();
     }
 
+    private static async Task RefreshReadOnlyWslAsync()
+    {
+        string[] activeIds;
+        lock (Gate)
+            activeIds = Widgets.Values
+                .Where(w => w.Active && w.Definition == WidgetCards.WslId)
+                .Select(w => w.Id)
+                .ToArray();
+
+        // No process launch, network request or widget updates while inactive.
+        if (activeIds.Length == 0) return;
+
+        // This function only executes: wsl.exe --list --running --quiet.
+        // It never starts Ubuntu or probes DevStack network services.
+        var snapshot = await StateProbe.CaptureWslOnlyAsync();
+        var template = WidgetCards.WslReadOnlyTemplate(snapshot);
+
+        foreach (var widgetId in activeIds)
+        {
+            bool stillActive;
+            lock (Gate)
+                stillActive = Widgets.TryGetValue(widgetId, out var current)
+                    && current.Active && current.Definition == WidgetCards.WslId;
+            if (!stillActive) continue;
+
+            try
+            {
+                WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
+                {
+                    Template = template,
+                    Data = "{}",
+                    IsPlaceholderContent = false
+                });
+            }
+            catch (Exception error)
+            {
+                Trace.TraceWarning("C4.1 WSL read-only widget update: " + error);
+            }
+        }
+    }
+
     private static async Task RefreshAsync()
     {
         if (!await RefreshGate.WaitAsync(0)) return;
         try
         {
+            if (WslReadOnlyStage)
+            {
+                await RefreshReadOnlyWslAsync();
+                return;
+            }
+
             Instance[] selected;
             lock (Gate)
                 selected = Widgets.Values.Where(w => w.Active).ToArray();
