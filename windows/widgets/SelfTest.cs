@@ -160,6 +160,75 @@ internal static class SelfTest
                 Assert(!text.Contains("Nginx:", StringComparison.Ordinal), "C4.2 unknown no services");
             }
 
+
+            // D2: six responsive layouts are valid standalone Adaptive Cards.
+            // No external image URL is needed: CI generates bundled PNG glyphs.
+            Assert(WidgetDesign.NormalizeSize("SMALL") == "small", "size canonicalization");
+            Assert(WidgetDesign.NormalizeSize("unexpected") == "medium", "size fallback");
+            string? previousWsl = null, previousDev = null;
+            foreach (var sizeName in new[] { "small", "medium", "large" })
+            {
+                using var wsl = JsonDocument.Parse(
+                    WidgetDesign.Wsl(onlineControl, sizeName));
+                using var stop = JsonDocument.Parse(
+                    WidgetDesign.Wsl(onlineControl, sizeName, pendingStop: true));
+                using var dev = JsonDocument.Parse(
+                    WidgetDesign.DevStack(reachable, sizeName));
+                using var devOff = JsonDocument.Parse(
+                    WidgetDesign.DevStack(offline, sizeName));
+                using var firstWsl = JsonDocument.Parse(
+                    WidgetDesign.Initial(WidgetCards.WslId, sizeName));
+                using var firstDev = JsonDocument.Parse(
+                    WidgetDesign.Initial(WidgetCards.ServicesId, sizeName));
+
+                foreach (var parsed in new[] { wsl, stop, dev, devOff, firstWsl, firstDev })
+                {
+                    Assert(parsed.RootElement.GetProperty("type").GetString() == "AdaptiveCard",
+                        "D2 valid Adaptive Card " + sizeName);
+                    Assert(parsed.RootElement.GetProperty("version").GetString() == "1.5",
+                        "D2 compatible host version");
+                    Assert(parsed.RootElement.GetProperty("body").GetArrayLength() > 0,
+                        "D2 not empty " + sizeName);
+                    Assert(parsed.RootElement.GetRawText().Contains("data:image/png;base64,",
+                            StringComparison.Ordinal),
+                        "D2 bundled icons in " + sizeName);
+                }
+
+                var wslAction = wsl.RootElement.GetProperty("actions");
+                Assert(wslAction.GetArrayLength() == 1 &&
+                       wslAction[0].GetProperty("verb").GetString() == "stop-ask",
+                    "D2 WSL Stop retained " + sizeName);
+                Assert(stop.RootElement.GetProperty("actions").GetArrayLength() == 2 &&
+                       stop.RootElement.GetProperty("actions")[0].GetProperty("verb").GetString() == "stop-confirm",
+                    "D2 Stop confirmation preserved " + sizeName);
+
+                Assert(devOff.RootElement.GetProperty("actions").GetArrayLength() == 0,
+                    "D2 no broken DevStack links while WSL off");
+                var links = dev.RootElement.GetProperty("actions");
+                Assert(links.GetArrayLength() == (sizeName == "small" ? 1 : 2),
+                    "D2 size-specific navigation touchpoints");
+                Assert(links[links.GetArrayLength() - 1].GetProperty("type").GetString() ==
+                       "Action.OpenUrl", "D2 native navigation action");
+                Assert(links[links.GetArrayLength() - 1].GetProperty("url").GetString() ==
+                       WidgetDesign.ProjectsUrl, "D2 Projects deep link");
+                if (sizeName != "small")
+                    Assert(links[0].GetProperty("url").GetString() ==
+                           WidgetDesign.NewProjectUrl, "D2 New Project deep link");
+
+                string wslBody = wsl.RootElement.GetProperty("body").GetRawText();
+                string devBody = dev.RootElement.GetProperty("body").GetRawText();
+                if (previousWsl is not null)
+                    Assert(wslBody != previousWsl, "D2 distinct WSL layouts per size");
+                if (previousDev is not null)
+                    Assert(devBody != previousDev, "D2 distinct DevStack layouts per size");
+                previousWsl = wslBody; previousDev = devBody;
+
+                using var wslOff = JsonDocument.Parse(WidgetDesign.Wsl(offline, sizeName));
+                Assert(wslOff.RootElement.GetProperty("actions")[0]
+                           .GetProperty("verb").GetString() == "start",
+                    "D2 WSL Start retained " + sizeName);
+            }
+
             foreach (var name in new[] { WidgetCards.WslId, WidgetCards.ServicesId })
             {
                 using var template = JsonDocument.Parse(WidgetCards.Template(name));
