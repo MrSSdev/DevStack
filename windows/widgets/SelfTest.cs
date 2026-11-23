@@ -2,264 +2,144 @@ using System.Text.Json;
 
 namespace DevStack.Widgets;
 
-/// <summary>Small dependency-free checks runnable on a GitHub Windows runner.</summary>
 internal static class SelfTest
 {
+    private static int _checks;
     internal static int Run()
     {
         try
         {
             Assert(StateProbe.ParseRunningDistros("Ubuntu-26.04\r\nOther\r\n", "Ubuntu-26.04"), "running distro");
-            Assert(StateProbe.ParseRunningDistros("U\0b\0u\0n\0t\0u\0-\02\06\0.\00\04\0", "Ubuntu-26.04"), "utf16-style distro list");
-            Assert(!StateProbe.ParseRunningDistros("Ubuntu-24.04\r\n", "Ubuntu-26.04"), "different distro");
-            Assert(!StateProbe.ParseRunningDistros("", "Ubuntu-26.04"), "empty distro list");
-
-            // COM LocalServer32 can append -Embedding after MSIX ExeServer Arguments.
-            // This must start registration; otherwise Windows reports DCOM 10010.
-            Assert(WidgetServerLaunch.IsComActivation(
-                new[] { "-RegisterProcessAsComServer" }), "COM manifest argument");
-            Assert(WidgetServerLaunch.IsComActivation(
-                new[] { "-RegisterProcessAsComServer", "-Embedding" }), "COM appended -Embedding");
-            Assert(WidgetServerLaunch.IsComActivation(
-                new[] { "-Embedding" }), "COM default -Embedding");
-            Assert(WidgetServerLaunch.IsComActivation(
-                new[] { "/Embedding" }), "COM slash Embedding");
-            Assert(WidgetServerLaunch.IsComActivation(
-                new[] { "-registerprocessascomserver", "-embedding" }), "COM case insensitive");
-            Assert(!WidgetServerLaunch.IsComActivation(Array.Empty<string>()), "no COM activation without flags");
-            Assert(!WidgetServerLaunch.IsComActivation(
-                new[] { "--self-test" }), "self-test is not COM activation");
-
-            var offline = new StateProbe.Snapshot(false, "", null, null, null, null, DateTimeOffset.Now);
-            using var status = JsonDocument.Parse(WidgetCards.Data(WidgetCards.ServicesId, offline, "", false));
-            Assert(!status.RootElement.GetProperty("running").GetBoolean(), "DevStack offline state");
-            Assert(status.RootElement.GetProperty("nginx").GetString() == "—", "no false status while WSL off");
-
-            // The C4.1 card is intentionally read-only: no action buttons,
-            // no dynamic templating, no service probe and no WSL startup.
-            foreach (var snapshot in new[]
+            Assert(StateProbe.ParseRunningDistros("U\0b\0u\0n\0t\0u\0-\02\06\0.\00\04\0", "Ubuntu-26.04"), "UTF16-style list");
+            Assert(!StateProbe.ParseRunningDistros("Ubuntu-24.04", "Ubuntu-26.04"), "another distro");
+            Assert(!StateProbe.ParseRunningDistros("", "Ubuntu-26.04"), "empty list");
+            foreach (var flags in new[]
             {
-                offline,
-                new StateProbe.Snapshot(true, "", null, null, null, null, DateTimeOffset.Now),
-                new StateProbe.Snapshot(null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now)
-            })
-            {
-                using var live = JsonDocument.Parse(WidgetCards.WslReadOnlyTemplate(snapshot));
-                Assert(live.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "C4.1 card format");
-                Assert(!live.RootElement.TryGetProperty("actions", out _), "C4.1 has no action buttons");
-                var statusText = live.RootElement.GetProperty("body")[1].GetProperty("text").GetString();
-                Assert(statusText == (snapshot.WslRunning == true
-                    ? "Ubuntu uruchomione"
-                    : snapshot.WslRunning == false ? "Ubuntu wyłączone" : "Stan WSL nieznany"),
-                    "C4.1 WSL status label");
-            }
+                new[] { "-RegisterProcessAsComServer" }, new[] { "-RegisterProcessAsComServer", "-Embedding" },
+                new[] { "-Embedding" }, new[] { "/Embedding" }, new[] { "-registerprocessascomserver", "-embedding" }
+            }) Assert(WidgetServerLaunch.IsComActivation(flags), "COM launch flags");
+            Assert(!WidgetServerLaunch.IsComActivation(Array.Empty<string>()), "no flags");
+            Assert(!WidgetServerLaunch.IsComActivation(new[] { "--self-test" }), "test is not COM");
 
-            // C4.3: verify native actions, state gating and two-step Stop.
-            using (var card = JsonDocument.Parse(WidgetCards.WslControlTemplate(offline)))
+            var time = new DateTimeOffset(2026, 11, 23, 23, 36, 32, TimeSpan.FromHours(1));
+            var off = new StateProbe.Snapshot(false, "", null, null, null, null, time);
+            var on = new StateProbe.Snapshot(true, "", true, true, true, true, time);
+            var partial = new StateProbe.Snapshot(true, "", true, false, true, false, time);
+            var pending = new StateProbe.Snapshot(true, "", null, null, null, null, time);
+            var unknown = new StateProbe.Snapshot(null, "Odczyt niedostępny", null, null, null, null, time);
+            using (var closed = new CancellationTokenSource())
             {
-                var actions = card.RootElement.GetProperty("actions").EnumerateArray().ToArray();
-                Assert(actions.Length == 1, "C4.3 WSL offline offers only Start");
-                Assert(actions[0].GetProperty("type").GetString() == "Action.Execute",
-                    "C4.3 action type");
-                Assert(actions[0].GetProperty("verb").GetString() == "start",
-                    "C4.3 WSL offline verb");
-                Assert(actions[0].GetProperty("$when").GetString() ==
-                    "${$host.isUserContextAuthenticated}", "C4.3 auth guard");
-            }
-
-            var onlineControl = new StateProbe.Snapshot(
-                true, "", null, null, null, null, DateTimeOffset.Now);
-            using (var card = JsonDocument.Parse(WidgetCards.WslControlTemplate(onlineControl)))
-            {
-                var verbs = CardActionVerbs(card.RootElement);
-                Assert(verbs.SequenceEqual(new[] { "stop-ask" }),
-                    "C4.3 WSL online only offers Stop request");
-            }
-            using (var card = JsonDocument.Parse(
-                WidgetCards.WslControlTemplate(onlineControl, pendingStop: true)))
-            {
-                var verbs = CardActionVerbs(card.RootElement);
-                Assert(verbs.SequenceEqual(new[] { "stop-confirm", "stop-cancel" }),
-                    "C4.3 Stop requires second confirmation");
-                Assert(ReadCardText(card.RootElement).Contains(
-                    "zatrzymanie Ubuntu zakończy wszystkie uruchomione procesy",
-                    StringComparison.Ordinal), "C4.3 Stop warning");
-            }
-            using (var card = JsonDocument.Parse(
-                WidgetCards.WslControlTemplate(onlineControl, actionBusy: true)))
-                Assert(CardActionVerbs(card.RootElement).Length == 0,
-                    "C4.3 busy state disables all actions");
-
-            var unknownControl = new StateProbe.Snapshot(
-                null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now);
-            using (var card = JsonDocument.Parse(
-                WidgetCards.WslControlTemplate(unknownControl)))
-                Assert(CardActionVerbs(card.RootElement).Length == 0,
-                    "C4.3 unknown state must not offer Start or Stop");
-            using (var card = JsonDocument.Parse(
-                WidgetCards.WslControlTemplate(offline, pendingStop: true)))
-                Assert(CardActionVerbs(card.RootElement).SequenceEqual(new[] { "start" }),
-                    "C4.3 stale Stop confirmation never enables termination offline");
-
-            // C4.2: DevStack card must remain noninteractive and distinguish
-            // offline/unknown WSL from service connectivity when Ubuntu runs.
-            using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(offline)))
-            {
-                Assert(card.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "C4.2 offline format");
-                Assert(!card.RootElement.TryGetProperty("actions", out _), "C4.2 offline has no actions");
-                var text = ReadCardText(card.RootElement);
-                Assert(text.Contains("WSL wyłączony — DevStack niedostępny", StringComparison.Ordinal),
-                    "C4.2 offline message");
-                Assert(!text.Contains("Nginx:", StringComparison.Ordinal),
-                    "C4.2 offline must not show stale service status");
-            }
-
-            var reachable = new StateProbe.Snapshot(
-                true, "", true, false, true, false, DateTimeOffset.Now);
-            using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(reachable)))
-            {
-                Assert(!card.RootElement.TryGetProperty("actions", out _), "C4.2 online has no actions");
-                var text = ReadCardText(card.RootElement);
-                Assert(text.Contains("Nginx: Odpowiada", StringComparison.Ordinal), "C4.2 Nginx true");
-                Assert(text.Contains("PHP-FPM: Brak połączenia", StringComparison.Ordinal), "C4.2 PHP false");
-                Assert(text.Contains("MariaDB: Odpowiada", StringComparison.Ordinal), "C4.2 MariaDB true");
-                Assert(text.Contains("Redis: Brak połączenia", StringComparison.Ordinal), "C4.2 Redis false");
-                Assert(text.Contains("nie wynik systemctl", StringComparison.Ordinal), "C4.2 reachability disclaimer");
-            }
-
-            // When the board is hidden, the provider cancels its visibility
-            // token: running service probes must not start. With WSL off, the
-            // probe must return immediately without touching HTTPS or TCP.
-            using (var closedBoard = new CancellationTokenSource())
-            {
-                closedBoard.Cancel();
-                var skipped = StateProbe.CaptureServicesAfterWslAsync(
-                    offline, closedBoard.Token).GetAwaiter().GetResult();
-                Assert(ReferenceEquals(skipped, offline),
-                    "C4.2 no network probes when Ubuntu is off");
-
+                closed.Cancel();
+                var skipped = StateProbe.CaptureServicesAfterWslAsync(off, closed.Token).GetAwaiter().GetResult();
+                Assert(ReferenceEquals(skipped, off), "offline short circuit without network");
                 bool canceled = false;
-                try
-                {
-                    _ = StateProbe.CaptureServicesAfterWslAsync(
-                        reachable, closedBoard.Token).GetAwaiter().GetResult();
-                }
-                catch (OperationCanceledException)
-                {
-                    canceled = true;
-                }
-                Assert(canceled, "C4.2 in-flight services canceled on board close");
+                try { StateProbe.CaptureServicesAfterWslAsync(on, closed.Token).GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { canceled = true; }
+                Assert(canceled, "hidden session cancels probes");
             }
+            foreach (var size in new string?[] { "small", "medium", "large", "SMALL", null })
+                Assert(WidgetDesign.NormalizeSize(size) == "large", "large-only renderer");
 
-            var unknown = new StateProbe.Snapshot(
-                null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now);
-            using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(unknown)))
+            var fixtures = new Dictionary<string, string>
             {
-                var text = ReadCardText(card.RootElement);
-                Assert(text.Contains("nie sprawdzono usług", StringComparison.Ordinal), "C4.2 unknown WSL");
-                Assert(!text.Contains("Nginx:", StringComparison.Ordinal), "C4.2 unknown no services");
-            }
-
-
-            // D2: six responsive layouts are valid standalone Adaptive Cards.
-            // No external image URL is needed: CI generates bundled PNG glyphs.
-            Assert(WidgetDesign.NormalizeSize("SMALL") == "small", "size canonicalization");
-            Assert(WidgetDesign.NormalizeSize("unexpected") == "medium", "size fallback");
-            string? previousWsl = null, previousDev = null;
-            foreach (var sizeName in new[] { "small", "medium", "large" })
+                ["ubuntu-online"] = WidgetDesign.Wsl(on, "large"),
+                ["ubuntu-offline"] = WidgetDesign.Wsl(off, "large"),
+                ["ubuntu-unknown"] = WidgetDesign.Wsl(unknown, "large"),
+                ["ubuntu-busy"] = WidgetDesign.Wsl(on, "large", "Uruchamianie Ubuntu...", actionBusy: true),
+                ["ubuntu-confirm"] = WidgetDesign.Wsl(on, "large", pendingStop: true),
+                ["ubuntu-error"] = WidgetDesign.Wsl(on, "large", "Potwierdzenie wygasło. Wybierz Zatrzymaj ponownie."),
+                ["devstack-online"] = WidgetDesign.DevStack(on, "large"),
+                ["devstack-offline"] = WidgetDesign.DevStack(off, "large"),
+                ["devstack-unknown"] = WidgetDesign.DevStack(unknown, "large"),
+                ["devstack-partial"] = WidgetDesign.DevStack(partial, "large"),
+                ["devstack-checking"] = WidgetDesign.DevStack(pending, "large"),
+                ["ubuntu-initial"] = WidgetDesign.Initial(WidgetCards.WslId, "large"),
+                ["devstack-initial"] = WidgetDesign.Initial(WidgetCards.ServicesId, "large")
+            };
+            foreach (var (name, json) in fixtures)
             {
-                using var wsl = JsonDocument.Parse(
-                    WidgetDesign.Wsl(onlineControl, sizeName));
-                using var stop = JsonDocument.Parse(
-                    WidgetDesign.Wsl(onlineControl, sizeName, pendingStop: true));
-                using var dev = JsonDocument.Parse(
-                    WidgetDesign.DevStack(reachable, sizeName));
-                using var devOff = JsonDocument.Parse(
-                    WidgetDesign.DevStack(offline, sizeName));
-                using var firstWsl = JsonDocument.Parse(
-                    WidgetDesign.Initial(WidgetCards.WslId, sizeName));
-                using var firstDev = JsonDocument.Parse(
-                    WidgetDesign.Initial(WidgetCards.ServicesId, sizeName));
-
-                foreach (var parsed in new[] { wsl, stop, dev, devOff, firstWsl, firstDev })
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                var nodes = Walk(root).ToArray();
+                Assert(root.GetProperty("type").GetString() == "AdaptiveCard", name + " format");
+                Assert(root.GetProperty("version").GetString() == "1.5", name + " host version");
+                Assert(!root.TryGetProperty("webUrl", out _), name + " native only");
+                Assert(!root.TryGetProperty("actions", out _), name + " no buttons after footer");
+                var body = root.GetProperty("body");
+                var bottom = body[body.GetArrayLength() - 1];
+                Assert(bottom.GetProperty("id").GetString() == "bottom-dock", name + " final dock");
+                Assert(bottom.GetProperty("height").GetString() == "stretch", name + " flexible dock");
+                Assert(bottom.GetProperty("verticalContentAlignment").GetString() == "bottom", name + " bottom alignment");
+                var items = bottom.GetProperty("items");
+                Assert(items[items.GetArrayLength() - 1].GetProperty("id").GetString() == "sync-row", name + " timestamp last");
+                var ids = nodes.Where(n => n.TryGetProperty("id", out _)).Select(n => n.GetProperty("id").GetString()).ToArray();
+                Assert(ids.Distinct().Count() == ids.Length, name + " unique IDs");
+                foreach (var n in nodes)
                 {
-                    Assert(parsed.RootElement.GetProperty("type").GetString() == "AdaptiveCard",
-                        "D2 valid Adaptive Card " + sizeName);
-                    Assert(parsed.RootElement.GetProperty("version").GetString() == "1.5",
-                        "D2 compatible host version");
-                    Assert(parsed.RootElement.GetProperty("body").GetArrayLength() > 0,
-                        "D2 not empty " + sizeName);
-                    Assert(parsed.RootElement.GetRawText().Contains("data:image/png;base64,",
-                            StringComparison.Ordinal),
-                        "D2 bundled icons in " + sizeName);
+                    foreach (var invalid in new[] { "padding", "margin", "borderRadius", "boxShadow" })
+                        Assert(!n.TryGetProperty(invalid, out _), name + " no unsupported CSS");
+                    if (!n.TryGetProperty("type", out var type)) continue;
+                    switch (type.GetString())
+                    {
+                        case "Image":
+                            Assert(n.GetProperty("url").GetString()!.StartsWith("data:image/png;base64,", StringComparison.Ordinal), name + " embedded icon");
+                            break;
+                        case "Action.Execute":
+                            Assert(name.StartsWith("ubuntu-", StringComparison.Ordinal), "DevStack cannot control WSL");
+                            Assert(n.GetProperty("$when").GetString() == "${$host.isUserContextAuthenticated}", "auth guard retained");
+                            break;
+                        case "Action.OpenUrl":
+                            Assert(name.StartsWith("devstack-", StringComparison.Ordinal), "navigation only on DevStack");
+                            Assert(new[] { WidgetDesign.ProjectsUrl, WidgetDesign.NewProjectUrl }.Contains(n.GetProperty("url").GetString()), "allowlisted deep links");
+                            break;
+                        case "TextBlock":
+                            Assert(n.GetProperty("size").GetString() != "extraLarge", "no billboard type");
+                            if (n.GetProperty("size").GetString() == "large")
+                                Assert(n.GetProperty("color").GetString() == "default", "neutral main headings");
+                            break;
+                    }
                 }
-
-                var wslAction = wsl.RootElement.GetProperty("actions");
-                Assert(wslAction.GetArrayLength() == 1 &&
-                       wslAction[0].GetProperty("verb").GetString() == "stop-ask",
-                    "D2 WSL Stop retained " + sizeName);
-                Assert(stop.RootElement.GetProperty("actions").GetArrayLength() == 2 &&
-                       stop.RootElement.GetProperty("actions")[0].GetProperty("verb").GetString() == "stop-confirm",
-                    "D2 Stop confirmation preserved " + sizeName);
-
-                Assert(devOff.RootElement.GetProperty("actions").GetArrayLength() == 0,
-                    "D2 no broken DevStack links while WSL off");
-                var links = dev.RootElement.GetProperty("actions");
-                Assert(links.GetArrayLength() == (sizeName == "small" ? 1 : 2),
-                    "D2 size-specific navigation touchpoints");
-                Assert(links[links.GetArrayLength() - 1].GetProperty("type").GetString() ==
-                       "Action.OpenUrl", "D2 native navigation action");
-                Assert(links[links.GetArrayLength() - 1].GetProperty("url").GetString() ==
-                       WidgetDesign.ProjectsUrl, "D2 Projects deep link");
-                if (sizeName != "small")
-                    Assert(links[0].GetProperty("url").GetString() ==
-                           WidgetDesign.NewProjectUrl, "D2 New Project deep link");
-
-                string wslBody = wsl.RootElement.GetProperty("body").GetRawText();
-                string devBody = dev.RootElement.GetProperty("body").GetRawText();
-                if (previousWsl is not null)
-                    Assert(wslBody != previousWsl, "D2 distinct WSL layouts per size");
-                if (previousDev is not null)
-                    Assert(devBody != previousDev, "D2 distinct DevStack layouts per size");
-                previousWsl = wslBody; previousDev = devBody;
-
-                using var wslOff = JsonDocument.Parse(WidgetDesign.Wsl(offline, sizeName));
-                Assert(wslOff.RootElement.GetProperty("actions")[0]
-                           .GetProperty("verb").GetString() == "start",
-                    "D2 WSL Start retained " + sizeName);
             }
-
-            foreach (var name in new[] { WidgetCards.WslId, WidgetCards.ServicesId })
+            Assert(Verbs(fixtures["ubuntu-online"]).SequenceEqual(new[] { "stop-ask" }), "Stop request only");
+            Assert(Verbs(fixtures["ubuntu-offline"]).SequenceEqual(new[] { "start" }), "Start only");
+            Assert(Verbs(fixtures["ubuntu-confirm"]).SequenceEqual(new[] { "stop-confirm", "stop-cancel" }), "two-step Stop");
+            Assert(Verbs(fixtures["ubuntu-busy"]).Length == 0, "busy rejects clicks");
+            Assert(Verbs(fixtures["ubuntu-unknown"]).Length == 0, "unknown rejects controls");
+            foreach (var key in new[] { "devstack-offline", "devstack-unknown" })
             {
-                using var template = JsonDocument.Parse(WidgetCards.Template(name));
-                Assert(template.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "widget template");
-                using var firstCard = JsonDocument.Parse(WidgetCards.InitialTemplate(name));
-                Assert(firstCard.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "static initial card");
-                Assert(firstCard.RootElement.GetProperty("body")[0].GetProperty("text").GetString() is string title
-                    && title.Length > 0, "static card title");
+                using var d = JsonDocument.Parse(fixtures[key]);
+                Assert(!Walk(d.RootElement).Any(n => n.TryGetProperty("type", out var t) && t.GetString()!.StartsWith("Action.", StringComparison.Ordinal)), key + " no actions");
             }
+            string? export = Environment.GetEnvironmentVariable("DEVSTACK_WIDGET_PREVIEWS");
+            if (!string.IsNullOrWhiteSpace(export))
+            {
+                Directory.CreateDirectory(export);
+                foreach (var (name, json) in fixtures) File.WriteAllText(Path.Combine(export, name + ".json"), json);
+            }
+            Console.WriteLine($"PASS: {_checks} checks; {fixtures.Count} large-card state fixtures.");
             return 0;
         }
-        catch (Exception error)
-        {
-            Console.Error.WriteLine(error);
-            return 1;
-        }
+        catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 
-    // Test decoded Adaptive Card text rather than escaped JSON source:
-    // System.Text.Json escapes Polish Unicode characters by default.
-    private static string ReadCardText(JsonElement card) =>
-        string.Join("\n", card.GetProperty("body").EnumerateArray()
-            .Select(item => item.GetProperty("text").GetString() ?? ""));
-
-    private static string[] CardActionVerbs(JsonElement card) =>
-        card.GetProperty("actions").EnumerateArray()
-            .Select(action => action.GetProperty("verb").GetString() ?? "")
-            .ToArray();
-
+    private static IEnumerable<JsonElement> Walk(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            yield return element;
+            foreach (var p in element.EnumerateObject()) foreach (var n in Walk(p.Value)) yield return n;
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+            foreach (var child in element.EnumerateArray()) foreach (var n in Walk(child)) yield return n;
+    }
+    private static string[] Verbs(string json)
+    {
+        using var d = JsonDocument.Parse(json);
+        return Walk(d.RootElement).Where(n => n.TryGetProperty("verb", out _)).Select(n => n.GetProperty("verb").GetString()!).ToArray();
+    }
     private static void Assert(bool value, string message)
     {
+        _checks++;
         if (!value) throw new InvalidOperationException("Self-test failed: " + message);
     }
 }

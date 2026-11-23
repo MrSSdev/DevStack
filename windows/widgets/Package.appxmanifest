@@ -5,7 +5,7 @@
          xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
          IgnorableNamespaces="uap uap3 rescap">
-  <Identity Name="MrSSdev.DevStack.Widgets" Publisher="CN=DevStack Widgets Development" Version="0.1.0.0" />
+  <Identity Name="MrSSdev.DevStack.Widgets" Publisher="CN=DevStack Widgets Development" Version="0.2.0.0" />
   <Properties>
     <DisplayName>DevStack Widgets</DisplayName>
     <PublisherDisplayName>DevStack</PublisherDisplayName>
@@ -43,32 +43,24 @@
                 <Activation><CreateInstance ClassId="6DE550FB-ECB8-4955-87E2-4943E247E34A" /></Activation>
                 <Definitions>
                   <Definition Id="DevStack_WSL" DisplayName="Ubuntu"
-                              Description="Stan Ubuntu-26.04 i świadome uruchamianie lub zatrzymywanie">
+                              Description="Stan Ubuntu i bezpieczne sterowanie WSL">
                     <Capabilities>
-                      <Capability>
-                        <Size Name="small" />
-                        <Size Name="medium" />
-                        <Size Name="large" />
-                      </Capability>
+                      <Capability><Size Name="large" /></Capability>
                     </Capabilities>
                     <ThemeResources>
                       <Icons><Icon Path="ProviderAssets\WSL_Icon.png" /></Icons>
-                      <Screenshots><Screenshot Path="ProviderAssets\WSL_Screenshot.png" DisplayAltText="Stan WSL i przyciski uruchamiania" /></Screenshots>
+                      <Screenshots><Screenshot Path="ProviderAssets\WSL_Screenshot.png" DisplayAltText="Stan Ubuntu i przyciski sterowania" /></Screenshots>
                       <DarkMode /><LightMode />
                     </ThemeResources>
                   </Definition>
                   <Definition Id="DevStack_Services" DisplayName="DevStack"
-                              Description="Dostępność usług DevStack i otwieranie panelu">
+                              Description="Dostępność usług i skróty do projektów">
                     <Capabilities>
-                      <Capability>
-                        <Size Name="small" />
-                        <Size Name="medium" />
-                        <Size Name="large" />
-                      </Capability>
+                      <Capability><Size Name="large" /></Capability>
                     </Capabilities>
                     <ThemeResources>
                       <Icons><Icon Path="ProviderAssets\DevStack_Icon.png" /></Icons>
-                      <Screenshots><Screenshot Path="ProviderAssets\DevStack_Screenshot.png" DisplayAltText="Status połączeń DevStack i adres panelu" /></Screenshots>
+                      <Screenshots><Screenshot Path="ProviderAssets\DevStack_Screenshot.png" DisplayAltText="Usługi DevStack i projekty" /></Screenshots>
                       <DarkMode /><LightMode />
                     </ThemeResources>
                   </Definition>

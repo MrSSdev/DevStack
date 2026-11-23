@@ -1,117 +1,103 @@
-# Generate simple original app artwork on the Windows build runner.
+# Original line icons, drawn at high resolution for sharp PNG assets.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $root = Split-Path -Parent $PSScriptRoot
 foreach ($folder in @('Assets','ProviderAssets')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $root $folder) | Out-Null
 }
-function New-Asset {
-    param([string]$File, [int]$W, [int]$H, [string]$Title, [string]$Color)
-    $bitmap = [System.Drawing.Bitmap]::new($W, $H)
-    $g = [System.Drawing.Graphics]::FromImage($bitmap)
-    $accent = [System.Drawing.SolidBrush]::new([System.Drawing.ColorTranslator]::FromHtml($Color))
-    $white = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
-    $font = [System.Drawing.Font]::new('Segoe UI', [Math]::Max(12, [Math]::Min($H/4, $W/[Math]::Max(3,$Title.Length))), [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-    $format = [System.Drawing.StringFormat]::new()
-    try {
-        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $g.Clear([System.Drawing.Color]::FromArgb(13,18,28))
-        $g.FillRectangle($accent, 0, $H-[Math]::Max(3,$H/24), $W, [Math]::Max(3,$H/24))
-        $format.Alignment = [System.Drawing.StringAlignment]::Center
-        $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-        $g.DrawString($Title, $font, $white, [System.Drawing.RectangleF]::new(0,0,$W,$H), $format)
-        $bitmap.Save((Join-Path $root $File), [System.Drawing.Imaging.ImageFormat]::Png)
-    }
-    finally {
-        $format.Dispose(); $font.Dispose(); $white.Dispose(); $accent.Dispose()
-        $g.Dispose(); $bitmap.Dispose()
-    }
+function RoundRect([single]$x,[single]$y,[single]$w,[single]$h,[single]$r) {
+    $p = [System.Drawing.Drawing2D.GraphicsPath]::new()
+    $d = $r * 2
+    $p.AddArc($x,$y,$d,$d,180,90)
+    $p.AddArc($x+$w-$d,$y,$d,$d,270,90)
+    $p.AddArc($x+$w-$d,$y+$h-$d,$d,$d,0,90)
+    $p.AddArc($x,$y+$h-$d,$d,$d,90,90)
+    $p.CloseFigure()
+    return $p
 }
-@(
-    @('Assets/StoreLogo.png',80,80,'DS','#E1403E'),
-    @('Assets/Square44x44Logo.png',88,88,'DS','#E1403E'),
-    @('Assets/Square150x150Logo.png',300,300,'DS','#E1403E'),
-    @('Assets/Wide310x150Logo.png',620,300,'DEVSTACK','#E1403E'),
-    @('Assets/SplashScreen.png',620,300,'DEVSTACK','#E1403E'),
-    @('ProviderAssets/WSL_Icon.png',200,200,'WSL','#2EC9A5'),
-    @('ProviderAssets/WSL_Screenshot.png',480,340,'WSL','#2EC9A5'),
-    @('ProviderAssets/DevStack_Icon.png',200,200,'DEV','#E1403E'),
-    @('ProviderAssets/DevStack_Screenshot.png',480,340,'DEVSTACK','#E1403E')
-) | ForEach-Object { New-Asset -File $_[0] -W $_[1] -H $_[2] -Title $_[3] -Color $_[4] }
-
-
-# Small transparent glyphs are embedded as data:image/png in the native
-# Adaptive Cards. No external assets or web requests are required for icons.
-function New-UiGlyph {
-    param([string]$File, [string]$Kind, [string]$Color)
-
-    $bmp = [System.Drawing.Bitmap]::new(48, 48, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+function New-Glyph([string]$Name,[string]$Kind,[string]$Color) {
+    $bmp = [System.Drawing.Bitmap]::new(96,96,[System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $ink = [System.Drawing.ColorTranslator]::FromHtml($Color)
-    $pen = [System.Drawing.Pen]::new($ink, 3.5)
-    $fill = [System.Drawing.SolidBrush]::new($ink)
+    $pen = [System.Drawing.Pen]::new($ink,2.1)
+    $fill = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(22,$ink))
+    $frame = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(45,$ink),0.7)
+    $tile = RoundRect 1 1 46 46 12
     try {
         $g.Clear([System.Drawing.Color]::Transparent)
         $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-        $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-        $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
-
+        $g.ScaleTransform(2,2)
+        $g.FillPath($fill,$tile); $g.DrawPath($frame,$tile)
+        $pen.StartCap = 'Round'; $pen.EndCap = 'Round'; $pen.LineJoin = 'Round'
         switch ($Kind) {
-            'power' {
-                $g.DrawArc($pen, 8, 8, 32, 32, -56, 292)
-                $g.DrawLine($pen, 24, 5, 24, 23)
+            'terminal' {
+                $box = RoundRect 10 13 28 23 4
+                try { $g.DrawPath($pen,$box) } finally { $box.Dispose() }
+                $g.DrawLine($pen,16,20,21,24); $g.DrawLine($pen,21,24,16,28)
+                $g.DrawLine($pen,25,29,32,29)
             }
-            'dev' {
-                $g.FillRectangle($fill, 9, 9, 13, 13)
-                $g.FillRectangle($fill, 26, 9, 13, 13)
-                $g.FillRectangle($fill, 9, 26, 13, 13)
-                $g.FillRectangle($fill, 26, 26, 13, 13)
+            'blocks' {
+                foreach ($b in @(@(12,12),@(26,12),@(12,26),@(26,26))) {
+                    $box = RoundRect $b[0] $b[1] 10 10 2
+                    try { $g.DrawPath($pen,$box) } finally { $box.Dispose() }
+                }
             }
             'globe' {
-                $g.DrawEllipse($pen, 7, 7, 34, 34)
-                $g.DrawLine($pen, 7, 24, 41, 24)
-                $g.DrawArc($pen, 18, 7, 12, 34, 88, 184)
-                $g.DrawArc($pen, 18, 7, 12, 34, -88, 184)
+                $g.DrawEllipse($pen,12,12,24,24)
+                $g.DrawEllipse($pen,19,12,10,24)
+                $g.DrawLine($pen,12,24,36,24)
             }
             'code' {
-                $g.DrawLine($pen, 16, 15, 8, 24)
-                $g.DrawLine($pen, 8, 24, 16, 33)
-                $g.DrawLine($pen, 32, 15, 40, 24)
-                $g.DrawLine($pen, 40, 24, 32, 33)
-                $g.DrawLine($pen, 28, 10, 20, 38)
+                $g.DrawLine($pen,17,17,10,24); $g.DrawLine($pen,10,24,17,31)
+                $g.DrawLine($pen,31,17,38,24); $g.DrawLine($pen,38,24,31,31)
+                $g.DrawLine($pen,27,14,21,34)
             }
             'database' {
-                $g.DrawEllipse($pen, 7, 9, 34, 13)
-                $g.DrawArc($pen, 7, 15, 34, 13, 0, 180)
-                $g.DrawArc($pen, 7, 25, 34, 13, 0, 180)
-                $g.DrawLine($pen, 7, 15, 7, 32)
-                $g.DrawLine($pen, 41, 15, 41, 32)
-                $g.DrawArc($pen, 7, 25, 34, 13, 0, 180)
+                $g.DrawEllipse($pen,12,12,24,8)
+                $g.DrawLine($pen,12,16,12,32); $g.DrawLine($pen,36,16,36,32)
+                $g.DrawArc($pen,12,20,24,8,0,180)
+                $g.DrawArc($pen,12,28,24,8,0,180)
             }
             'layers' {
-                $top = [System.Drawing.Point[]]@(
-                    [System.Drawing.Point]::new(24,8), [System.Drawing.Point]::new(41,18),
-                    [System.Drawing.Point]::new(24,28), [System.Drawing.Point]::new(7,18))
-                $g.DrawPolygon($pen, $top)
-                $g.DrawLine($pen, 7, 26, 24, 36)
-                $g.DrawLine($pen, 24, 36, 41, 26)
-                $g.DrawLine($pen, 7, 33, 24, 43)
-                $g.DrawLine($pen, 24, 43, 41, 33)
+                $pts = [System.Drawing.PointF[]]@(
+                    [System.Drawing.PointF]::new(24,12),[System.Drawing.PointF]::new(37,20),
+                    [System.Drawing.PointF]::new(24,28),[System.Drawing.PointF]::new(11,20))
+                $g.DrawPolygon($pen,$pts)
+                $g.DrawLine($pen,11,27,24,35); $g.DrawLine($pen,24,35,37,27)
             }
         }
-
-        $bmp.Save((Join-Path $root $File), [System.Drawing.Imaging.ImageFormat]::Png)
-    }
-    finally {
-        $fill.Dispose(); $pen.Dispose(); $g.Dispose(); $bmp.Dispose()
-    }
+        $bmp.Save((Join-Path $root "ProviderAssets/UI_$Name.png"),[System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $tile.Dispose(); $frame.Dispose(); $fill.Dispose(); $pen.Dispose(); $g.Dispose(); $bmp.Dispose() }
 }
 @(
-    @('ProviderAssets/UI_WSL.png','power','#2EC9A5'),
-    @('ProviderAssets/UI_DevStack.png','dev','#E1403E'),
-    @('ProviderAssets/UI_Nginx.png','globe','#5DADB9'),
-    @('ProviderAssets/UI_PHP.png','code','#8F9ED1'),
-    @('ProviderAssets/UI_MariaDB.png','database','#C7A578'),
-    @('ProviderAssets/UI_Redis.png','layers','#D17D84')
-) | ForEach-Object { New-UiGlyph -File $_[0] -Kind $_[1] -Color $_[2] }
+    @('WSL','terminal','#6AA893'), @('DevStack','blocks','#8997AA'),
+    @('Nginx','globe','#6AA893'), @('PHP','code','#9696BA'),
+    @('MariaDB','database','#B29A79'), @('Redis','layers','#B58285')
+) | ForEach-Object { New-Glyph $_[0] $_[1] $_[2] }
+
+function Save-Art([string]$File,[int]$Width,[int]$Height,[string]$Glyph,[string]$Title='') {
+    $bmp = [System.Drawing.Bitmap]::new($Width,$Height)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $img = [System.Drawing.Image]::FromFile((Join-Path $root "ProviderAssets/UI_$Glyph.png"))
+    $font = [System.Drawing.Font]::new('Segoe UI',22,[System.Drawing.FontStyle]::Regular,[System.Drawing.GraphicsUnit]::Pixel)
+    $white = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(232,234,238))
+    try {
+        $g.Clear([System.Drawing.Color]::FromArgb(32,35,41))
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $side = [Math]::Min($Width,$Height)*0.6
+        if ($Title) {
+            $g.DrawImage($img,24,24,48,48)
+            $g.DrawString($Title,$font,$white,88,36)
+        } else { $g.DrawImage($img,($Width-$side)/2,($Height-$side)/2,$side,$side) }
+        $bmp.Save((Join-Path $root $File),[System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $white.Dispose(); $font.Dispose(); $img.Dispose(); $g.Dispose(); $bmp.Dispose() }
+}
+Save-Art 'Assets/StoreLogo.png' 80 80 'DevStack'
+Save-Art 'Assets/Square44x44Logo.png' 88 88 'DevStack'
+Save-Art 'Assets/Square150x150Logo.png' 300 300 'DevStack'
+Save-Art 'Assets/Wide310x150Logo.png' 620 300 'DevStack' 'DevStack'
+Save-Art 'Assets/SplashScreen.png' 620 300 'DevStack' 'DevStack'
+Copy-Item (Join-Path $root 'ProviderAssets/UI_WSL.png') (Join-Path $root 'ProviderAssets/WSL_Icon.png') -Force
+Copy-Item (Join-Path $root 'ProviderAssets/UI_DevStack.png') (Join-Path $root 'ProviderAssets/DevStack_Icon.png') -Force
+Save-Art 'ProviderAssets/WSL_Screenshot.png' 300 304 'WSL' 'Ubuntu'
+Save-Art 'ProviderAssets/DevStack_Screenshot.png' 300 304 'DevStack' 'DevStack'

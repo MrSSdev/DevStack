@@ -26,6 +26,9 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - uses: microsoft/setup-msbuild@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Generate images and validate widget manifest
         shell: pwsh
@@ -36,8 +39,28 @@ jobs:
       - name: Logic tests without starting WSL
         shell: pwsh
         run: |
+          $env:DEVSTACK_WIDGET_PREVIEWS = Join-Path (Get-Location) 'widgets-previews'
           dotnet run --project windows/widgets/tests/WidgetChecks.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw 'Widget logic tests failed' }
+
+      - name: Render dark and light card states and check bounds
+        shell: pwsh
+        run: |
+          npm install --prefix .widget-preview --no-audit --no-fund --ignore-scripts --no-package-lock adaptivecards@2.11.0 playwright@1.56.1
+          if ($LASTEXITCODE -ne 0) { throw 'Preview dependency install failed' }
+          node .widget-preview/node_modules/playwright/cli.js install chromium
+          if ($LASTEXITCODE -ne 0) { throw 'Preview browser install failed' }
+          $env:NODE_PATH = Join-Path (Get-Location) '.widget-preview/node_modules'
+          node windows/widgets/scripts/Render-WidgetPreviews.cjs widgets-previews
+          if ($LASTEXITCODE -ne 0) { throw 'Widget render/bounds tests failed' }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: DevStack-Widgets-Preview
+          path: widgets-previews/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Restore NuGet packages
         shell: pwsh
@@ -81,7 +104,7 @@ jobs:
             Remove-Item -Path ("Cert:\CurrentUser\My\" + $cert.Thumbprint) -Force -ErrorAction SilentlyContinue
           }
           Copy-Item '${{ steps.package.outputs.path }}' 'widgets-packages\install\DevStack-Widgets-x64.msix'
-          'This test certificate belongs ONLY to this workflow run. Trust it solely after verifying the source. A new certificate is generated on each build.' | Out-File 'widgets-packages\install\READ-ME-FIRST.txt' -Encoding utf8
+          'Test signer from this workflow only. Verify the source before trusting this CER. Version 0.2.0.0; two LARGE native widgets; no resize menu is intentional.' | Out-File 'widgets-packages\install\READ-ME-FIRST.txt' -Encoding utf8
 
       - uses: actions/upload-artifact@v4
         with:

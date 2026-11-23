@@ -4,250 +4,227 @@ using System.Text.Json;
 namespace DevStack.Widgets;
 
 /// <summary>
-/// DevStack visual system for native Windows 11 Adaptive Card widgets.
-/// Separate layouts for each manifest size; all text/images work without
-/// WSL or external icon hosting. Rendering is entirely passive.
+/// Two large native cards. Real Adaptive Card surfaces, restrained type,
+/// and a stretch bottom dock for controls followed by the sync footer.
+/// No web view, background server, CSS-only properties or synthetic metrics.
 /// </summary>
 internal static class WidgetDesign
 {
     internal const string ProjectsUrl = "https://devstack.test/#/projects";
     internal const string NewProjectUrl = "https://devstack.test/#/new";
+    private static readonly ConcurrentDictionary<string, string> Images = new();
+    private const string UserContext = "${$host.isUserContextAuthenticated}";
 
-    private static readonly ConcurrentDictionary<string, string> ImageCache = new();
-    private static readonly string[] SizeNames = { "small", "medium", "large" };
+    // Preserve the provider callback API; the manifest intentionally offers only large.
+    internal static string NormalizeSize(string? size) => "large";
 
-    internal static string NormalizeSize(string? size) =>
-        SizeNames.FirstOrDefault(s =>
-            string.Equals(s, size, StringComparison.OrdinalIgnoreCase))
-        ?? "medium";
-
-    private static object Text(string content, string size = "Default",
-        string color = "Default", string weight = "Default",
-        string spacing = "Small", bool subtle = false, int maxLines = 0)
+    private static Dictionary<string, object> Text(string value,
+        string size = "default", bool strong = false, bool muted = false,
+        string spacing = "small", string color = "default") => new()
     {
-        var element = new Dictionary<string, object>
+        ["type"] = "TextBlock", ["text"] = value, ["size"] = size,
+        ["weight"] = strong ? "bolder" : "default", ["isSubtle"] = muted,
+        ["color"] = color, ["spacing"] = spacing, ["wrap"] = true
+    };
+
+    private static Dictionary<string, object> Group(string id, IEnumerable<object> items,
+        string spacing = "medium", bool surface = false, string? minHeight = null)
+    {
+        var group = new Dictionary<string, object>
         {
-            ["type"] = "TextBlock", ["text"] = content, ["size"] = size,
-            ["color"] = color, ["weight"] = weight, ["spacing"] = spacing,
-            ["wrap"] = true
+            ["type"] = "Container", ["id"] = id, ["items"] = items.ToArray(),
+            ["spacing"] = spacing, ["bleed"] = false
         };
-        if (subtle) element["isSubtle"] = true;
-        if (maxLines > 0) element["maxLines"] = maxLines;
-        return element;
+        if (surface) group["style"] = "emphasis";
+        if (minHeight is not null) group["minHeight"] = minHeight;
+        return group;
     }
 
-    private static object Row(params (object Item, string Width)[] columns) =>
-        new
-        {
-            type = "ColumnSet",
-            spacing = "Small",
-            columns = columns.Select(c => new
-            {
-                type = "Column", width = c.Width,
-                items = new object[] { c.Item }
-            }).ToArray()
-        };
-
-    private static object Panel(params object[] items) =>
-        new { type = "Container", style = "emphasis",
-              spacing = "Medium", items };
-
-    private static object Icon(string name, string alt, int pixels = 24)
+    private static Dictionary<string, object> Col(object[] items, string width = "stretch",
+        string spacing = "medium", bool surface = false)
     {
-        // Adaptive Cards 1.2+ supports self-contained PNG data URIs.
-        // Small PNGs are generated on the CI runner and packaged in MSIX.
-        string url = ImageCache.GetOrAdd(name, n =>
+        var col = new Dictionary<string, object>
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "ProviderAssets",
-                "UI_" + n + ".png");
-            try
-            {
-                return File.Exists(path)
-                    ? "data:image/png;base64," +
-                      Convert.ToBase64String(File.ReadAllBytes(path))
-                    : "";
-            }
-            catch (IOException) { return ""; }
-            catch (UnauthorizedAccessException) { return ""; }
-        });
-
-        // The fallback remains usable if artwork is absent in a local
-        // developer test. No external requests are performed.
-        if (url.Length == 0)
-            return Text("◆", size: "Medium", color: "Accent", weight: "Bolder");
-        return new
-        {
-            type = "Image", url, altText = alt,
-            width = pixels + "px", height = pixels + "px",
-            spacing = "None"
+            ["type"] = "Column", ["width"] = width, ["items"] = items,
+            ["spacing"] = spacing, ["verticalContentAlignment"] = "center",
+            ["bleed"] = false
         };
+        if (surface) col["style"] = "emphasis";
+        return col;
     }
 
-    private static object IconLabel(string icon, string label, int pixels = 24) =>
-        Row((Icon(icon, label, pixels), "auto"),
-            (Text(label, weight: "Bolder", spacing: "None"), "stretch"));
+    private static object Row(string id, object[] columns, string spacing = "medium") => new
+    {
+        type = "ColumnSet", id, columns, spacing
+    };
 
-    private static object Dot(string caption, string color, bool compact = false) =>
-        Row((Text("●", size: "Medium", color: color, spacing: "None"), "auto"),
-            (Text(caption, size: compact ? "Small" : "Default",
-                weight: "Bolder", spacing: "None"), "stretch"));
-
-    private static object Footer(StateProbe.Snapshot snapshot, bool details = false) =>
-        Text((details ? "OSTATNI ODCZYT  ·  " : "Sprawdzono  ") +
-             snapshot.CheckedAt.ToString("HH:mm:ss"),
-             "Small", spacing: "Medium", subtle: true);
-
-    private static Dictionary<string, object> Execute(string title, string verb) =>
-        new()
+    private static object Icon(string name, string alt, int size = 24)
+    {
+        string data = Images.GetOrAdd(name, n =>
         {
-            ["type"] = "Action.Execute", ["title"] = title, ["verb"] = verb,
-            ["$when"] = "${$host.isUserContextAuthenticated}"
-        };
-
-    private static Dictionary<string, object> Link(string title, string url) =>
-        new()
-        {
-            ["type"] = "Action.OpenUrl", ["title"] = title, ["url"] = url
-        };
-
-    private static string Serialize(List<object> body,
-        List<Dictionary<string, object>>? actions = null) =>
-        JsonSerializer.Serialize(new
-        {
-            type = "AdaptiveCard",
-            version = "1.5",
-            body,
-            actions = actions ?? new List<Dictionary<string, object>>()
+            var path = Path.Combine(AppContext.BaseDirectory, "ProviderAssets", "UI_" + n + ".png");
+            // A missing packaged asset is a test failure, not a silent diamond fallback.
+            return "data:image/png;base64," + Convert.ToBase64String(File.ReadAllBytes(path));
         });
+        return new { type = "Image", url = data, altText = alt,
+            width = size + "px", height = size + "px", spacing = "none" };
+    }
+
+    private static Dictionary<string, object> Execute(string title, string verb, string style = "default") => new()
+    {
+        ["type"] = "Action.Execute", ["title"] = title, ["verb"] = verb,
+        ["style"] = style, ["$when"] = UserContext, ["tooltip"] = title
+    };
+
+    private static Dictionary<string, object> Link(string title, string url, string tooltip) => new()
+    {
+        ["type"] = "Action.OpenUrl", ["title"] = title, ["url"] = url,
+        ["tooltip"] = tooltip, ["$when"] = UserContext
+    };
+
+    private static object Actions(string id, IEnumerable<Dictionary<string, object>> actions) => new
+    {
+        type = "ActionSet", id, spacing = "medium", actions = actions.ToArray()
+    };
+
+    private static object Hero(string icon, string label, string title, string detail, string tone) =>
+        Group("status-card", new object[]
+        {
+            Row("status-row", new object[]
+            {
+                Col(new[] { Icon(icon, label, 32) }, "auto", "none"),
+                Col(new object[]
+                {
+                    Text(title, "large", strong: true, spacing: "none"),
+                    Text(detail, "small", spacing: "small", color: tone)
+                })
+            }, "none")
+        }, "none", surface: true, minHeight: "88px");
+
+    private static object Bottom(StateProbe.Snapshot? snapshot, IEnumerable<object> controls,
+        string context)
+    {
+        var items = controls.ToList();
+        items.Add(Row("sync-row", new object[]
+        {
+            Col(new object[] { Text(snapshot is null ? "Oczekiwanie na odczyt" :
+                    "Synchronizacja  " + snapshot.CheckedAt.ToString("HH:mm:ss"),
+                    "small", muted: true, spacing: "none") }, spacing: "none"),
+            Col(new object[] { Text(context, "small", muted: true, spacing: "none") }, "auto", "small")
+        }, "medium"));
+        var bottom = Group("bottom-dock", items);
+        bottom["height"] = "stretch";
+        bottom["verticalContentAlignment"] = "bottom";
+        return bottom;
+    }
+
+    private static string Card(IEnumerable<object> body) => JsonSerializer.Serialize(new
+    {
+        type = "AdaptiveCard", version = "1.5", lang = "pl",
+        verticalContentAlignment = "top", body = body.ToArray()
+        // Actions are inside bottom-dock BEFORE sync-row. Root actions would
+        // appear below the footer. No fixed-height spacer or unsupported padding.
+    });
 
     internal static string Initial(string definition, string size)
     {
-        // Keep the synchronous first content that solved the COM pinning bug.
-        // This is only for newly pinned widgets, not for each board reopen.
         bool wsl = definition == WidgetCards.WslId;
-        var body = new List<object>
+        return Card(new object[]
         {
-            IconLabel(wsl ? "WSL" : "DevStack", wsl ? "Ubuntu" : "DevStack", 26),
-            Text("Sprawdzanie stanu…", color: "Accent", spacing: "Medium"),
-            Text(wsl ? "WSL2 · Ubuntu 26.04" : "Lokalne środowisko",
-                "Small", subtle: true)
-        };
-        return Serialize(body);
+            Hero(wsl ? "WSL" : "DevStack", wsl ? "Ubuntu" : "DevStack",
+                "Sprawdzanie stanu", "Pierwszy odczyt środowiska", "default"),
+            Group("initial-note", new object[]
+            {
+                Text("Za chwilę pojawią się aktualne informacje.", "small", muted: true, spacing: "none")
+            }),
+            Bottom(null, Array.Empty<object>(), wsl ? "WSL 2" : "Lokalnie")
+        });
     }
 
     internal static string Wsl(StateProbe.Snapshot snapshot, string size,
         string message = "", bool pendingStop = false, bool actionBusy = false)
     {
-        size = NormalizeSize(size);
-        var body = new List<object>();
-        var running = snapshot.WslRunning;
-        string headline = running switch
+        bool? running = snapshot.WslRunning;
+        bool confirming = pendingStop && running == true && !actionBusy;
+        string title = actionBusy ? "Wykonywanie…" : running switch
         {
-            true => "Uruchomione",
-            false => "Wyłączone",
-            _ => "Stan nieznany"
+            true => "Uruchomione", false => "Wyłączone", _ => "Brak danych"
         };
-        string tone = running switch
+        string detail = actionBusy ? "Poczekaj na wynik polecenia" : running switch
         {
-            true => "Good",
-            false => "Warning",
-            _ => "Attention"
+            true => "● Gotowe do pracy", false => "● System zatrzymany", _ => "● Odczyt niedostępny"
         };
-
-        if (size == "small")
-        {
-            body.Add(Row((Icon("WSL", "Ubuntu", 27), "auto"),
-                (Text("WSL  ·  UBUNTU", "Small", "Accent", "Bolder",
-                    "None"), "stretch")));
-            body.Add(Text(headline, "Large", tone, "Bolder", "Medium"));
-            body.Add(Text("Ubuntu 26.04", "Small", spacing: "None", subtle: true));
-        }
-        else if (size == "medium")
-        {
-            body.Add(Row((Icon("WSL", "Ubuntu", 35), "auto"),
-                (Text("WSL2  /  UBUNTU 26.04", "Small", "Accent",
-                    "Bolder", "None"), "stretch")));
-            body.Add(Panel(
-                Text("STATUS SYSTEMU", "Small", spacing: "None", subtle: true),
-                Dot(headline, tone),
-                Text("Dystrybucja Ubuntu 26.04", "Small",
-                    spacing: "Small", subtle: true)));
-            body.Add(Footer(snapshot));
-        }
-        else
-        {
-            body.Add(Row((Icon("WSL", "Ubuntu", 44), "auto"),
-                (Text("WSL2  /  LINUX", "Small", "Accent",
-                    "Bolder", "None"), "stretch")));
-            body.Add(Text(headline, "ExtraLarge", tone, "Bolder", "Medium"));
-            body.Add(Dot(running == true ? "Ubuntu jest gotowe do pracy" :
-                running == false ? "Środowisko jest zatrzymane" :
-                "Nie można odczytać stanu", tone, true));
-            body.Add(Panel(
-                Row((Text("DYSTRYBUCJA", "Small", subtle: true), "stretch"),
-                    (Text("TRYB", "Small", subtle: true), "stretch")),
-                Row((Text("Ubuntu 26.04", "Default", weight: "Bolder"), "stretch"),
-                    (Text("Ręczne sterowanie", "Small"), "stretch"))));
-            body.Add(Footer(snapshot, details: true));
-        }
-
-        if (!string.IsNullOrWhiteSpace(message))
-            body.Add(Text(message, "Small", "Warning", spacing: "Medium"));
-        else if (running is null && !string.IsNullOrWhiteSpace(snapshot.WslError))
-            body.Add(Text(snapshot.WslError, "Small", "Attention"));
-
-        var actions = new List<Dictionary<string, object>>();
-        if (actionBusy)
-            body.Add(Dot("Trwa wykonywanie polecenia", "Accent", true));
-        else if (running == false)
-            actions.Add(Execute(size == "small" ? "Uruchom" : "Uruchom Ubuntu", "start"));
-        else if (running == true)
-        {
-            if (pendingStop)
+        string tone = actionBusy ? "default" : running == true ? "good" :
+            running == false ? "default" : "attention";
+        var body = new List<object> { Hero("WSL", "Ubuntu", title, detail, tone) };
+        if (confirming)
+            body.Add(Group("stop-warning", new object[]
             {
-                body.Add(Text("Zatrzymanie zakończy procesy Ubuntu. Potwierdź.",
-                    "Small", "Attention", spacing: "Medium"));
-                actions.Add(Execute("Tak, zatrzymaj", "stop-confirm"));
-                actions.Add(Execute("Anuluj", "stop-cancel"));
-            }
-            else
-                actions.Add(Execute(size == "small" ? "Zatrzymaj" : "Zatrzymaj Ubuntu",
-                    "stop-ask"));
-        }
+                Text("Zatrzymać Ubuntu?", strong: true, spacing: "none"),
+                Text("Zakończy to wszystkie procesy w Ubuntu.", "small", color: "attention"),
+                Text("Potwierdzenie jest ważne przez 30 sekund.", "small", muted: true, spacing: "medium")
+            }, surface: true));
+        else
+            body.Add(Group("environment-card", new object[]
+            {
+                Text("Środowisko", strong: true, spacing: "none"),
+                Row("environment-details", new object[]
+                {
+                    Col(new object[] { Text("Dystrybucja", "small", muted: true, spacing: "none"),
+                        Text("Ubuntu 26.04", strong: true) }, spacing: "none"),
+                    Col(new object[] { Text("Silnik", "small", muted: true, spacing: "none"),
+                        Text("WSL 2", strong: true) }, "auto")
+                }),
+                Text("Uruchamianie i zatrzymywanie na żądanie.", "small", muted: true, spacing: "medium")
+            }, surface: true));
 
-        return Serialize(body, actions);
+        var controls = new List<object>();
+        var actions = new List<Dictionary<string, object>>();
+        if (!string.IsNullOrWhiteSpace(message))
+            controls.Add(Text(message, "small", color: actionBusy ? "default" : "attention"));
+        else if (running is null && !string.IsNullOrWhiteSpace(snapshot.WslError))
+            controls.Add(Text(snapshot.WslError, "small", color: "attention"));
+        if (confirming)
+        {
+            actions.Add(Execute("Zatrzymaj", "stop-confirm", "destructive"));
+            actions.Add(Execute("Anuluj", "stop-cancel"));
+        }
+        else if (!actionBusy && running == true)
+            actions.Add(Execute("Zatrzymaj Ubuntu", "stop-ask"));
+        else if (!actionBusy && running == false)
+            actions.Add(Execute("Uruchom Ubuntu", "start", "positive"));
+        if (actions.Count > 0) controls.Add(Actions("wsl-actions", actions));
+        body.Add(Bottom(snapshot, controls, "Ręcznie"));
+        return Card(body);
     }
 
-    private sealed record Service(string Label, string IconName, bool? Reachable);
+    private sealed record Service(string Label, string Icon, bool? Value);
 
-    private static object ServiceTile(Service service, bool compact)
+    private static object ServiceColumn(Service service, bool? running, string spacing)
     {
-        var state = service.Reachable switch
+        string label = running switch
         {
-            true => "OK",
-            false => "Brak połączenia",
-            _ => "Brak danych"
+            false => "Nieaktywne", null => "Nieznane",
+            true => service.Value switch { true => "Dostępne", false => "Brak połączenia", _ => "Sprawdzanie" }
         };
-        var tone = service.Reachable switch
+        string tone = running != true ? "default" : service.Value switch
         {
-            true => "Good",
-            false => "Attention",
-            _ => "Warning"
+            true => "good", false => "attention", _ => "default"
         };
-
-        return Panel(
-            Row((Icon(service.IconName, service.Label,
-                compact ? 20 : 26), "auto"),
-                (Text(service.Label, compact ? "Small" : "Default",
-                    weight: "Bolder", spacing: "None"), "stretch")),
-            Dot(state, tone, compact: true));
+        return Col(new object[]
+        {
+            Row("service-" + service.Icon, new object[]
+            {
+                Col(new[] { Icon(service.Icon, service.Label, 22) }, "auto", "none"),
+                Col(new object[] { Text(service.Label, "small", strong: true, spacing: "none") }, spacing: "small")
+            }, "none"),
+            Text("● " + label, "small", spacing: "medium", color: tone)
+        }, spacing: spacing, surface: true);
     }
 
     internal static string DevStack(StateProbe.Snapshot snapshot, string size)
     {
-        size = NormalizeSize(size);
-        var body = new List<object>();
-        var running = snapshot.WslRunning;
+        bool? running = snapshot.WslRunning;
         var services = new[]
         {
             new Service("Nginx", "Nginx", snapshot.Nginx),
@@ -255,91 +232,49 @@ internal static class WidgetDesign
             new Service("MariaDB", "MariaDB", snapshot.MariaDb),
             new Service("Redis", "Redis", snapshot.Redis)
         };
-        var available = services.Count(s => s.Reachable == true);
-        string status = running switch
+        int count = services.Count(s => s.Value == true);
+        bool known = services.All(s => s.Value.HasValue);
+        string title = running switch
         {
-            false => "Środowisko offline",
-            null => "Stan nieznany",
-            true when services.All(s => s.Reachable.HasValue) && available == 4 =>
-                "Wszystko działa",
-            true => available + "/4 usługi dostępne"
+            false => "Środowisko offline", null => "Stan nieznany",
+            true when count == 4 => "Gotowe do pracy",
+            true when !known => "Sprawdzanie usług", _ => "Wymaga uwagi"
         };
-        string tone = running switch
+        string detail = running switch
         {
-            false => "Warning",
-            null => "Attention",
-            true when available == 4 => "Good",
-            true => "Warning"
+            false => "● Ubuntu jest wyłączone", null => "● Brak potwierdzonego odczytu",
+            true => "● Dostępne usługi: " + count + " z 4"
         };
-
-        if (size == "small")
+        var body = new List<object>
         {
-            body.Add(Row((Icon("DevStack", "DevStack", 26), "auto"),
-                (Text("DEVSTACK  /  LOCAL", "Small", "Accent",
-                    "Bolder", "None"), "stretch")));
-            body.Add(Text(running == true && available == 4 ? "4/4 online" :
-                running == true ? available + "/4 online" : "Offline",
-                "Large", tone, "Bolder", "Medium"));
-            body.Add(Text(running == true ? "Usługi środowiska" :
-                "Uruchom Ubuntu", "Small", subtle: true));
-            body.Add(Footer(snapshot));
-        }
-        else if (size == "medium")
-        {
-            body.Add(Row((Icon("DevStack", "DevStack", 33), "auto"),
-                (Text("DEVSTACK  /  LOCAL", "Small", "Accent",
-                    "Bolder", "None"), "stretch")));
-            body.Add(Dot(status, tone));
-            if (running == true)
+            Hero("DevStack", "DevStack", title, detail,
+                running == true && count == 4 ? "good" : running is null ? "attention" : "default"),
+            Row("service-row-1", new[]
             {
-                body.Add(Row((ServiceTile(services[0], true), "stretch"),
-                    (ServiceTile(services[1], true), "stretch")));
-                body.Add(Row((ServiceTile(services[2], true), "stretch"),
-                    (ServiceTile(services[3], true), "stretch")));
-            }
-            else
-                body.Add(Panel(Text(running == false ?
-                    "Ubuntu jest wyłączone. Usługi nie są sprawdzane." :
-                    "Nie można odczytać stanu Ubuntu.",
-                    "Small", spacing: "None")));
-            body.Add(Footer(snapshot));
-        }
-        else
-        {
-            body.Add(Row((Icon("DevStack", "DevStack", 44), "auto"),
-                (Text("DEVSTACK  /  ŚRODOWISKO", "Small", "Accent",
-                    "Bolder", "None"), "stretch")));
-            body.Add(Text(status, "ExtraLarge", tone, "Bolder", "Medium"));
-            body.Add(Text(running == true ?
-                "Dostępność usług z poziomu Windows" :
-                "Środowisko czeka na uruchomienie WSL",
-                "Small", subtle: true));
-
-            if (running == true)
+                ServiceColumn(services[0], running, "none"),
+                ServiceColumn(services[1], running, "medium")
+            }),
+            Row("service-row-2", new[]
             {
-                body.Add(Row((ServiceTile(services[0], false), "stretch"),
-                    (ServiceTile(services[1], false), "stretch")));
-                body.Add(Row((ServiceTile(services[2], false), "stretch"),
-                    (ServiceTile(services[3], false), "stretch")));
-                body.Add(Text("Wskaźniki oznaczają połączenie HTTPS/TCP, " +
-                    "a nie wynik systemctl.", "Small", subtle: true));
-            }
-            else
-                body.Add(Panel(
-                    Dot("WSL nieaktywne", tone),
-                    Text("Uruchom Ubuntu w widżecie WSL. " +
-                        "DevStack nie uruchamia go sam.", "Small", subtle: true)));
-            body.Add(Footer(snapshot, details: true));
-        }
-
-        var actions = new List<Dictionary<string, object>>();
+                ServiceColumn(services[2], running, "none"),
+                ServiceColumn(services[3], running, "medium")
+            }, "small")
+        };
+        var controls = new List<object>();
         if (running == true)
         {
-            if (size != "small")
-                actions.Add(Link("Dodaj projekt", NewProjectUrl));
-            actions.Add(Link(size == "small" ? "Projekty" : "Przeglądaj projekty",
-                ProjectsUrl));
+            controls.Add(Actions("project-actions", new[]
+            {
+                Link("Dodaj projekt", NewProjectUrl, "Otwórz formularz dodawania projektu w DevStack"),
+                Link("Projekty", ProjectsUrl, "Otwórz listę projektów w DevStack")
+            }));
         }
-        return Serialize(body, actions);
+        else controls.Add(Text(running == false ?
+            "Uruchom Ubuntu w sąsiednim widżecie." :
+            string.IsNullOrWhiteSpace(snapshot.WslError) ? "Nie udało się odczytać stanu Ubuntu." : snapshot.WslError,
+            "small", muted: true));
+        // Explicit connectivity scope, without a large diagnostic paragraph.
+        body.Add(Bottom(snapshot, controls, "HTTPS/TCP"));
+        return Card(body);
     }
 }
