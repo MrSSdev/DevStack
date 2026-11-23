@@ -6,6 +6,22 @@ $ids = @($definitions | ForEach-Object { $_.GetAttribute('Id') })
 if ($ids.Count -ne 2 -or $ids -notcontains 'DevStack_WSL' -or $ids -notcontains 'DevStack_Services') {
     throw "Need exactly two distinct widget definitions, found: $($ids -join ',')"
 }
+# Both definitions must explicitly offer all three native board sizes.
+foreach ($definition in $definitions) {
+    $sizes = @(
+        $definition.SelectNodes(".//*[local-name()='Capability']/*[local-name()='Size']") |
+        ForEach-Object { $_.GetAttribute('Name') }
+    )
+    $expected = @('small', 'medium', 'large')
+    if ($sizes.Count -ne 3 -or @($expected | Where-Object { $sizes -notcontains $_ }).Count -gt 0) {
+        throw "Widget $($definition.GetAttribute('Id')) does not support small/medium/large"
+    }
+}
+foreach ($icon in @('UI_WSL','UI_DevStack','UI_Nginx','UI_PHP','UI_MariaDB','UI_Redis')) {
+    if (-not (Test-Path (Join-Path $root "ProviderAssets/$icon.png"))) {
+        throw "Missing embedded widget UI glyph: $icon"
+    }
+}
 $clsid = $doc.SelectSingleNode("//*[local-name()='Class']").GetAttribute('Id')
 $activation = $doc.SelectSingleNode("//*[local-name()='CreateInstance']").GetAttribute('ClassId')
 if ($clsid -ne $activation -or $clsid -ne '6DE550FB-ECB8-4955-87E2-4943E247E34A') { throw 'CLSID mismatch' }
@@ -15,4 +31,4 @@ foreach ($name in @('WSL', 'DevStack')) {
     if ($template.type -ne 'AdaptiveCard' -or $template.version -ne '1.5') { throw "Invalid Adaptive Card $name" }
 }
 if (-not (Test-Path (Join-Path $root 'Assets/StoreLogo.png'))) { throw 'Generate artwork first' }
-Write-Host 'Two definitions, COM registration, publisher and cards: OK'
+Write-Host 'Two definitions x 3 sizes, six glyphs, COM registration and cards: OK'
