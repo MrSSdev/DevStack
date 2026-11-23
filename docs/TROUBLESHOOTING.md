@@ -65,7 +65,7 @@ DevStack places the validated server-level block before protected PHP handlers, 
 
 ## Windows hosts synchronization
 
-See [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md). The present Windows integration starts a scheduled watcher at Windows login. It uses Linux \`inotify\` and an elevated Windows PowerShell task to maintain a marked block in the Windows hosts file. This version can keep WSL active and its retry loop can wake WSL after a manual stop.
+See [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md). On current B1 code the logon task starts a **Windows-only WMI listener** that waits for external `wsl.exe` process-start events, rather than immediately launching Ubuntu or reconnecting `wsl -d` every 15 seconds. The listener consumes some Windows RAM while idle. Once Ubuntu is confirmed running, it attaches to the same root-owned Linux `inotify` event stream and updates only the managed hosts block. **Replacing the installed script requires a separate manual Windows installer step; `git pull` alone does not update `C:\ProgramData\DevStack`.** The older installed task may still wake Ubuntu until the new version passes local validation and is installed.
 
 To inspect (Windows PowerShell):
 
@@ -86,7 +86,7 @@ $LASTEXITCODE
 
 Exit code `0` indicates successful reconciliation. This does not persistently relax PowerShell's execution policy, register a new scheduled task or launch the long-running watcher. It **does** contact Ubuntu and can start WSL if it is stopped — invoke it only when you intentionally need to synchronize DevStack domains.
 
-Avoid disabling a working bridge until a replacement has been tested. A future integration will start the observer only while WSL is active and avoid waking Linux at Windows login.
+Before deploying the B1 listener to Task Scheduler, test the new source script manually as described in [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md), section 5a, on the exact Windows/WSL workstation. Test when Ubuntu is running, after `wsl --terminate Ubuntu-26.04`, and after a user-initiated `wsl -d Ubuntu-26.04 -- true`; verify that no automatic wake-up occurs. **Do not claim B1 is complete from PowerShell syntax CI or a generic WMI detection test alone.**
 
 ## Authentication and theme
 
