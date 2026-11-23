@@ -65,7 +65,7 @@ DevStack places the validated server-level block before protected PHP handlers, 
 
 ## Windows hosts synchronization
 
-See [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md). On current B1 code the logon task starts a **Windows-only WMI listener** that waits for external `wsl.exe` process-start events, rather than immediately launching Ubuntu or reconnecting `wsl -d` every 15 seconds. The listener consumes some Windows RAM while idle. Once Ubuntu is confirmed running, it attaches to the same root-owned Linux `inotify` event stream and updates only the managed hosts block. **Replacing the installed script requires a separate manual Windows installer step; `git pull` alone does not update `C:\ProgramData\DevStack`.** The older installed task may still wake Ubuntu until the new version passes local validation and is installed.
+See [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md). The on-demand Windows task uses the existing protected `watch-hosts.ps1 -Once` and `hosts-lib.ps1`, launched by hidden PowerShell (`-WindowStyle Hidden`) with `RunLevel Highest` and **no logon trigger**. The Linux daemon requests one short task execution after create/delete and at service startup. A read-only WSL state check skips synchronization when Ubuntu is stopped; a stopped distro must not be awakened. **Existing installations keep the older B1 resident listener until the Administrator explicitly reruns `windows/install-hosts-sync.ps1`; `git pull` alone does not change `C:\ProgramData\DevStack` or Task Scheduler.**
 
 To inspect (Windows PowerShell):
 
@@ -84,9 +84,9 @@ If running `& "$env:ProgramData\DevStack\watch-hosts.ps1" -Once` directly fails 
 $LASTEXITCODE
 ~~~
 
-Exit code `0` indicates successful reconciliation. This does not persistently relax PowerShell's execution policy, register a new scheduled task or launch the long-running watcher. It **does** contact Ubuntu and can start WSL if it is stopped — invoke it only when you intentionally need to synchronize DevStack domains.
+Exit code `0` indicates successful reconciliation (or a safe skip if Ubuntu is stopped). This does not persistently relax PowerShell's execution policy, register a new task or start the resident listener; `-Once` now checks the running distro before any potentially starting `wsl -d` call.
 
-Before deploying the B1 listener to Task Scheduler, test the new source script manually as described in [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md), section 5a, on the exact Windows/WSL workstation. Test when Ubuntu is running, after `wsl --terminate Ubuntu-26.04`, and after a user-initiated `wsl -d Ubuntu-26.04 -- true`; verify that no automatic wake-up occurs. **Do not claim B1 is complete from PowerShell syntax CI or a generic WMI detection test alone.**
+Before migrating an existing B1 task, run the one-shot pre-deployment check in [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md), section 5a. Verify actual create/delete synchronization, no window, no logon listener, and that stopped Ubuntu remains stopped. **Do not mark the on-demand migration complete from CI or a successful `schtasks.exe /Run` POC alone.**
 
 ## Authentication and theme
 
