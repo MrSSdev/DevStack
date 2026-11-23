@@ -54,6 +54,41 @@ internal static class SelfTest
                     "C4.1 WSL status label");
             }
 
+            // C4.2: DevStack card must remain noninteractive and distinguish
+            // offline/unknown WSL from service connectivity when Ubuntu runs.
+            using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(offline)))
+            {
+                Assert(card.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "C4.2 offline format");
+                Assert(!card.RootElement.TryGetProperty("actions", out _), "C4.2 offline has no actions");
+                var text = card.RootElement.GetProperty("body").GetRawText();
+                Assert(text.Contains("WSL wyłączony — DevStack niedostępny", StringComparison.Ordinal),
+                    "C4.2 offline message");
+                Assert(!text.Contains("Nginx:", StringComparison.Ordinal),
+                    "C4.2 offline must not show stale service status");
+            }
+
+            var reachable = new StateProbe.Snapshot(
+                true, "", true, false, true, false, DateTimeOffset.Now);
+            using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(reachable)))
+            {
+                Assert(!card.RootElement.TryGetProperty("actions", out _), "C4.2 online has no actions");
+                var text = card.RootElement.GetProperty("body").GetRawText();
+                Assert(text.Contains("Nginx: Odpowiada", StringComparison.Ordinal), "C4.2 Nginx true");
+                Assert(text.Contains("PHP-FPM: Brak połączenia", StringComparison.Ordinal), "C4.2 PHP false");
+                Assert(text.Contains("MariaDB: Odpowiada", StringComparison.Ordinal), "C4.2 MariaDB true");
+                Assert(text.Contains("Redis: Brak połączenia", StringComparison.Ordinal), "C4.2 Redis false");
+                Assert(text.Contains("nie wynik systemctl", StringComparison.Ordinal), "C4.2 reachability disclaimer");
+            }
+
+            var unknown = new StateProbe.Snapshot(
+                null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now);
+            using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(unknown)))
+            {
+                var text = card.RootElement.GetProperty("body").GetRawText();
+                Assert(text.Contains("nie sprawdzono usług", StringComparison.Ordinal), "C4.2 unknown WSL");
+                Assert(!text.Contains("Nginx:", StringComparison.Ordinal), "C4.2 unknown no services");
+            }
+
             foreach (var name in new[] { WidgetCards.WslId, WidgetCards.ServicesId })
             {
                 using var template = JsonDocument.Parse(WidgetCards.Template(name));
