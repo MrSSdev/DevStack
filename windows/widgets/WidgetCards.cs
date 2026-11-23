@@ -15,7 +15,7 @@ internal static class WidgetCards
         var title = definitionId == WslId ? "WSL — Ubuntu" : "DevStack — usługi";
         var message = definitionId == WslId
             ? "Odczytywanie stanu Ubuntu..."
-            : "Test C4: widżet DevStack działa. Odczyt usług jeszcze wyłączony.";
+            : "Odczytywanie dostępności usług DevStack...";
         return System.Text.Json.JsonSerializer.Serialize(new
         {
             type = "AdaptiveCard",
@@ -62,6 +62,72 @@ internal static class WidgetCards
                 }
             }
         });
+    }
+
+    // Stage C4.2: only report network reachability from Windows. These are
+    // connectivity hints, not authenticated systemctl state. When WSL is
+    // offline, show an offline card without contacting the services.
+    internal static string DevStackReadOnlyTemplate(StateProbe.Snapshot snapshot)
+    {
+        var body = new List<object>
+        {
+            new { type = "TextBlock", text = "DevStack — usługi", weight = "Bolder", wrap = true }
+        };
+
+        if (snapshot.WslRunning == false)
+        {
+            body.Add(new
+            {
+                type = "TextBlock",
+                text = "WSL wyłączony — DevStack niedostępny",
+                wrap = true
+            });
+        }
+        else if (snapshot.WslRunning != true)
+        {
+            body.Add(new
+            {
+                type = "TextBlock",
+                text = "Nie można ustalić stanu WSL — nie sprawdzono usług",
+                wrap = true
+            });
+            if (!string.IsNullOrWhiteSpace(snapshot.WslError))
+                body.Add(new { type = "TextBlock", text = snapshot.WslError, wrap = true });
+        }
+        else
+        {
+            static string Label(bool? reachable) => reachable switch
+            {
+                true => "Odpowiada",
+                false => "Brak połączenia",
+                _ => "Brak danych"
+            };
+
+            body.Add(new { type = "TextBlock", text = "Ubuntu działa — test połączeń", wrap = true });
+            body.Add(new { type = "TextBlock", text = "Nginx: " + Label(snapshot.Nginx), wrap = true });
+            body.Add(new { type = "TextBlock", text = "PHP-FPM: " + Label(snapshot.PhpFpm), wrap = true });
+            body.Add(new { type = "TextBlock", text = "MariaDB: " + Label(snapshot.MariaDb), wrap = true });
+            body.Add(new { type = "TextBlock", text = "Redis: " + Label(snapshot.Redis), wrap = true });
+            body.Add(new
+            {
+                type = "TextBlock",
+                text = "Statusy oznaczają dostępność HTTPS/TCP z Windows, nie wynik systemctl.",
+                isSubtle = true,
+                wrap = true
+            });
+        }
+
+        body.Add(new
+        {
+            type = "TextBlock",
+            text = "Ostatnia kontrola: " + snapshot.CheckedAt.ToString("HH:mm:ss"),
+            isSubtle = true,
+            wrap = true
+        });
+
+        // The ASUS C4.1 inline template path works reliably. No dynamic card
+        // expressions or Action.Execute controls in this stage.
+        return JsonSerializer.Serialize(new { type = "AdaptiveCard", version = "1.5", body });
     }
 
     private static readonly Lazy<string> WslTemplate = new(() => ReadTemplate("WSL.json"));
