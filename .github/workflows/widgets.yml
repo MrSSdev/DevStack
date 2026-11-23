@@ -57,7 +57,7 @@ jobs:
         id: package
         shell: pwsh
         run: |
-          $packages = @(Get-ChildItem 'widgets-packages' -Recurse -File -Filter '*.msix')
+          $packages = @(Get-ChildItem 'widgets-packages' -Recurse -File -Filter '*.msix' | Where-Object { $_.Name -like 'DevStack.Widgets_*.msix' })
           if ($packages.Count -ne 1) { throw "Expected one MSIX, got $($packages.Count)" }
           "path=$($packages[0].FullName)" >> $env:GITHUB_OUTPUT
 
