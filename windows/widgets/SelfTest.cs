@@ -54,6 +54,53 @@ internal static class SelfTest
                     "C4.1 WSL status label");
             }
 
+            // C4.3: verify native actions, state gating and two-step Stop.
+            using (var card = JsonDocument.Parse(WidgetCards.WslControlTemplate(offline)))
+            {
+                var actions = card.RootElement.GetProperty("actions").EnumerateArray().ToArray();
+                Assert(actions.Length == 1, "C4.3 WSL offline offers only Start");
+                Assert(actions[0].GetProperty("type").GetString() == "Action.Execute",
+                    "C4.3 action type");
+                Assert(actions[0].GetProperty("verb").GetString() == "start",
+                    "C4.3 WSL offline verb");
+                Assert(actions[0].GetProperty("$when").GetString() ==
+                    "${$host.isUserContextAuthenticated}", "C4.3 auth guard");
+            }
+
+            var onlineControl = new StateProbe.Snapshot(
+                true, "", null, null, null, null, DateTimeOffset.Now);
+            using (var card = JsonDocument.Parse(WidgetCards.WslControlTemplate(onlineControl)))
+            {
+                var verbs = CardActionVerbs(card.RootElement);
+                Assert(verbs.SequenceEqual(new[] { "stop-ask" }),
+                    "C4.3 WSL online only offers Stop request");
+            }
+            using (var card = JsonDocument.Parse(
+                WidgetCards.WslControlTemplate(onlineControl, pendingStop: true)))
+            {
+                var verbs = CardActionVerbs(card.RootElement);
+                Assert(verbs.SequenceEqual(new[] { "stop-confirm", "stop-cancel" }),
+                    "C4.3 Stop requires second confirmation");
+                Assert(ReadCardText(card.RootElement).Contains(
+                    "zatrzymanie Ubuntu zakończy wszystkie uruchomione procesy",
+                    StringComparison.Ordinal), "C4.3 Stop warning");
+            }
+            using (var card = JsonDocument.Parse(
+                WidgetCards.WslControlTemplate(onlineControl, actionBusy: true)))
+                Assert(CardActionVerbs(card.RootElement).Length == 0,
+                    "C4.3 busy state disables all actions");
+
+            var unknownControl = new StateProbe.Snapshot(
+                null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now);
+            using (var card = JsonDocument.Parse(
+                WidgetCards.WslControlTemplate(unknownControl)))
+                Assert(CardActionVerbs(card.RootElement).Length == 0,
+                    "C4.3 unknown state must not offer Start or Stop");
+            using (var card = JsonDocument.Parse(
+                WidgetCards.WslControlTemplate(offline, pendingStop: true)))
+                Assert(CardActionVerbs(card.RootElement).SequenceEqual(new[] { "start" }),
+                    "C4.3 stale Stop confirmation never enables termination offline");
+
             // C4.2: DevStack card must remain noninteractive and distinguish
             // offline/unknown WSL from service connectivity when Ubuntu runs.
             using (var card = JsonDocument.Parse(WidgetCards.DevStackReadOnlyTemplate(offline)))
@@ -136,6 +183,11 @@ internal static class SelfTest
     private static string ReadCardText(JsonElement card) =>
         string.Join("\n", card.GetProperty("body").EnumerateArray()
             .Select(item => item.GetProperty("text").GetString() ?? ""));
+
+    private static string[] CardActionVerbs(JsonElement card) =>
+        card.GetProperty("actions").EnumerateArray()
+            .Select(action => action.GetProperty("verb").GetString() ?? "")
+            .ToArray();
 
     private static void Assert(bool value, string message)
     {
