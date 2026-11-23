@@ -20,7 +20,7 @@ internal static class WidgetCards
             body = new object[]
             {
                 new { type = "TextBlock", text = title, weight = "Bolder" },
-                new { type = "TextBlock", text = "Ładowanie stanu…", wrap = true }
+                new { type = "TextBlock", text = "Test C4: widżet wyświetlony. Odczyt WSL tymczasowo wyłączony.", wrap = true }
             }
         });
     }
