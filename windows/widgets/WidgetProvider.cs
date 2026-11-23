@@ -26,6 +26,11 @@ public sealed class WidgetProvider : IWidgetProvider
     private static Timer? _refreshTimer;
     private static DateTimeOffset _lastUse = DateTimeOffset.UtcNow;
     private static bool _recovered;
+    private static CancellationTokenSource? _visibleSession;
+    private static bool _refreshPending;
+    private static bool _refreshWorkerRunning;
+    private static StateProbe.Snapshot? _lastWslSnapshot;
+    private static StateProbe.Snapshot? _lastServicesSnapshot;
 
     // Stage C4.2: retain the proven synchronous first card for both widgets.
     // Read-only WSL and DevStack reachability are allowed while active,
@@ -41,16 +46,66 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public static void Start()
     {
-        // Poll only while at least one widget is active in the Widgets Board.
-        // The refresh routine performs no work when both widgets are hidden.
+        // Create an idle timer. There is no periodic work unless one or more
+        // widgets are active according to IWidgetProvider.Activate/Deactivate.
         _refreshTimer = new Timer(_ => RequestRefresh(), null,
-            TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(20));
+            Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        UpdateVisibility();
+        RequestRefresh(); // Startup while the board is already visible.
     }
 
     public static void Stop()
     {
         _refreshTimer?.Dispose();
         _refreshTimer = null;
+        CancellationTokenSource? closing;
+        lock (Gate)
+        {
+            closing = _visibleSession;
+            _visibleSession = null;
+            _refreshPending = false;
+        }
+        closing?.Cancel();
+        closing?.Dispose();
+    }
+
+    private static void UpdateVisibility()
+    {
+        CancellationTokenSource? closing = null;
+        lock (Gate)
+        {
+            bool visible = Widgets.Values.Any(w => w.Active);
+            if (visible && _visibleSession is null)
+                _visibleSession = new CancellationTokenSource();
+            else if (!visible && _visibleSession is not null)
+            {
+                closing = _visibleSession;
+                _visibleSession = null;
+                _refreshPending = false;
+            }
+
+            // Periodic checks run only while the Windows widget host is
+            // interested in the cards. Opening triggers a separate immediate
+            // refresh, so the timer does not need an early first tick.
+            _refreshTimer?.Change(
+                visible ? TimeSpan.FromSeconds(20) : Timeout.InfiniteTimeSpan,
+                visible ? TimeSpan.FromSeconds(20) : Timeout.InfiniteTimeSpan);
+        }
+
+        // Cancel in-flight WSL and HTTPS/TCP probes when the last widget hides.
+        // Do this outside Gate to avoid locking callbacks against I/O teardown.
+        closing?.Cancel();
+        closing?.Dispose();
+        Wake.Set();
+    }
+
+    private static bool SessionIsVisible(CancellationToken cancellationToken)
+    {
+        lock (Gate)
+            return !cancellationToken.IsCancellationRequested &&
+                _visibleSession is not null &&
+                _visibleSession.Token.Equals(cancellationToken) &&
+                Widgets.Values.Any(w => w.Active);
     }
 
     public static bool ShouldExit()
@@ -84,7 +139,8 @@ public sealed class WidgetProvider : IWidgetProvider
                     Widgets[context.Id] = new Instance
                     {
                         Id = context.Id,
-                        Definition = context.DefinitionId
+                        Definition = context.DefinitionId,
+                        Active = context.IsActive
                     };
                 }
             }
@@ -109,7 +165,8 @@ public sealed class WidgetProvider : IWidgetProvider
             };
             _lastUse = DateTimeOffset.UtcNow;
         }
-        SendInitialCard(context.Id, context.DefinitionId);
+        SendImmediateCard(context.Id, context.DefinitionId, allowPlaceholder: true);
+        UpdateVisibility();
         RequestRefresh();
     }
 
@@ -120,7 +177,7 @@ public sealed class WidgetProvider : IWidgetProvider
             Widgets.Remove(widgetId);
             _lastUse = DateTimeOffset.UtcNow;
         }
-        Wake.Set();
+        UpdateVisibility();
     }
 
     public void Activate(WidgetContext context)
@@ -136,7 +193,10 @@ public sealed class WidgetProvider : IWidgetProvider
             widget.Active = true;
             _lastUse = DateTimeOffset.UtcNow;
         }
-        SendInitialCard(context.Id, context.DefinitionId);
+        UpdateVisibility();
+        // Reuse the last known state immediately. If the provider just started,
+        // leave the host's previously rendered card intact until the new probe.
+        SendImmediateCard(context.Id, context.DefinitionId, allowPlaceholder: false);
         RequestRefresh();
     }
 
@@ -148,26 +208,46 @@ public sealed class WidgetProvider : IWidgetProvider
                 widget.Active = false;
             _lastUse = DateTimeOffset.UtcNow;
         }
-        Wake.Set();
+        UpdateVisibility();
     }
 
     public void OnWidgetContextChanged(WidgetContextChangedArgs args)
     {
-        if (ReadOnlyStatusStage)
-            SendInitialCard(args.WidgetContext.Id, args.WidgetContext.DefinitionId);
+        // Never overwrite a valid card with "Odczytywanie..." during a
+        // context/size change. Recheck immediately only when visible.
         RequestRefresh();
     }
 
-    private static void SendInitialCard(string widgetId, string definitionId)
+    private static void SendImmediateCard(
+        string widgetId, string definitionId, bool allowPlaceholder)
     {
-        // Windows widget-provider guidance sends the first template/data from
-        // CreateWidget synchronously. Do not wait for WSL/network/probe tasks.
-        WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
+        StateProbe.Snapshot? snapshot;
+        lock (Gate)
+            snapshot = definitionId == WidgetCards.WslId
+                ? _lastWslSnapshot : _lastServicesSnapshot;
+
+        if (snapshot is null && !allowPlaceholder)
+            return; // Preserve Windows' cached rendering across COM restarts.
+
+        try
         {
-            Template = WidgetCards.InitialTemplate(definitionId),
-            Data = "{}",
-            IsPlaceholderContent = false
-        });
+            var template = snapshot is not null
+                ? definitionId == WidgetCards.WslId
+                    ? WidgetCards.WslReadOnlyTemplate(snapshot)
+                    : WidgetCards.DevStackReadOnlyTemplate(snapshot)
+                : WidgetCards.InitialTemplate(definitionId);
+
+            WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
+            {
+                Template = template,
+                Data = "{}",
+                IsPlaceholderContent = false
+            });
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning("Immediate widget content: " + error);
+        }
     }
 
     public void OnActionInvoked(WidgetActionInvokedArgs args)
@@ -265,11 +345,93 @@ public sealed class WidgetProvider : IWidgetProvider
 
     private static void RequestRefresh()
     {
-        _ = Task.Run(RefreshAsync);
+        bool startWorker = false;
+        lock (Gate)
+        {
+            if (_visibleSession is null || !Widgets.Values.Any(w => w.Active))
+                return; // No reads, timers or background work while hidden.
+
+            // Coalesce simultaneous Activate/Create/periodic triggers rather
+            // than drop an activation request when another probe is in flight.
+            _refreshPending = true;
+            if (!_refreshWorkerRunning)
+            {
+                _refreshWorkerRunning = true;
+                startWorker = true;
+            }
+        }
+        if (startWorker)
+            _ = Task.Run(ProcessRefreshQueueAsync);
         Wake.Set();
     }
 
-    private static async Task RefreshReadOnlyStatusesAsync()
+    private static async Task ProcessRefreshQueueAsync()
+    {
+        while (true)
+        {
+            CancellationToken cancellationToken;
+            lock (Gate)
+            {
+                if (!_refreshPending || _visibleSession is null)
+                {
+                    _refreshWorkerRunning = false;
+                    return;
+                }
+                _refreshPending = false;
+                cancellationToken = _visibleSession.Token;
+            }
+
+            try
+            {
+                await RefreshAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The board closed. Pending requests from a newly opened board
+                // (if any) will be processed with its new visibility token.
+            }
+            catch (Exception error)
+            {
+                Trace.TraceWarning("Widget status refresh: " + error);
+            }
+        }
+    }
+
+    private static void PublishReadOnlyCard(
+        string widgetId, string definitionId, StateProbe.Snapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        lock (Gate)
+        {
+            if (_visibleSession is null ||
+                !_visibleSession.Token.Equals(cancellationToken))
+                return;
+            if (cancellationToken.IsCancellationRequested ||
+                !Widgets.TryGetValue(widgetId, out var current) ||
+                !current.Active || current.Definition != definitionId)
+                return;
+        }
+
+        try
+        {
+            var template = definitionId == WidgetCards.WslId
+                ? WidgetCards.WslReadOnlyTemplate(snapshot)
+                : WidgetCards.DevStackReadOnlyTemplate(snapshot);
+            WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
+            {
+                Template = template,
+                Data = "{}",
+                IsPlaceholderContent = false
+            });
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning("Read-only widget update: " + error);
+        }
+    }
+
+    private static async Task RefreshReadOnlyStatusesAsync(
+        CancellationToken cancellationToken)
     {
         (string Id, string Definition)[] selected;
         lock (Gate)
@@ -277,54 +439,59 @@ public sealed class WidgetProvider : IWidgetProvider
                 .Where(w => w.Active)
                 .Select(w => (w.Id, w.Definition))
                 .ToArray();
+        if (selected.Length == 0)
+            return;
 
-        // No processes, network probes or widget updates while the board is closed.
-        if (selected.Length == 0) return;
+        // First get WSL status, then immediately update its card (and the
+        // DevStack offline card). Do not hold up the WSL result while waiting
+        // for optional HTTPS/TCP checks.
+        var wsl = await StateProbe.CaptureWslOnlyAsync(cancellationToken);
+        if (!SessionIsVisible(cancellationToken))
+            return;
 
-        // With only WSL active, run the already verified Windows-only WSL list.
-        // When DevStack is active, services are checked by passive HTTPS/TCP
-        // only if Ubuntu is running. CaptureAsync never invokes wsl.exe -d.
-        var servicesActive = selected.Any(w => w.Definition == WidgetCards.ServicesId);
-        var snapshot = servicesActive
-            ? await StateProbe.CaptureAsync()
-            : await StateProbe.CaptureWslOnlyAsync();
-
-        foreach (var (widgetId, definitionId) in selected)
+        lock (Gate)
         {
-            bool stillActive;
+            _lastWslSnapshot = wsl;
+            if (wsl.WslRunning != true)
+                _lastServicesSnapshot = wsl;
+        }
+
+        foreach (var (id, definition) in selected)
+        {
+            if (definition == WidgetCards.WslId || wsl.WslRunning != true)
+                PublishReadOnlyCard(id, definition, wsl, cancellationToken);
+        }
+
+        if (wsl.WslRunning == true &&
+            selected.Any(w => w.Definition == WidgetCards.ServicesId))
+        {
+            // Do not probe services if the last card was hidden while we
+            // were reading WSL. Use its same snapshot to avoid a second
+            // invocation of wsl.exe.
+            if (!SessionIsVisible(cancellationToken))
+                return;
+            var services = await StateProbe.CaptureServicesAfterWslAsync(
+                wsl, cancellationToken);
+            if (!SessionIsVisible(cancellationToken))
+                return;
+
             lock (Gate)
-                stillActive = Widgets.TryGetValue(widgetId, out var current)
-                    && current.Active && current.Definition == definitionId;
-            if (!stillActive) continue;
+                _lastServicesSnapshot = services;
 
-            try
-            {
-                var template = definitionId == WidgetCards.WslId
-                    ? WidgetCards.WslReadOnlyTemplate(snapshot)
-                    : WidgetCards.DevStackReadOnlyTemplate(snapshot);
-
-                WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
-                {
-                    Template = template,
-                    Data = "{}",
-                    IsPlaceholderContent = false
-                });
-            }
-            catch (Exception error)
-            {
-                Trace.TraceWarning("C4.2 read-only widget update: " + error);
-            }
+            foreach (var (id, definition) in selected)
+                if (definition == WidgetCards.ServicesId)
+                    PublishReadOnlyCard(id, definition, services, cancellationToken);
         }
     }
 
-    private static async Task RefreshAsync()
+    private static async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        if (!await RefreshGate.WaitAsync(0)) return;
+        await RefreshGate.WaitAsync(cancellationToken);
         try
         {
             if (ReadOnlyStatusStage)
             {
-                await RefreshReadOnlyStatusesAsync();
+                await RefreshReadOnlyStatusesAsync(cancellationToken);
                 return;
             }
 
