@@ -1,0 +1,85 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "DEVSTACK",
+      "size": "medium",
+      "weight": "bolder"
+    },
+    {
+      "type": "TextBlock",
+      "text": "${status}",
+      "weight": "bolder",
+      "wrap": true
+    },
+    {
+      "type": "ColumnSet",
+      "$when": "${running}",
+      "columns": [
+        {
+          "type": "Column",
+          "width": "stretch",
+          "items": [
+            {
+              "type": "TextBlock",
+              "text": "Nginx: ${nginx}",
+              "wrap": true
+            },
+            {
+              "type": "TextBlock",
+              "text": "PHP-FPM: ${php}",
+              "wrap": true
+            }
+          ]
+        },
+        {
+          "type": "Column",
+          "width": "stretch",
+          "items": [
+            {
+              "type": "TextBlock",
+              "text": "MariaDB: ${mariadb}",
+              "wrap": true
+            },
+            {
+              "type": "TextBlock",
+              "text": "Redis: ${redis}",
+              "wrap": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "Statusy oznaczają dostępność HTTPS/TCP z Windows, a nie wynik systemctl.",
+      "size": "small",
+      "wrap": true,
+      "isSubtle": true,
+      "$when": "${running}"
+    },
+    {
+      "type": "TextBlock",
+      "text": "Ostatnia kontrola: ${checkedAt}",
+      "size": "small",
+      "isSubtle": true
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.OpenUrl",
+      "title": "Otwórz panel",
+      "url": "https://devstack.test/",
+      "$when": "${running}"
+    },
+    {
+      "type": "Action.Execute",
+      "title": "Odśwież",
+      "verb": "refresh",
+      "$when": "${$host.isUserContextAuthenticated}"
+    }
+  ]
+}
