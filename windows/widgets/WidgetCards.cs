@@ -13,6 +13,9 @@ internal static class WidgetCards
     internal static string InitialTemplate(string definitionId)
     {
         var title = definitionId == WslId ? "WSL — Ubuntu" : "DevStack — usługi";
+        var message = definitionId == WslId
+            ? "Odczytywanie stanu Ubuntu..."
+            : "Test C4: widżet DevStack działa. Odczyt usług jeszcze wyłączony.";
         return System.Text.Json.JsonSerializer.Serialize(new
         {
             type = "AdaptiveCard",
@@ -20,7 +23,43 @@ internal static class WidgetCards
             body = new object[]
             {
                 new { type = "TextBlock", text = title, weight = "Bolder" },
-                new { type = "TextBlock", text = "Test C4: widżet wyświetlony. Odczyt WSL tymczasowo wyłączony.", wrap = true }
+                new { type = "TextBlock", text = message, wrap = true }
+            }
+        });
+    }
+
+    // Stage C4.1: live, Windows-only WSL state; no WSL lifecycle buttons yet.
+    // Inline JSON proved reliable in the static ASUS pinning test. Do not
+    // introduce template files or dynamic Adaptive Card bindings at this step.
+    internal static string WslReadOnlyTemplate(StateProbe.Snapshot snapshot)
+    {
+        var status = snapshot.WslRunning switch
+        {
+            true => "Ubuntu uruchomione",
+            false => "Ubuntu wyłączone",
+            _ => "Stan WSL nieznany"
+        };
+        var details = snapshot.WslRunning.HasValue
+            ? "Dystrybucja: " + StateProbe.Distro
+            : string.IsNullOrWhiteSpace(snapshot.WslError)
+                ? "Nie można ustalić stanu Ubuntu."
+                : snapshot.WslError;
+
+        return JsonSerializer.Serialize(new
+        {
+            type = "AdaptiveCard",
+            version = "1.5",
+            body = new object[]
+            {
+                new { type = "TextBlock", text = "WSL — Ubuntu", weight = "Bolder", wrap = true },
+                new { type = "TextBlock", text = status, size = "Large", wrap = true },
+                new { type = "TextBlock", text = details, wrap = true },
+                new {
+                    type = "TextBlock",
+                    text = "Ostatnia kontrola: " + snapshot.CheckedAt.ToString("HH:mm:ss"),
+                    isSubtle = true,
+                    wrap = true
+                }
             }
         });
     }
