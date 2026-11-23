@@ -103,6 +103,26 @@ Windows scheduled task ← inotify watcher ← projects.json changes
 
 Project PHP-FPM pools run as the trusted Ubuntu developer account. DevStack does not isolate one project's source files from another's.
 
+## Windows 11 widgets (experimental)
+
+The repository now contains an optional packaged C# Windows App SDK provider with **two
+separate widgets** for the Windows 11 **Win + W** board:
+
+- **WSL / Ubuntu** — show running status of `Ubuntu-26.04`, deliberate Start, and
+  Stop after confirmation.
+- **DevStack** — show passive HTTPS/TCP availability of Nginx, PHP-FPM, MariaDB,
+  and Redis plus a link to the local dashboard. These are connectivity checks,
+  not `systemctl` state assertions.
+
+Both widgets share one provider process; displaying or refreshing either widget
+**does not start WSL**. GitHub Actions builds and test-signs the x64 MSIX on
+Windows, so Visual Studio/.NET SDK are not needed on the target device just for
+building. The development certificate from the workflow run must be trusted
+explicitly before installation. **Windows device testing is still required**
+before calling this feature stable.
+
+See [widgets source, security model, CI and installation instructions](windows/widgets/README.md).
+
 ## Development and testing
 
 ~~~bash
