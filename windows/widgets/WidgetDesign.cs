@@ -101,7 +101,7 @@ internal static class WidgetDesign
         new()
         {
             ["type"] = "Action.Execute", ["title"] = title, ["verb"] = verb,
-            ["$when"] = "\${$host.isUserContextAuthenticated}"
+            ["$when"] = "${$host.isUserContextAuthenticated}"
         };
 
     private static Dictionary<string, object> Link(string title, string url) =>
