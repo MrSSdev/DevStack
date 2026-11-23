@@ -99,6 +99,26 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(argv[-3:], ['/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
         self.assertTrue(any(arg.startswith('--unit=devstack-fpm-reload-') for arg in argv))
 
+    def test_windows_hosts_trigger_is_fixed_and_optional(self):
+        # Never call the real Windows scheduler from unit tests.
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = Path(tmp) / 'schtasks.exe'
+            executable.write_text('safe fixture')
+            with patch.object(d, 'WINDOWS_SCHTASKS', executable), \
+                 patch.object(d, 'run', return_value='SUCCESS') as fake_run:
+                self.assertEqual(d.request_windows_hosts_sync(), '')
+                fake_run.assert_called_once_with([
+                    str(executable), '/Run', '/TN', 'DevStack Hosts Event Sync'
+                ])
+            with patch.object(d, 'WINDOWS_SCHTASKS', Path(tmp) / 'missing.exe'), \
+                 patch.object(d, 'run') as fake_run:
+                self.assertEqual(d.request_windows_hosts_sync(), '')
+                fake_run.assert_not_called()
+            with patch.object(d, 'WINDOWS_SCHTASKS', executable), \
+                 patch.object(d, 'run', side_effect=RuntimeError('denied')):
+                warning = d.request_windows_hosts_sync()
+                self.assertIn('Windows hosts', warning)
+
     def test_creation_failure_does_not_reload_php_fpm_or_hide_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             temp = Path(tmp)
