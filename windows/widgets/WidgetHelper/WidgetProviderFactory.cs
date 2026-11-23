@@ -13,7 +13,6 @@ namespace WidgetHelper
         static class Guids
         {
             public const string IClassFactory = "00000001-0000-0000-C000-000000000046";
-            public const string IUnknown = "00000000-0000-0000-C000-000000000046";
         }
 
         [ComImport(), InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid(Guids.IClassFactory)]
@@ -54,6 +53,7 @@ namespace WidgetHelper
         }
     }
 
+    [ComVisible(true)]
     internal class WidgetProviderFactory<T> : Com.IClassFactory
             where T : IWidgetProvider, new()
     {
@@ -63,22 +63,29 @@ namespace WidgetHelper
 
             if (pUnkOuter != IntPtr.Zero)
             {
-                Marshal.ThrowExceptionForHR(CLASS_E_NOAGGREGATION);
+                return CLASS_E_NOAGGREGATION;
             }
 
-            if (riid == typeof(T).GUID || riid == Guid.Parse(Com.Guids.IUnknown))
+            IntPtr provider = IntPtr.Zero;
+            try
             {
-                // Create the instance of the .NET object
-                ppvObject = MarshalInspectable<IWidgetProvider>.FromManaged(new T());
+                // The host requests an interface IID, not necessarily our class GUID.
+                // Return the requested COM interface using the official Microsoft pattern.
+                provider = MarshalInspectable<IWidgetProvider>.FromManaged(new T());
+                return Marshal.QueryInterface(provider, in riid, out ppvObject);
             }
-            else
+            catch (Exception error)
             {
-                // The object that ppvObject points to does not support the
-                // interface identified by riid.
-                Marshal.ThrowExceptionForHR(E_NOINTERFACE);
+                System.Diagnostics.Trace.TraceError("Widget COM activation: " + error);
+                return Marshal.GetHRForException(error);
             }
-
-            return 0;
+            finally
+            {
+                if (provider != IntPtr.Zero)
+                {
+                    Marshal.Release(provider);
+                }
+            }
         }
 
         int Com.IClassFactory.LockServer(bool fLock)
@@ -87,6 +94,5 @@ namespace WidgetHelper
         }
 
         private const int CLASS_E_NOAGGREGATION = -2147221232;
-        private const int E_NOINTERFACE = -2147467262;
     }
 }
