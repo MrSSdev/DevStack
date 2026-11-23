@@ -35,6 +35,25 @@ internal static class SelfTest
             Assert(!status.RootElement.GetProperty("running").GetBoolean(), "DevStack offline state");
             Assert(status.RootElement.GetProperty("nginx").GetString() == "—", "no false status while WSL off");
 
+            // The C4.1 card is intentionally read-only: no action buttons,
+            // no dynamic templating, no service probe and no WSL startup.
+            foreach (var snapshot in new[]
+            {
+                offline,
+                new StateProbe.Snapshot(true, "", null, null, null, null, DateTimeOffset.Now),
+                new StateProbe.Snapshot(null, "Błąd odczytu WSL", null, null, null, null, DateTimeOffset.Now)
+            })
+            {
+                using var live = JsonDocument.Parse(WidgetCards.WslReadOnlyTemplate(snapshot));
+                Assert(live.RootElement.GetProperty("type").GetString() == "AdaptiveCard", "C4.1 card format");
+                Assert(!live.RootElement.TryGetProperty("actions", out _), "C4.1 has no action buttons");
+                var statusText = live.RootElement.GetProperty("body")[1].GetProperty("text").GetString();
+                Assert(statusText == (snapshot.WslRunning == true
+                    ? "Ubuntu uruchomione"
+                    : snapshot.WslRunning == false ? "Ubuntu wyłączone" : "Stan WSL nieznany"),
+                    "C4.1 WSL status label");
+            }
+
             foreach (var name in new[] { WidgetCards.WslId, WidgetCards.ServicesId })
             {
                 using var template = JsonDocument.Parse(WidgetCards.Template(name));
