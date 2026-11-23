@@ -14,6 +14,17 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
 type View = 'dashboard' | 'projects' | 'new' | 'project' | 'settings'
+
+// The native Windows Widgets link to /#/projects and /#/new. Keep this
+// routing entirely client-side: no new server endpoints or auth bypass.
+function viewFromHash(): View {
+  switch (window.location.hash) {
+    case '#/projects': return 'projects'
+    case '#/new': return 'new'
+    case '#/settings': return 'settings'
+    default: return 'dashboard'
+  }
+}
 type Project = {
   slug: string; name: string; domain: string; path: string; webroot: string
   database: boolean; https: boolean; db_name: string; db_user: string
@@ -78,7 +89,7 @@ export function App() {
   const themeSaveRef=useRef(false)
   const refreshRef=useRef(false)
   const [navOpen,setNavOpen]=useState(false)
-  const [view,setView]=useState<View>('dashboard')
+  const [view,setView]=useState<View>(viewFromHash)
   const [server,setServer]=useState<State>({services:{},projects:[],preferences:{theme:'light'}})
   const [selected,setSelected]=useState('')
   const [notice,setNotice]=useState('')
@@ -156,6 +167,12 @@ export function App() {
     return ()=>{disposed=true}
   },[refresh])
   useEffect(()=>{document.documentElement.classList.toggle('dark',theme==='dark')},[theme])
+  useEffect(()=>{
+    // Support direct bookmarks from Windows Widgets, plus browser Back/Forward.
+    const syncRoute=()=>{setView(viewFromHash());setNavOpen(false);setDbSecret('')}
+    window.addEventListener('hashchange',syncRoute)
+    return ()=>window.removeEventListener('hashchange',syncRoute)
+  },[])
   useEffect(()=>{
     if(!authenticated || view!=='settings')return
     let disposed=false
@@ -271,7 +288,12 @@ export function App() {
     try {await navigator.clipboard.writeText(value);notify('Skopiowano do schowka.')}
     catch {setError('Przeglądarka zablokowała schowek.')}
   }
-  function go(next:View){setView(next);setNavOpen(false);setDbSecret('');setError('');setNotice('')}
+  function go(next:View){
+    setView(next);setNavOpen(false);setDbSecret('');setError('');setNotice('')
+    // Keep a selected project's in-memory detail view as-is. All other
+    // views have stable, shareable hash URLs used by Windows Widgets.
+    if(next!=='project')window.location.hash='/'+next
+  }
   function details(slug:string){setSelected(slug);go('project')}
   const linkStyle=(active:boolean)=>cn('flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',active?'bg-foreground text-background':'text-muted-foreground hover:bg-secondary hover:text-foreground')
 
