@@ -1,5 +1,5 @@
 # One-time Windows setup of on-demand DevStack hosts synchronization.
-# Uses the proven elevated, hidden PowerShell action and -Once mode; no logon listener.
+# Uses elevated, noninteractive S4U task execution and -Once mode; no logon listener or console flash.
 # Run from Windows PowerShell as Administrator under the Windows user who owns WSL.
 # Certificate trust is deliberately handled by the existing interactive sync-hosts.ps1.
 $ErrorActionPreference = 'Stop'
@@ -54,7 +54,11 @@ if ($LASTEXITCODE -ne 0) {
 $action = New-ScheduledTaskAction -Execute $powershell -Argument (
     '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watcherInstalled + '" -Once'
 )
-$principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Highest
+# S4U runs in a noninteractive desktop, so the console cannot flash briefly
+# before PowerShell processes -WindowStyle Hidden. Verified on the target ASUS:
+# local WSL domain access, elevated hosts sync, user-triggered schtasks and battery power.
+# This task intentionally requires the same Windows user who owns Ubuntu-26.04.
+$principal = New-ScheduledTaskPrincipal -UserId $account -LogonType S4U -RunLevel Highest
 # No scheduled/logon trigger. Linux devstackd calls schtasks.exe /Run after
 # project metadata commits and on service startup; Windows does not poll WSL.
 # MultipleInstances Queue ensures concurrent create/delete signals are not lost.
@@ -79,7 +83,7 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal
 Write-Host ''
 Write-Host 'DevStack Windows on-demand hosts synchronization installed.' -ForegroundColor Green
 Write-Host 'Task:' $taskName
-Write-Host 'Runs elevated for Windows account:' $account
+Write-Host 'Runs elevated, noninteractive (S4U) for Windows account:' $account
 Write-Host 'No automatic logon trigger or permanent Windows process.'
 Write-Host 'DevStack in Ubuntu triggers the same hidden one-shot sync after project changes.'
 Write-Host 'CA trust is unchanged.'
