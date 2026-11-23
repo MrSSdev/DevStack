@@ -14,6 +14,22 @@ internal static class SelfTest
             Assert(!StateProbe.ParseRunningDistros("Ubuntu-24.04\r\n", "Ubuntu-26.04"), "different distro");
             Assert(!StateProbe.ParseRunningDistros("", "Ubuntu-26.04"), "empty distro list");
 
+            // COM LocalServer32 can append -Embedding after MSIX ExeServer Arguments.
+            // This must start registration; otherwise Windows reports DCOM 10010.
+            Assert(WidgetServerLaunch.IsComActivation(
+                new[] { "-RegisterProcessAsComServer" }), "COM manifest argument");
+            Assert(WidgetServerLaunch.IsComActivation(
+                new[] { "-RegisterProcessAsComServer", "-Embedding" }), "COM appended -Embedding");
+            Assert(WidgetServerLaunch.IsComActivation(
+                new[] { "-Embedding" }), "COM default -Embedding");
+            Assert(WidgetServerLaunch.IsComActivation(
+                new[] { "/Embedding" }), "COM slash Embedding");
+            Assert(WidgetServerLaunch.IsComActivation(
+                new[] { "-registerprocessascomserver", "-embedding" }), "COM case insensitive");
+            Assert(!WidgetServerLaunch.IsComActivation(Array.Empty<string>()), "no COM activation without flags");
+            Assert(!WidgetServerLaunch.IsComActivation(
+                new[] { "--self-test" }), "self-test is not COM activation");
+
             var offline = new StateProbe.Snapshot(false, "", null, null, null, null, DateTimeOffset.Now);
             using var status = JsonDocument.Parse(WidgetCards.Data(WidgetCards.ServicesId, offline, "", false));
             Assert(!status.RootElement.GetProperty("running").GetBoolean(), "DevStack offline state");
