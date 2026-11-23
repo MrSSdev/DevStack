@@ -1,6 +1,6 @@
-# One-time Windows setup of event-driven DevStack hosts synchronization.
-# The logon trigger now starts a Windows-only WMI listener, not Ubuntu.
-# Run ONCE in Windows PowerShell as Administrator under the Windows user who owns WSL.
+# One-time Windows setup of on-demand DevStack hosts synchronization.
+# Uses the proven elevated, hidden PowerShell action and -Once mode; no logon listener.
+# Run from Windows PowerShell as Administrator under the Windows user who owns WSL.
 # Certificate trust is deliberately handled by the existing interactive sync-hosts.ps1.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -52,37 +52,35 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $action = New-ScheduledTaskAction -Execute $powershell -Argument (
-    '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watcherInstalled + '"'
+    '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watcherInstalled + '" -Once'
 )
 $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Highest
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
-# A session-local Win32_ProcessStartTrace subscriber MUST be started when the
-# Windows user logs in so it can detect future external wsl.exe starts.
-# It does not run 'wsl -d' unless Ubuntu is already confirmed running.
-# Keep the listener active on laptops, including battery-powered WSL workstations.
-# Windows Task Scheduler otherwise defaults to rejecting starts on battery power.
+# No scheduled/logon trigger. Linux devstackd calls schtasks.exe /Run after
+# project metadata commits and on service startup; Windows does not poll WSL.
+# MultipleInstances Queue ensures concurrent create/delete signals are not lost.
 $settings = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
-    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
+    -MultipleInstances Queue `
     -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable
+    -DontStopIfGoingOnBatteries
 # Replace the previously queued or running version cleanly on upgrades.
 $previous = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($null -ne $previous) {
+    $taskBackup = Join-Path $targetDir 'task-before-on-demand.xml'
+    # Store the previous task definition for manual rollback before replacing it.
+    Export-ScheduledTask -TaskName $taskName -ErrorAction Stop |
+        Set-Content -LiteralPath $taskBackup -Encoding Unicode -ErrorAction Stop
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 }
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Windows-only WMI listener on logon. Attaches inotify only when Ubuntu is already running; no WSL retry loop.' -Force | Out-Null
+Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Description 'One-shot elevated Windows hosts reconciliation, triggered by DevStack Linux only; no Windows logon listener.' -Force | Out-Null
 
-# Start the Windows-only listener now. It will NOT reconnect to Ubuntu after
-# shutdown unless another external wsl.exe launch event is observed.
-Start-ScheduledTask -TaskName $taskName
+# The initial one-shot sync above has already reconciled hosts. Do not start
+# another task or leave any Windows PowerShell process running at logon.
 Write-Host ''
-Write-Host 'DevStack Windows event synchronization installed.' -ForegroundColor Green
+Write-Host 'DevStack Windows on-demand hosts synchronization installed.' -ForegroundColor Green
 Write-Host 'Task:' $taskName
 Write-Host 'Runs elevated for Windows account:' $account
-Write-Host 'At Windows logon only a Windows PowerShell WMI listener is started.'
-Write-Host 'Linux inotify is attached only if Ubuntu is already running or is started by another app.'
-Write-Host 'The listener consumes some Windows memory; it does not poll or start WSL when idle.'
-Write-Host 'CA trust is never changed by this task.'
+Write-Host 'No automatic logon trigger or permanent Windows process.'
+Write-Host 'DevStack in Ubuntu triggers the same hidden one-shot sync after project changes.'
+Write-Host 'CA trust is unchanged.'
 Write-Host 'To inspect:' "Get-ScheduledTask -TaskName '$taskName'"
