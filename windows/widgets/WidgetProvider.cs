@@ -223,18 +223,34 @@ public sealed class WidgetProvider : IWidgetProvider
         string widgetId, string definitionId, bool allowPlaceholder)
     {
         StateProbe.Snapshot? snapshot;
+        string message = "";
+        bool pendingStop = false, busy = false;
+
         lock (Gate)
+        {
+            if (!Widgets.TryGetValue(widgetId, out var widget) || !widget.Active ||
+                widget.Definition != definitionId)
+                return;
+
             snapshot = definitionId == WidgetCards.WslId
                 ? _lastWslSnapshot : _lastServicesSnapshot;
 
+            if (definitionId == WidgetCards.WslId)
+            {
+                message = widget.Message;
+                pendingStop = widget.StopConfirmationUntil > DateTimeOffset.UtcNow;
+                busy = widget.ActionBusy;
+            }
+        }
+
         if (snapshot is null && !allowPlaceholder)
-            return; // Preserve Windows' cached rendering across COM restarts.
+            return; // Preserve host rendering across COM restarts.
 
         try
         {
             var template = snapshot is not null
                 ? definitionId == WidgetCards.WslId
-                    ? WidgetCards.WslReadOnlyTemplate(snapshot)
+                    ? WidgetCards.WslControlTemplate(snapshot, message, pendingStop, busy)
                     : WidgetCards.DevStackReadOnlyTemplate(snapshot)
                 : WidgetCards.InitialTemplate(definitionId);
 
@@ -457,21 +473,33 @@ public sealed class WidgetProvider : IWidgetProvider
         string widgetId, string definitionId, StateProbe.Snapshot snapshot,
         CancellationToken cancellationToken)
     {
+        string message = "";
+        bool pendingStop = false, busy = false;
         lock (Gate)
         {
             if (_visibleSession is null ||
                 !_visibleSession.Token.Equals(cancellationToken))
                 return;
             if (cancellationToken.IsCancellationRequested ||
-                !Widgets.TryGetValue(widgetId, out var current) ||
-                !current.Active || current.Definition != definitionId)
+                !Widgets.TryGetValue(widgetId, out var widget) ||
+                !widget.Active || widget.Definition != definitionId)
                 return;
+
+            if (definitionId == WidgetCards.WslId)
+            {
+                if (snapshot.WslRunning != true)
+                    widget.StopConfirmationUntil = default;
+
+                message = widget.Message;
+                pendingStop = widget.StopConfirmationUntil > DateTimeOffset.UtcNow;
+                busy = widget.ActionBusy;
+            }
         }
 
         try
         {
             var template = definitionId == WidgetCards.WslId
-                ? WidgetCards.WslReadOnlyTemplate(snapshot)
+                ? WidgetCards.WslControlTemplate(snapshot, message, pendingStop, busy)
                 : WidgetCards.DevStackReadOnlyTemplate(snapshot);
             WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
             {
@@ -482,7 +510,7 @@ public sealed class WidgetProvider : IWidgetProvider
         }
         catch (Exception error)
         {
-            Trace.TraceWarning("Read-only widget update: " + error);
+            Trace.TraceWarning("C4.3 widget update: " + error);
         }
     }
 
