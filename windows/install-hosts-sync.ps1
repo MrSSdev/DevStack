@@ -1,4 +1,5 @@
 # One-time Windows setup of event-driven DevStack hosts synchronization.
+# The logon trigger now starts a Windows-only WMI listener, not Ubuntu.
 # Run ONCE in Windows PowerShell as Administrator under the Windows user who owns WSL.
 # Certificate trust is deliberately handled by the existing interactive sync-hosts.ps1.
 $ErrorActionPreference = 'Stop'
@@ -55,6 +56,9 @@ $action = New-ScheduledTaskAction -Execute $powershell -Argument (
 )
 $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Highest
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
+# A session-local Win32_ProcessStartTrace subscriber MUST be started when the
+# Windows user logs in so it can detect future external wsl.exe starts.
+# It does not run 'wsl -d' unless Ubuntu is already confirmed running.
 # Keep the listener active on laptops, including battery-powered WSL workstations.
 # Windows Task Scheduler otherwise defaults to rejecting starts on battery power.
 $settings = New-ScheduledTaskSettingsSet `
@@ -68,14 +72,17 @@ $previous = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($null -ne $previous) {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 }
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Event-based .test domain sync, only when DevStack projects change; no timer polling.' -Force | Out-Null
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Windows-only WMI listener on logon. Attaches inotify only when Ubuntu is already running; no WSL retry loop.' -Force | Out-Null
 
-# Start immediately; it will also reconnect after WSL shutdown or resume.
+# Start the Windows-only listener now. It will NOT reconnect to Ubuntu after
+# shutdown unless another external wsl.exe launch event is observed.
 Start-ScheduledTask -TaskName $taskName
 Write-Host ''
 Write-Host 'DevStack Windows event synchronization installed.' -ForegroundColor Green
 Write-Host 'Task:' $taskName
 Write-Host 'Runs elevated for Windows account:' $account
-Write-Host 'A one-time initial sync occurs when the listener starts.'
+Write-Host 'At Windows logon only a Windows PowerShell WMI listener is started.'
+Write-Host 'Linux inotify is attached only if Ubuntu is already running or is started by another app.'
+Write-Host 'The listener consumes some Windows memory; it does not poll or start WSL when idle.'
 Write-Host 'CA trust is never changed by this task.'
 Write-Host 'To inspect:' "Get-ScheduledTask -TaskName '$taskName'"
