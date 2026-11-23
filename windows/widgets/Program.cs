@@ -7,7 +7,9 @@ if (args.Length == 1 && args[0] == "--self-test")
 {
     Environment.ExitCode = SelfTest.Run();
 }
-else if (args.Length == 1 && args[0] == "-RegisterProcessAsComServer")
+// COM can append "-Embedding" to the manifest's custom launch arguments.
+// The previous args.Length == 1 check silently exited before registering CLSID.
+else if (WidgetServerLaunch.IsComActivation(args))
 {
     WinRT.ComWrappersSupport.InitializeComWrappers();
 
