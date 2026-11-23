@@ -1,0 +1,72 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "UBUNTU / WSL",
+      "size": "medium",
+      "weight": "bolder",
+      "wrap": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "${status}",
+      "size": "large",
+      "weight": "bolder",
+      "wrap": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "${details}",
+      "wrap": true,
+      "isSubtle": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "Zatrzymanie zamknie wszystkie procesy w Ubuntu. Potwierdź tę operację.",
+      "wrap": true,
+      "color": "attention",
+      "$when": "${pendingStop}"
+    },
+    {
+      "type": "TextBlock",
+      "text": "Ostatnia kontrola: ${checkedAt}",
+      "size": "small",
+      "isSubtle": true
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.Execute",
+      "title": "Uruchom WSL",
+      "verb": "start",
+      "$when": "${!running && !unknown && $host.isUserContextAuthenticated}"
+    },
+    {
+      "type": "Action.Execute",
+      "title": "Zatrzymaj WSL",
+      "verb": "stop-ask",
+      "$when": "${running && !pendingStop && $host.isUserContextAuthenticated}"
+    },
+    {
+      "type": "Action.Execute",
+      "title": "Tak, zatrzymaj",
+      "verb": "stop-confirm",
+      "$when": "${running && pendingStop && $host.isUserContextAuthenticated}"
+    },
+    {
+      "type": "Action.Execute",
+      "title": "Anuluj",
+      "verb": "stop-cancel",
+      "$when": "${pendingStop && $host.isUserContextAuthenticated}"
+    },
+    {
+      "type": "Action.Execute",
+      "title": "Odśwież",
+      "verb": "refresh",
+      "$when": "${$host.isUserContextAuthenticated}"
+    }
+  ]
+}
