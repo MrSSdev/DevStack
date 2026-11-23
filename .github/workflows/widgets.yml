@@ -1,0 +1,91 @@
+name: DevStack Windows Widgets
+
+on:
+  push:
+    branches: [main, feature/windows-widgets]
+    paths: ['windows/widgets/**', '.github/workflows/widgets.yml']
+  pull_request:
+    paths: ['windows/widgets/**', '.github/workflows/widgets.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: widgets-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  widgets-x64:
+    name: Windows widgets x64 MSIX
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Generate images and validate widget manifest
+        shell: pwsh
+        run: |
+          ./windows/widgets/scripts/New-WidgetAssets.ps1
+          ./windows/widgets/scripts/Test-WidgetManifest.ps1
+
+      - name: Logic tests without starting WSL
+        shell: pwsh
+        run: |
+          dotnet run --project windows/widgets/tests/WidgetChecks.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Widget logic tests failed' }
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          dotnet restore windows/widgets/DevStack.Widgets.csproj --runtime win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Widget NuGet restore failed' }
+
+      - name: Build and package unsigned x64 MSIX
+        shell: pwsh
+        run: |
+          $args = @('windows/widgets/DevStack.Widgets.csproj', '/restore', '/p:Configuration=Release', '/p:Platform=x64', '/p:RuntimeIdentifier=win-x64', '/p:SelfContained=true', '/p:GenerateAppxPackageOnBuild=true', '/p:AppxPackageSigningEnabled=false', '/p:AppxBundle=Never', '/p:UapAppxPackageBuildMode=SideloadOnly')
+          $args += '/p:AppxPackageDir=' + (Join-Path (Get-Location) 'widgets-packages\')
+          & msbuild @args
+          if ($LASTEXITCODE -ne 0) { throw 'MSIX build failed' }
+
+      - name: Locate generated MSIX
+        id: package
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem 'widgets-packages' -Recurse -File -Filter '*.msix')
+          if ($packages.Count -ne 1) { throw "Expected one MSIX, got $($packages.Count)" }
+          "path=$($packages[0].FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Sign MSIX with temporary development certificate
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=DevStack Widgets Development' -CertStoreLocation 'Cert:\CurrentUser\My' -KeyExportPolicy Exportable -KeyLength 3072 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddMonths(12)
+          New-Item -ItemType Directory -Force -Path 'widgets-packages\install' | Out-Null
+          Export-Certificate -Cert $cert -FilePath 'widgets-packages\install\DevStack-Widgets-Dev.cer' | Out-Null
+          $pass = [Guid]::NewGuid().ToString('N')
+          $pfx = Join-Path $env:RUNNER_TEMP 'widgets-sign.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $pass -AsPlainText -Force) | Out-Null
+          try {
+            $tools = @(Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match '\\x64\\signtool.exe$' } | Sort-Object FullName -Descending)
+            if (-not $tools) { throw 'Windows SDK signtool x64 not found' }
+            & $tools[0].FullName sign /fd SHA256 /f $pfx /p $pass '${{ steps.package.outputs.path }}'
+            if ($LASTEXITCODE -ne 0) { throw 'MSIX signing failed' }
+          }
+          finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path ("Cert:\CurrentUser\My\" + $cert.Thumbprint) -Force -ErrorAction SilentlyContinue
+          }
+          Copy-Item '${{ steps.package.outputs.path }}' 'widgets-packages\install\DevStack-Widgets-x64.msix'
+          'This test certificate belongs ONLY to this workflow run. Trust it solely after verifying the source. A new certificate is generated on each build.' | Out-File 'widgets-packages\install\READ-ME-FIRST.txt' -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DevStack-Windows-Widgets-x64
+          path: widgets-packages/install/*
+          retention-days: 14
+          if-no-files-found: error
