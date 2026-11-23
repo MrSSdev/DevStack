@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+         xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap3 rescap">
+  <Identity Name="MrSSdev.DevStack.Widgets" Publisher="CN=DevStack Widgets Development" Version="0.1.0.0" />
+  <Properties>
+    <DisplayName>DevStack Widgets</DisplayName>
+    <PublisherDisplayName>DevStack</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22621.0" MaxVersionTested="10.0.26300.0" />
+  </Dependencies>
+  <Resources><Resource Language="pl-pl" /></Resources>
+  <Applications>
+    <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
+      <uap:VisualElements DisplayName="DevStack Widgets" Description="Dwa widżety WSL i DevStack"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="DevStack.Widgets.exe"
+                           Arguments="-RegisterProcessAsComServer"
+                           DisplayName="DevStack Widget Provider">
+              <com:Class Id="6DE550FB-ECB8-4955-87E2-4943E247E34A" DisplayName="DevStack Widget Provider" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.windows.widgets" DisplayName="DevStack Widgets"
+                             Id="MrSSdev.DevStack.WidgetProvider" PublicFolder="Public">
+            <uap3:Properties>
+              <WidgetProvider>
+                <ProviderIcons><Icon Path="Assets\StoreLogo.png" /></ProviderIcons>
+                <Activation><CreateInstance ClassId="6DE550FB-ECB8-4955-87E2-4943E247E34A" /></Activation>
+                <Definitions>
+                  <Definition Id="DevStack_WSL" DisplayName="WSL — Ubuntu"
+                              Description="Stan Ubuntu-26.04 i świadome uruchamianie lub zatrzymywanie">
+                    <Capabilities><Capability><Size Name="medium" /></Capability></Capabilities>
+                    <ThemeResources>
+                      <Icons><Icon Path="ProviderAssets\WSL_Icon.png" /></Icons>
+                      <Screenshots><Screenshot Path="ProviderAssets\WSL_Screenshot.png" DisplayAltText="Stan WSL i przyciski uruchamiania" /></Screenshots>
+                      <DarkMode /><LightMode />
+                    </ThemeResources>
+                  </Definition>
+                  <Definition Id="DevStack_Services" DisplayName="DevStack — usługi"
+                              Description="Dostępność usług DevStack i otwieranie panelu">
+                    <Capabilities><Capability><Size Name="medium" /></Capability></Capabilities>
+                    <ThemeResources>
+                      <Icons><Icon Path="ProviderAssets\DevStack_Icon.png" /></Icons>
+                      <Screenshots><Screenshot Path="ProviderAssets\DevStack_Screenshot.png" DisplayAltText="Status połączeń DevStack i adres panelu" /></Screenshots>
+                      <DarkMode /><LightMode />
+                    </ThemeResources>
+                  </Definition>
+                </Definitions>
+              </WidgetProvider>
+            </uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
