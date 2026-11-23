@@ -2,6 +2,11 @@
 
 Two **separate native widgets**, built from the same public DevStack repository:
 
+**Current PR #2 test stage (C4.2): read-only status for both widgets.**
+WSL Start/Stop buttons, DevStack dashboard action, and full lifecycle tests
+are intentionally deferred until the passive status path is stable on ASUS.
+The descriptions below include the intended final behavior.
+
 * **WSL / Ubuntu** — Windows-only state probe; deliberate Start and two-step Stop of
   `Ubuntu-26.04` only; no system-wide WSL shutdown.
 * **DevStack** — passive availability probes and **Open dashboard**. No WSL start/stop
@@ -10,8 +15,20 @@ Two **separate native widgets**, built from the same public DevStack repository:
 Both cards are registered by one C# COM provider and one x64 MSIX package. No
 long-running WSL watcher, background service, local IDE, or .NET SDK is required
 on the target device to compile the provider: GitHub Actions does the build.
-The provider only polls when an active card is being shown; it shuts down after
-a period without active cards.
+The provider uses the official widget host **Activate/Deactivate** callbacks:
+opening Win+W triggers an **immediate asynchronous state check** and shows the
+last known card without resetting it to an artificial loading state. WSL status
+is published as soon as the read-only `wsl.exe --list --running --quiet` command
+finishes; HTTPS/TCP reachability follows independently. Duplicate refresh
+requests are coalesced, not silently discarded. While all cards are hidden,
+the 20-second refresh timer is disabled and in-flight probes are canceled;
+no WSL command or network poll is started. After an idle period the COM
+server can exit, independently of whether cards remain pinned.
+
+**A fresh live result cannot be guaranteed at the exact instant Win+W opens:**
+WSL and network probes are asynchronous, so the previous rendered result is
+displayed immediately and its last-check timestamp indicates freshness.
+The provider does not keep Ubuntu awake just to maintain a cache.
 
 ## Architecture and security boundaries
 
@@ -64,5 +81,10 @@ The original `DevStack` Windows app certificate is **not the same certificate**
 as the Ubuntu mkcert CA. Never import this development signing certificate
 into web/SSL trust as if it were a web CA.
 
-**Status:** source implementation, not yet device-tested. Acceptance requires
-a successful MSIX CI build and an actual two-widget test on Windows.
+**Status of staged ASUS testing (23 Nov 2026):** COM activation, two static
+pinned cards, and reopen persistence are confirmed; read-only WSL ON/OFF and
+DevStack online HTTPS/TCP status also work. The DevStack offline message has
+been observed after a delay, prompting the current activation-latency patch
+in [draft PR #2](https://github.com/MrSSdev/DevStack/pull/2).
+The patch must pass CI and an ASUS reopen/hide test before being accepted.
+Actions, battery use, sleep/resume and full C-stage acceptance remain pending.
