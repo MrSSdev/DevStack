@@ -2,10 +2,26 @@
 
 Two **separate native widgets**, built from the same public DevStack repository:
 
-**Current PR #2 test stage (C4.2): read-only status for both widgets.**
-WSL Start/Stop buttons, DevStack dashboard action, and full lifecycle tests
-are intentionally deferred until the passive status path is stable on ASUS.
-The descriptions below include the intended final behavior.
+**Current draft PR #2: responsive native widget UI (pending ASUS visual QA).**
+Windows 11 supports **small / medium / large** sizes for each widget. These are
+six purpose-built Adaptive Card layouts, not scaled copies. Original coloured
+glyphs are generated as transparent PNGs by CI, packaged in MSIX and embedded
+as data URIs; the cards don't fetch icon graphics over the network.
+
+- **Ubuntu**: quick ON/OFF status, verified Start and two-step confirmed Stop,
+  one action in the small size and more context on medium/large.
+- **DevStack**: one-glance service status, four compact Nginx/PHP-FPM/MariaDB/
+  Redis tiles on medium/large, and native **Projects** / **Add project** website
+  actions (when Ubuntu is online). The small size intentionally has one link.
+- **Navigation**: `https://devstack.test/#/projects` and `#/new` are
+  authenticated React hash routes. URLs do not call `wsl.exe` and do not
+  automatically start Ubuntu. The user logs in normally if required.
+- **Theme**: default Windows 11 host colours, readable in light/dark modes,
+  with restrained DevStack/ROG accents rather than a custom web renderer.
+
+The last live-tested pre-redesign Windows build is `e2730b0`, which the ASUS
+owner confirmed really starts and terminates Ubuntu from native widget buttons.
+The redesigned layouts require a fresh on-device test before acceptance.
 
 * **WSL / Ubuntu** — Windows-only state probe; deliberate Start and two-step Stop of
   `Ubuntu-26.04` only; no system-wide WSL shutdown.
@@ -81,10 +97,11 @@ The original `DevStack` Windows app certificate is **not the same certificate**
 as the Ubuntu mkcert CA. Never import this development signing certificate
 into web/SSL trust as if it were a web CA.
 
-**Status of staged ASUS testing (23 Nov 2026):** COM activation, two static
-pinned cards, and reopen persistence are confirmed; read-only WSL ON/OFF and
-DevStack online HTTPS/TCP status also work. The DevStack offline message has
-been observed after a delay, prompting the current activation-latency patch
-in [draft PR #2](https://github.com/MrSSdev/DevStack/pull/2).
-The patch must pass CI and an ASUS reopen/hide test before being accepted.
-Actions, battery use, sleep/resume and full C-stage acceptance remain pending.
+**Staged ASUS testing (23 Nov 2026):** COM activation, two pinned cards,
+reopen persistence, fast WSL ON/OFF state, DevStack HTTPS/TCP availability,
+and deliberate WSL Start/Stop through the widget are **confirmed on device**.
+The redesigned six layouts, their project deep links and all resize transitions
+still require testing in the Windows 11 widget host. The Stop→Cancel and
+confirmation-timeout paths, hidden-board battery/RAM, logout/login and
+sleep/resume are separate acceptance criteria. CI success is not equivalent
+to passing this physical UI test. The public PR stays draft until validation.
