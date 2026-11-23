@@ -7,6 +7,24 @@ internal static class WidgetCards
     internal const string WslId = "DevStack_WSL";
     internal const string ServicesId = "DevStack_Services";
 
+    // The first card must be available synchronously in CreateWidget, before
+    // querying WSL or loading external template files. This small, static card
+    // also isolates pinning problems from probe/Adaptive Card rendering issues.
+    internal static string InitialTemplate(string definitionId)
+    {
+        var title = definitionId == WslId ? "WSL — Ubuntu" : "DevStack — usługi";
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type = "AdaptiveCard",
+            version = "1.5",
+            body = new object[]
+            {
+                new { type = "TextBlock", text = title, weight = "Bolder" },
+                new { type = "TextBlock", text = "Ładowanie stanu…", wrap = true }
+            }
+        });
+    }
+
     private static readonly Lazy<string> WslTemplate = new(() => ReadTemplate("WSL.json"));
     private static readonly Lazy<string> ServicesTemplate = new(() => ReadTemplate("DevStack.json"));
 
