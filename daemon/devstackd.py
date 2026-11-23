@@ -26,6 +26,8 @@ SECRET_FILE = pathlib.Path('/var/lib/devstack/credentials.json')
 PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
 CA_PUBLIC_FILE = pathlib.Path('/var/lib/devstack/ca/rootCA.pem')  # Public cert ONLY; never expose rootCA-key.pem.
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
+WINDOWS_SCHTASKS = pathlib.Path('/mnt/c/Windows/System32/schtasks.exe')
+WINDOWS_HOSTS_TASK = 'DevStack Hosts Event Sync'
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 DOMAIN = re.compile(r'[a-z][a-z0-9-]{0,39}\.test\Z')
 WEBROOT = re.compile(r'[a-zA-Z0-9_][a-zA-Z0-9_/-]{0,99}\Z')
@@ -189,6 +191,23 @@ def run(argv: list[str], input_text: str | None = None, env: dict[str, str] | No
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or 'Operacja systemowa nie powiodla sie.').strip()
         raise RuntimeError(detail[-1400:]) from None
+
+
+def request_windows_hosts_sync() -> str:
+    """Ask the preinstalled Windows task to reconcile hosts; never run code from a project.
+
+    This is a fixed, no-argument signal. Windows keeps the privileged sync logic
+    and hosts-file validation in its existing protected PowerShell scripts.
+    A missing Windows interop executable is normal outside WSL.
+    """
+    if not WINDOWS_SCHTASKS.is_file():
+        return ''
+    try:
+        run([str(WINDOWS_SCHTASKS), '/Run', '/TN', WINDOWS_HOSTS_TASK])
+        return ''
+    except RuntimeError as exc:
+        print('Warning: DevStack Windows hosts task could not be triggered: ' + str(exc), file=sys.stderr)
+        return ' Uwaga: nie udalo sie zlecic synchronizacji Windows hosts; sprawdz zadanie DevStack w Windows.'
 
 
 def config() -> dict[str, Any]:
@@ -568,7 +587,9 @@ def create(data: dict[str, Any]) -> dict[str, str]:
             except Exception:
                 print('Warning: Nginx rollback reload failed', file=sys.stderr)
         raise
-    return {'message': 'Projekt zapisany. PHP-FPM uruchomi nowa pule za kilka sekund. Jezeli integracja Windows jest skonfigurowana, domena zostanie zsynchronizowana automatycznie.'}
+    # Request the silent Windows task only after the project metadata is committed.
+    hosts_warning = request_windows_hosts_sync()
+    return {'message': 'Projekt zapisany. PHP-FPM uruchomi nowa pule za kilka sekund. Jezeli integracja Windows jest skonfigurowana, domena zostanie zsynchronizowana automatycznie.' + hosts_warning}
 
 
 def test_project_database(data: dict[str, Any]) -> dict[str, str]:
@@ -725,9 +746,11 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
         except OSError:
             print('Warning: leftover generated project certificate ' + slug, file=sys.stderr)
 
+    # The committed state is authoritative; queue reconciliation once after deletion.
+    hosts_warning = request_windows_hosts_sync()
     return {'message': 'Projekt usuniety z Nginx, PHP-FPM i DevStack' +
             (' wraz z baza MariaDB.' if database else '.') +
-            ' Pliki projektu pozostaly na dysku. Windows hosts zsynchronizuje sie automatycznie.'}
+            ' Pliki projektu pozostaly na dysku. Windows hosts zsynchronizuje sie automatycznie.' + hosts_warning}
 
 
 def reveal(data: dict[str, Any]) -> dict[str, str]:
@@ -829,6 +852,9 @@ def serve() -> None:
     os.chown(SOCKET_FILE, 0, gid)
     os.chmod(SOCKET_FILE, 0o660)
     server.listen(12)
+    # Reconcile once at WSL service start (e.g. after a missed notification).
+    # This does not run while Ubuntu is stopped and creates no Windows listener.
+    request_windows_hosts_sync()
     print('DevStack local helper listening', flush=True)
     while True:
         conn, _ = server.accept()
