@@ -36,6 +36,26 @@ internal static class StateProbe
             .Any(name => string.Equals(name.Trim(), distro, StringComparison.OrdinalIgnoreCase));
     }
 
+    // C4.1 read-only stage: use Windows wsl.exe listing only. Never invoke
+    // wsl.exe -d or check any DevStack service while verifying live WSL status.
+    internal static async Task<Snapshot> CaptureWslOnlyAsync()
+    {
+        var checkedAt = DateTimeOffset.Now;
+        try
+        {
+            var state = await RunAsync(new[] { "--list", "--running", "--quiet" }, 5);
+            if (state.ExitCode != 0)
+                return new(null, "Błąd odczytu WSL", null, null, null, null, checkedAt);
+
+            return new(ParseRunningDistros(state.Output, Distro), "",
+                null, null, null, null, checkedAt);
+        }
+        catch
+        {
+            return new(null, "Odczyt niedostępny", null, null, null, null, checkedAt);
+        }
+    }
+
     internal static async Task<Snapshot> CaptureAsync()
     {
         var checkedAt = DateTimeOffset.Now;
