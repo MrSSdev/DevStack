@@ -15,6 +15,7 @@ public sealed class WidgetProvider : IWidgetProvider
     {
         public required string Id { get; init; }
         public required string Definition { get; init; }
+        public string Size { get; set; } = "medium";
         public bool Active { get; set; }
         public DateTimeOffset StopConfirmationUntil { get; set; }
         public string Message { get; set; } = "";
@@ -141,6 +142,7 @@ public sealed class WidgetProvider : IWidgetProvider
                     {
                         Id = context.Id,
                         Definition = context.DefinitionId,
+                        Size = WidgetDesign.NormalizeSize(context.Size.ToString()),
                         Active = context.IsActive
                     };
                 }
@@ -162,7 +164,9 @@ public sealed class WidgetProvider : IWidgetProvider
         {
             Widgets[context.Id] = new Instance
             {
-                Id = context.Id, Definition = context.DefinitionId, Active = true
+                Id = context.Id, Definition = context.DefinitionId,
+                Size = WidgetDesign.NormalizeSize(context.Size.ToString()),
+                Active = true
             };
             _lastUse = DateTimeOffset.UtcNow;
         }
@@ -191,6 +195,7 @@ public sealed class WidgetProvider : IWidgetProvider
                 widget = new Instance { Id = context.Id, Definition = context.DefinitionId };
                 Widgets[context.Id] = widget;
             }
+            widget.Size = WidgetDesign.NormalizeSize(context.Size.ToString());
             widget.Active = true;
             _lastUse = DateTimeOffset.UtcNow;
         }
@@ -214,8 +219,16 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public void OnWidgetContextChanged(WidgetContextChangedArgs args)
     {
-        // Never overwrite a valid card with "Odczytywanie..." during a
-        // context/size change. Recheck immediately only when visible.
+        var context = args.WidgetContext;
+        if (!KnownDefinition(context.DefinitionId)) return;
+        lock (Gate)
+        {
+            if (!Widgets.TryGetValue(context.Id, out var widget)) return;
+            widget.Size = WidgetDesign.NormalizeSize(context.Size.ToString());
+        }
+        // Resize from the in-memory snapshot instantly; do not make the user
+        // wait for an extra WSL/HTTP probe just to rearrange the same data.
+        SendImmediateCard(context.Id, context.DefinitionId, allowPlaceholder: true);
         RequestRefresh();
     }
 
@@ -223,6 +236,7 @@ public sealed class WidgetProvider : IWidgetProvider
         string widgetId, string definitionId, bool allowPlaceholder)
     {
         StateProbe.Snapshot? snapshot;
+        string size = "medium";
         string message = "";
         bool pendingStop = false, busy = false;
 
@@ -234,6 +248,7 @@ public sealed class WidgetProvider : IWidgetProvider
 
             snapshot = definitionId == WidgetCards.WslId
                 ? _lastWslSnapshot : _lastServicesSnapshot;
+            size = widget.Size;
 
             if (definitionId == WidgetCards.WslId)
             {
@@ -250,9 +265,9 @@ public sealed class WidgetProvider : IWidgetProvider
         {
             var template = snapshot is not null
                 ? definitionId == WidgetCards.WslId
-                    ? WidgetCards.WslControlTemplate(snapshot, message, pendingStop, busy)
-                    : WidgetCards.DevStackReadOnlyTemplate(snapshot)
-                : WidgetCards.InitialTemplate(definitionId);
+                    ? WidgetDesign.Wsl(snapshot, size, message, pendingStop, busy)
+                    : WidgetDesign.DevStack(snapshot, size)
+                : WidgetDesign.Initial(definitionId, size);
 
             WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
             {
@@ -473,7 +488,7 @@ public sealed class WidgetProvider : IWidgetProvider
         string widgetId, string definitionId, StateProbe.Snapshot snapshot,
         CancellationToken cancellationToken)
     {
-        string message = "";
+        string message = "", size = "medium";
         bool pendingStop = false, busy = false;
         lock (Gate)
         {
@@ -485,6 +500,7 @@ public sealed class WidgetProvider : IWidgetProvider
                 !widget.Active || widget.Definition != definitionId)
                 return;
 
+            size = widget.Size;
             if (definitionId == WidgetCards.WslId)
             {
                 if (snapshot.WslRunning != true)
@@ -499,8 +515,8 @@ public sealed class WidgetProvider : IWidgetProvider
         try
         {
             var template = definitionId == WidgetCards.WslId
-                ? WidgetCards.WslControlTemplate(snapshot, message, pendingStop, busy)
-                : WidgetCards.DevStackReadOnlyTemplate(snapshot);
+                ? WidgetDesign.Wsl(snapshot, size, message, pendingStop, busy)
+                : WidgetDesign.DevStack(snapshot, size);
             WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
             {
                 Template = template,
