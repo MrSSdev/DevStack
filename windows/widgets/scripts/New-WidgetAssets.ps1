@@ -38,3 +38,80 @@ function New-Asset {
     @('ProviderAssets/DevStack_Icon.png',200,200,'DEV','#E1403E'),
     @('ProviderAssets/DevStack_Screenshot.png',480,340,'DEVSTACK','#E1403E')
 ) | ForEach-Object { New-Asset -File $_[0] -W $_[1] -H $_[2] -Title $_[3] -Color $_[4] }
+
+
+# Small transparent glyphs are embedded as data:image/png in the native
+# Adaptive Cards. No external assets or web requests are required for icons.
+function New-UiGlyph {
+    param([string]$File, [string]$Kind, [string]$Color)
+
+    $bmp = [System.Drawing.Bitmap]::new(48, 48, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $ink = [System.Drawing.ColorTranslator]::FromHtml($Color)
+    $pen = [System.Drawing.Pen]::new($ink, 3.5)
+    $fill = [System.Drawing.SolidBrush]::new($ink)
+    try {
+        $g.Clear([System.Drawing.Color]::Transparent)
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+
+        switch ($Kind) {
+            'power' {
+                $g.DrawArc($pen, 8, 8, 32, 32, -56, 292)
+                $g.DrawLine($pen, 24, 5, 24, 23)
+            }
+            'dev' {
+                $g.FillRectangle($fill, 9, 9, 13, 13)
+                $g.FillRectangle($fill, 26, 9, 13, 13)
+                $g.FillRectangle($fill, 9, 26, 13, 13)
+                $g.FillRectangle($fill, 26, 26, 13, 13)
+            }
+            'globe' {
+                $g.DrawEllipse($pen, 7, 7, 34, 34)
+                $g.DrawLine($pen, 7, 24, 41, 24)
+                $g.DrawArc($pen, 18, 7, 12, 34, 88, 184)
+                $g.DrawArc($pen, 18, 7, 12, 34, -88, 184)
+            }
+            'code' {
+                $g.DrawLine($pen, 16, 15, 8, 24)
+                $g.DrawLine($pen, 8, 24, 16, 33)
+                $g.DrawLine($pen, 32, 15, 40, 24)
+                $g.DrawLine($pen, 40, 24, 32, 33)
+                $g.DrawLine($pen, 28, 10, 20, 38)
+            }
+            'database' {
+                $g.DrawEllipse($pen, 7, 9, 34, 13)
+                $g.DrawArc($pen, 7, 15, 34, 13, 0, 180)
+                $g.DrawArc($pen, 7, 25, 34, 13, 0, 180)
+                $g.DrawLine($pen, 7, 15, 7, 32)
+                $g.DrawLine($pen, 41, 15, 41, 32)
+                $g.DrawArc($pen, 7, 25, 34, 13, 0, 180)
+            }
+            'layers' {
+                $top = [System.Drawing.Point[]]@(
+                    [System.Drawing.Point]::new(24,8), [System.Drawing.Point]::new(41,18),
+                    [System.Drawing.Point]::new(24,28), [System.Drawing.Point]::new(7,18))
+                $g.DrawPolygon($pen, $top)
+                $g.DrawLine($pen, 7, 26, 24, 36)
+                $g.DrawLine($pen, 24, 36, 41, 26)
+                $g.DrawLine($pen, 7, 33, 24, 43)
+                $g.DrawLine($pen, 24, 43, 41, 33)
+            }
+        }
+
+        $bmp.Save((Join-Path $root $File), [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+    finally {
+        $fill.Dispose(); $pen.Dispose(); $g.Dispose(); $bmp.Dispose()
+    }
+}
+@(
+    @('ProviderAssets/UI_WSL.png','power','#2EC9A5'),
+    @('ProviderAssets/UI_DevStack.png','dev','#E1403E'),
+    @('ProviderAssets/UI_Nginx.png','globe','#5DADB9'),
+    @('ProviderAssets/UI_PHP.png','code','#8F9ED1'),
+    @('ProviderAssets/UI_MariaDB.png','database','#C7A578'),
+    @('ProviderAssets/UI_Redis.png','layers','#D17D84')
+) | ForEach-Object { New-UiGlyph -File $_[0] -Kind $_[1] -Color $_[2] }
