@@ -64,6 +64,83 @@ internal static class WidgetCards
         });
     }
 
+    // C4.3: native Windows Widgets Action.Execute controls. No service
+    // commands are exposed by the DevStack card. Stop requires a second click.
+    // Actions are shown only when the Windows widget user is authenticated.
+    internal static string WslControlTemplate(
+        StateProbe.Snapshot snapshot, string message = "",
+        bool pendingStop = false, bool actionBusy = false)
+    {
+        var status = snapshot.WslRunning switch
+        {
+            true => "Ubuntu uruchomione",
+            false => "Ubuntu wyłączone",
+            _ => "Stan WSL nieznany"
+        };
+
+        var body = new List<object>
+        {
+            new { type = "TextBlock", text = "WSL — Ubuntu", weight = "Bolder", wrap = true },
+            new { type = "TextBlock", text = status, size = "Large", wrap = true },
+            new { type = "TextBlock", text = "Dystrybucja: " + StateProbe.Distro, wrap = true }
+        };
+
+        if (!string.IsNullOrWhiteSpace(message))
+            body.Add(new { type = "TextBlock", text = message, wrap = true });
+
+        if (pendingStop && snapshot.WslRunning == true && !actionBusy)
+            body.Add(new
+            {
+                type = "TextBlock",
+                text = "Uwaga: zatrzymanie Ubuntu zakończy wszystkie uruchomione procesy. Potwierdź w ciągu 30 sekund.",
+                color = "Attention",
+                wrap = true
+            });
+
+        body.Add(new
+        {
+            type = "TextBlock",
+            text = "Ostatnia kontrola: " + snapshot.CheckedAt.ToString("HH:mm:ss"),
+            isSubtle = true,
+            wrap = true
+        });
+
+        var actions = new List<Dictionary<string, object>>();
+        if (!actionBusy)
+        {
+            if (snapshot.WslRunning == false)
+                actions.Add(Execute("Uruchom Ubuntu", "start"));
+            else if (snapshot.WslRunning == true)
+            {
+                if (pendingStop)
+                {
+                    actions.Add(Execute("Tak, zatrzymaj", "stop-confirm"));
+                    actions.Add(Execute("Anuluj", "stop-cancel"));
+                }
+                else
+                    actions.Add(Execute("Zatrzymaj Ubuntu", "stop-ask"));
+            }
+            // When status is unknown, do not offer potentially unsafe actions.
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            type = "AdaptiveCard",
+            version = "1.5",
+            body,
+            actions
+        });
+    }
+
+    private static Dictionary<string, object> Execute(string title, string verb) =>
+        new()
+        {
+            ["type"] = "Action.Execute",
+            ["title"] = title,
+            ["verb"] = verb,
+            ["$when"] = "${$host.isUserContextAuthenticated}"
+        };
+
     // Stage C4.2: only report network reachability from Windows. These are
     // connectivity hints, not authenticated systemctl state. When WSL is
     // offline, show an offline card without contacting the services.
