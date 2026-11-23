@@ -79,8 +79,6 @@ When the listener is connected to running Ubuntu, no further manual PowerShell c
 
 **Resilience and WSL lifecycle (B1):** The Windows task starts a resident Windows PowerShell process at user logon (small but nonzero Windows RAM cost). It only reads WSL running-state and subscribes to `Win32_ProcessStartTrace`; it **never starts a stopped Ubuntu at login**. If Ubuntu is already running, it attaches and performs a full sync. After the user terminates Ubuntu, the Linux watcher exits and Windows **waits for a new external `wsl.exe` start event** instead of retrying `wsl -d` every 15 seconds. There is a brief check/attach race inherent in the public WSL CLI; validate manual shutdown and startup on your own workstation. WMI detects *process creation*, not guaranteed distro startup; VS Code and other launchers must be tested on the target PC. If the Windows account logs out, the task is stopped and starts again at next login.
 
-**Optional (B2):** install a per-user Start-menu shortcut that launches Ubuntu only when clicked and opens the dashboard. See [Windows on-demand DevStack launcher](START-DEVSTACK-WINDOWS.md). This is independent of the administrator-managed hosts watcher and does not require rerunning the installer.
-
 ## 5. Existing workstation: install this integration without reinstalling
 
 Since the CA is already trusted, avoid running the one-time CA wizard again.
