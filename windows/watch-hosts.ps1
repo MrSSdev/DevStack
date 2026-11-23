@@ -31,16 +31,6 @@ function Invoke-DevStackHostsSync {
     }
 }
 
-if ($Once) {
-    # Explicit one-shot maintenance action. May start Ubuntu if it was stopped.
-    Invoke-DevStackHostsSync
-    exit 0
-}
-
-# B1: The Windows task is allowed to start at user logon, but must NEVER
-# launch the distro at logon or after the user manually terminates it.
-# An idle listener waits for Win32_ProcessStartTrace rather than polling WSL.
-# This Windows PowerShell process uses memory, but makes no periodic WSL calls.
 function Test-DevStackUbuntuRunning {
     # --list --running --quiet is read-only: unlike -d, it never starts Ubuntu.
     $running = @(& $wsl --list --running --quiet 2>$null)
@@ -59,6 +49,20 @@ function Test-DevStackUbuntuRunning {
     return $false
 }
 
+if ($Once) {
+    # On-demand task must not wake Ubuntu after a manual shutdown.
+    if (-not (Test-DevStackUbuntuRunning)) {
+        Write-Output 'DevStack hosts: Ubuntu is not running; no sync needed.'
+        exit 0
+    }
+    Invoke-DevStackHostsSync
+    exit 0
+}
+
+# B1: The Windows task is allowed to start at user logon, but must NEVER
+# launch the distro at logon or after the user manually terminates it.
+# An idle listener waits for Win32_ProcessStartTrace rather than polling WSL.
+# This Windows PowerShell process uses memory, but makes no periodic WSL calls.
 $sourceId = 'DevStack-WslStart-' + $PID
 $query = "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'wsl.exe'"
 $firstCycle = $true
