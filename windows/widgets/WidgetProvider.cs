@@ -27,6 +27,11 @@ public sealed class WidgetProvider : IWidgetProvider
     private static DateTimeOffset _lastUse = DateTimeOffset.UtcNow;
     private static bool _recovered;
 
+    // TEMPORARY C4 SMOKE TEST: keep native cards static until we verify
+    // they pin, render and survive reopening the Widgets Board on ASUS.
+    // Restore live refresh only after pinning is proven reliable.
+    private static readonly bool StaticPinningSmokeTest = true;
+
     public static AutoResetEvent Wake { get; } = new(false);
 
     public WidgetProvider()
@@ -36,6 +41,7 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public static void Start()
     {
+        if (StaticPinningSmokeTest) return;
         // The timer exists while the provider runs, but it queries Windows only
         // while a widget is active in the board. No polling when the board is hidden.
         _refreshTimer = new Timer(_ => RequestRefresh(), null,
@@ -104,7 +110,8 @@ public sealed class WidgetProvider : IWidgetProvider
             };
             _lastUse = DateTimeOffset.UtcNow;
         }
-        RequestRefresh();
+        SendInitialCard(context.Id, context.DefinitionId);
+        if (!StaticPinningSmokeTest) RequestRefresh();
     }
 
     public void DeleteWidget(string widgetId, string customState)
@@ -130,7 +137,8 @@ public sealed class WidgetProvider : IWidgetProvider
             widget.Active = true;
             _lastUse = DateTimeOffset.UtcNow;
         }
-        RequestRefresh();
+        SendInitialCard(context.Id, context.DefinitionId);
+        if (!StaticPinningSmokeTest) RequestRefresh();
     }
 
     public void Deactivate(string widgetId)
@@ -146,7 +154,22 @@ public sealed class WidgetProvider : IWidgetProvider
 
     public void OnWidgetContextChanged(WidgetContextChangedArgs args)
     {
-        RequestRefresh();
+        if (StaticPinningSmokeTest)
+            SendInitialCard(args.WidgetContext.Id, args.WidgetContext.DefinitionId);
+        else
+            RequestRefresh();
+    }
+
+    private static void SendInitialCard(string widgetId, string definitionId)
+    {
+        // Windows widget-provider guidance sends the first template/data from
+        // CreateWidget synchronously. Do not wait for WSL/network/probe tasks.
+        WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(widgetId)
+        {
+            Template = WidgetCards.InitialTemplate(definitionId),
+            Data = "{}",
+            IsPlaceholderContent = false
+        });
     }
 
     public void OnActionInvoked(WidgetActionInvokedArgs args)
