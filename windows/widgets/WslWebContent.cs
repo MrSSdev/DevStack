@@ -11,7 +11,7 @@ internal static class WslWebContent
 {
     internal const string Origin = "https://devstack-widgets.invalid";
     internal const string Filter = Origin + "/*";
-    internal const string Version = "0.3.1";
+    internal const string Version = "0.3.2";
     private static readonly Dictionary<string, (string File, string Type)> Resources = new()
     {
         ["/wsl/index.html"] = ("index.html", "text/html; charset=utf-8"),
@@ -62,6 +62,22 @@ internal static class WslWebContent
     internal static bool IsStateRead(WidgetResourceRequestedArgs args) =>
         args.Request.Headers.TryGetValue("X-DevStack-View", out var value) && value == "state";
 
+    // A closed set of page observations, not an authorization signal.
+    // Report over the already existing read-only request even if postMessage
+    // itself is missing or throws. No extra polling, raw exceptions or secrets.
+    internal static string? BridgeHealthCode(string? health) => health switch
+    {
+        "not-attempted" => "bridge-js-not-attempted",
+        "missing" => "bridge-js-missing",
+        "listen-error" => "bridge-js-listen-error",
+        "origin-mismatch" => "bridge-js-origin-mismatch",
+        "post-error" => "bridge-js-post-error",
+        "posted" => "bridge-js-posted",
+        "received" => "bridge-js-received",
+        "connected" => "bridge-js-connected",
+        _ => null
+    };
+
     internal static async Task RespondAsync(WidgetResourceRequestedArgs args, Uri? uri, bool allowed, string bootstrap = "{}")
     {
         bool good = allowed && uri is not null && IsLocal(uri) && Resources.TryGetValue(uri.AbsolutePath, out _);
@@ -71,6 +87,11 @@ internal static class WslWebContent
         if (good && uri!.AbsolutePath == "/wsl/index.html")
         {
             bool stateRead = IsStateRead(args);
+            if (stateRead && args.Request.Headers.TryGetValue("X-DevStack-Bridge", out var health))
+            {
+                var code = BridgeHealthCode(health);
+                if (code is not null) WidgetDiagnostics.Write(code, args.WidgetContext.Id);
+            }
             var boot = JsonNode.Parse(bootstrap)?.AsObject() ?? new JsonObject();
             boot["documentUri"] = uri.AbsoluteUri;
             bootstrap = boot.ToJsonString();

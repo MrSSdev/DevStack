@@ -8,6 +8,7 @@
  const targetOrigin=document.documentElement.dataset.origin||location.origin;
  const sourceUrl=boot?.documentUri||location.href;
  let bridge=null,subscribed=null,connected=false,closedByHost=false,readyAttempts=0,retryTimer=null,fallbackTimer=null,requestAbort=null;
+ let bridgeHealth='not-attempted';
  let currentServer=null,lastNativeAt=0;const retiredServers=new Set();
  const cacheKey='devstack-wsl-view-1-'+session;
  // client is a correlation ID, never an authentication or confirmation token.
@@ -19,13 +20,25 @@
  function icon(id,name){$(id).setAttribute('href','#i-'+name);}
  function bindBridge(){
    const candidate=window.chrome?.webview;
-   if(!candidate||typeof candidate.postMessage!=='function'||typeof candidate.addEventListener!=='function')return false;
-   try{if(candidate!==subscribed){candidate.addEventListener('message',receive);subscribed=candidate;}bridge=candidate;return true;}catch{return false;}
+   if(!candidate||typeof candidate.postMessage!=='function'||typeof candidate.addEventListener!=='function'){
+     bridgeHealth='missing';return false;
+   }
+   try{
+     if(candidate!==subscribed){candidate.addEventListener('message',receive);subscribed=candidate;}
+     bridge=candidate;return true;
+   }catch{bridgeHealth='listen-error';return false;}
  }
  function send(kind,extra={}){
    if(!session||!bindBridge())return false;
-   try{bridge.postMessage(JSON.stringify({protocol:1,kind,session,client,seq:++seq,...extra}),targetOrigin);return true;}
-   catch{connected=false;return false;}
+   // WebView2.postMessage accepts one JSON-serializable argument. It is not
+   // Window.postMessage(message, targetOrigin). Never send to a parent frame.
+   // Keep the registered source-origin check without inventing an overload.
+   try{
+     if(new URL(sourceUrl).origin!==targetOrigin){bridgeHealth='origin-mismatch';return false;}
+     bridge.postMessage(JSON.stringify({protocol:1,kind,session,client,seq:++seq,...extra}));
+     if(kind==='ready'&&!connected)bridgeHealth='posted';
+     return true;
+   }catch{bridgeHealth='post-error';connected=false;return false;}
  }
  function cacheView(){
    if(!session||!state.checkedAt||!['running','offline'].includes(state.phase))return;
@@ -58,7 +71,7 @@
    const deadline=setTimeout(()=>abort.abort(),2500);
    try{
      // Only the allowlisted local provider resource. This GET cannot execute commands.
-     const response=await fetch(sourceUrl,{method:'GET',headers:{'X-DevStack-View':'state','Accept':'application/json'},credentials:'omit',cache:'no-store',redirect:'error',signal:abort.signal});
+     const response=await fetch(sourceUrl,{method:'GET',headers:{'X-DevStack-View':'state','X-DevStack-Bridge':bridgeHealth,'Accept':'application/json'},credentials:'omit',cache:'no-store',redirect:'error',signal:abort.signal});
      if(!response.ok||!response.headers.get('content-type')?.includes('application/json'))throw new Error('state response');
      const text=await response.text();if(text.length>32768)throw new Error('state size');
      if(!document.hidden&&!closedByHost)applyState(JSON.parse(text),false);
@@ -171,7 +184,7 @@
    // A delayed GET cannot overwrite a recent native confirmation or grant control.
    if(!native&&connected&&Date.now()-lastNativeAt<25000)return;
    clearTimeout(responseTimer);responseTimer=null;
-   if(native){connected=true;lastNativeAt=Date.now();clearTimeout(retryTimer);retryTimer=null;}
+   if(native){connected=true;bridgeHealth='connected';lastNativeAt=Date.now();clearTimeout(retryTimer);retryTimer=null;}
    Object.assign(state,{phase:msg.phase,active:msg.active===true,canControl:native&&msg.canControl===true,
      metrics:msg.metrics||null,metricsStatus:msg.metricsStatus||'unavailable',checkedAt:msg.checkedAt||null,
      confirmUntil:native?Number(msg.confirmUntil)||0:0,confirmToken:native&&typeof msg.confirmation==='string'?msg.confirmation:null,
@@ -182,7 +195,7 @@
    cacheView();render();
    if(native)send('seen');
  }
- function receive(event){applyState(parseMessage(event?.data),true);}
+ function receive(event){bridgeHealth='received';applyState(parseMessage(event?.data),true);}
  $('mainAction').addEventListener('click',()=>action(({offline:'start',running:'stop-ask',confirm:'stop-confirm',error:'refresh'})[state.phase]||''));
  $('cancelButton').addEventListener('click',()=>action('stop-cancel'));
  $('syncButton').addEventListener('click',()=>action('refresh'));
