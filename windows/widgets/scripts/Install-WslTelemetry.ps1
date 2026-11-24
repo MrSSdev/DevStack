@@ -60,7 +60,7 @@ printf 'Linux metrics socket: active\n'
 # appends CRLF AFTER normalization, corrupting the final shell token.
 # Send exact UTF-8 bytes to stdin; BaseStream also works in PowerShell 5.1.
 $start = [System.Diagnostics.ProcessStartInfo]::new()
-$start.FileName = (Get-Command wsl.exe -CommandType Application -ErrorAction Stop).Source
+$start.FileName = (Get-Command wsl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $start.Arguments = '-d Ubuntu-26.04 -u root -- /bin/sh -s'
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
