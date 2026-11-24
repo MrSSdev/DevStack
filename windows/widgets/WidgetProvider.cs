@@ -1,4 +1,4 @@
-// Windows widget lifecycle + the approved WSL page. DevStack's renderer is unchanged.
+// Native lifecycle and local WSL web bridge. DevStack's renderer is unchanged.
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -21,8 +21,9 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
         public bool WebHidden { get; set; }
         public bool Published { get; set; }
         public bool Ready { get; set; }
+        public bool ContentReady { get; set; }
         public bool Authenticated { get; set; }
-        public string Nonce { get; } = NewToken();
+        public string Nonce { get; init; } = NewToken();
         public string Client { get; set; } = "";
         public long Sequence { get; set; }
         public long Revision { get; set; }
@@ -34,10 +35,10 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     private static readonly object Gate = new();
     private static readonly Dictionary<string, Instance> Widgets = new();
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static readonly string Server = Guid.NewGuid().ToString("N");
     private static Timer? _timer;
-    private static CancellationTokenSource? _visibleSession;
-    private static CancellationTokenSource? _wslSession;
-    private static bool _recovered, _pending, _worker;
+    private static CancellationTokenSource? _visibleSession, _wslSession;
+    private static bool _recovered, _pending, _worker, _wslFresh;
     private static DateTimeOffset _lastUse = DateTimeOffset.UtcNow;
     private static StateProbe.Snapshot? _wsl, _services;
     private static WslResources.Result _resources = WslResources.Empty("unavailable");
@@ -51,8 +52,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     public static void Start()
     {
         lock (Gate) _timer ??= new Timer(_ => RequestRefresh(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        Visibility();
-        RequestRefresh();
+        Visibility(); RequestRefresh();
     }
     public static void Stop()
     {
@@ -60,7 +60,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
         lock (Gate)
         {
             timer = _timer; _timer = null; visible = _visibleSession; _visibleSession = null;
-            wsl = _wslSession; _wslSession = null; _pending = false;
+            wsl = _wslSession; _wslSession = null; _pending = false; _wslFresh = false;
         }
         timer?.Dispose(); Cancel(visible); Cancel(wsl);
     }
@@ -76,18 +76,33 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     private static void Recover()
     {
-        lock (Gate) { if (_recovered) return; _recovered = true; }
+        lock (Gate)
+        {
+            if (_recovered) return;
+            _recovered = true;
+            var cached = WslViewCache.Load();
+            if (cached is not null)
+            {
+                _wsl = new(cached.Running, "", null, null, null, null, cached.CheckedAt);
+                _resources = cached.Resources;
+            }
+        }
+        WidgetDiagnostics.Write("provider-recovered");
         try
         {
             foreach (var info in WidgetManager.GetDefault().GetWidgetInfos())
             {
                 var c = info.WidgetContext;
                 if (!Known(c.DefinitionId)) continue;
+                (string? Nonce, bool Current) resume = c.DefinitionId == WidgetCards.WslId
+                    ? WslWebContent.Resume(info.Template) : (null, false);
                 lock (Gate) Widgets[c.Id] = new Instance { Id = c.Id, Definition = c.DefinitionId,
+                    Nonce = resume.Nonce ?? NewToken(), Published = resume.Current,
                     Size = WidgetDesign.NormalizeSize(c.Size.ToString()), Active = c.IsActive };
+                WidgetDiagnostics.Write(resume.Current ? "url-restored" : "url-needs-publish", c.Id);
             }
         }
-        catch (Exception error) { Trace.TraceWarning("Widget recovery: " + error.GetType().Name); }
+        catch (Exception error) { WidgetDiagnostics.Write("recovery-error", error: error); }
     }
     private static void Visibility()
     {
@@ -97,7 +112,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
             bool visible = Widgets.Values.Any(w => w.Interested);
             bool wslVisible = Widgets.Values.Any(w => w.Interested && w.Definition == WidgetCards.WslId);
             if (visible && _visibleSession is null) _visibleSession = new CancellationTokenSource();
-            if (!visible) { close = _visibleSession; _visibleSession = null; _pending = false; }
+            if (!visible) { close = _visibleSession; _visibleSession = null; _pending = false; _wslFresh = false; }
             if (wslVisible && _wslSession is null) _wslSession = new CancellationTokenSource();
             if (!wslVisible) { closeWsl = _wslSession; _wslSession = null; }
             _timer?.Change(visible ? TimeSpan.FromSeconds(20) : Timeout.InfiniteTimeSpan,
@@ -110,10 +125,13 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
         if (!Known(c.DefinitionId)) return;
         lock (Gate)
         {
-            Widgets[c.Id] = new Instance { Id = c.Id, Definition = c.DefinitionId,
-                Active = true, Size = WidgetDesign.NormalizeSize(c.Size.ToString()) };
+            if (!Widgets.TryGetValue(c.Id, out var widget))
+                Widgets[c.Id] = widget = new Instance { Id = c.Id, Definition = c.DefinitionId };
+            widget.Active = true;
+            widget.Size = WidgetDesign.NormalizeSize(c.Size.ToString());
             _lastUse = DateTimeOffset.UtcNow;
         }
+        WidgetDiagnostics.Write("create", c.Id);
         Visibility(); Publish(c.Id, true); RequestRefresh();
     }
     public void Activate(WidgetContext c)
@@ -127,6 +145,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
             widget.Size = WidgetDesign.NormalizeSize(c.Size.ToString());
             _lastUse = DateTimeOffset.UtcNow;
         }
+        WidgetDiagnostics.Write("activate", c.Id);
         Visibility(); Publish(c.Id, false); RequestRefresh();
     }
     public void Deactivate(string widgetId)
@@ -139,6 +158,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
             }
             _lastUse = DateTimeOffset.UtcNow;
         }
+        WidgetDiagnostics.Write("deactivate", widgetId);
         PushWeb(widgetId); Visibility();
     }
     public void DeleteWidget(string widgetId, string customState)
@@ -158,7 +178,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     private static void Publish(string id, bool first)
     {
-        string? template = null; bool web = false;
+        string? template = null; bool web;
         lock (Gate)
         {
             if (!Widgets.TryGetValue(id, out var widget) || !widget.Interested) return;
@@ -176,37 +196,53 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
             {
                 WidgetManager.GetDefault().UpdateWidget(new WidgetUpdateRequestOptions(id)
                 { Template = template, Data = "{}", IsPlaceholderContent = false });
-                if (web) lock (Gate) { if (Widgets.TryGetValue(id, out var widget)) widget.Published = true; }
+                if (web)
+                {
+                    lock (Gate) { if (Widgets.TryGetValue(id, out var widget)) widget.Published = true; }
+                    WidgetDiagnostics.Write("page-url-published", id);
+                }
             }
-            catch (Exception error) { Trace.TraceWarning("Publish widget: " + error.GetType().Name); }
+            catch (Exception error) { WidgetDiagnostics.Write("publish-error", id, error); }
         }
         if (web) PushWeb(id);
     }
-    private static void PushWeb(string id)
+    private static string BuildWebState(string id, bool native)
     {
-        string data;
         lock (Gate)
         {
-            if (!Widgets.TryGetValue(id, out var widget) || widget.Definition != WidgetCards.WslId || !widget.Ready) return;
+            if (!Widgets.TryGetValue(id, out var widget) || widget.Definition != WidgetCards.WslId) return "{}";
             if (widget.ConfirmUntil <= DateTimeOffset.UtcNow || _wsl?.WslRunning != true)
             { widget.Confirmation = null; widget.ConfirmUntil = default; }
+            bool live = _wslFresh && _wsl is not null && _wsl.CheckedAt >= DateTimeOffset.Now.AddSeconds(-30);
+            bool controls = native && widget.Ready && widget.Interested && widget.Authenticated && live;
             var phase = _operation ?? (_wsl is null ? "checking" : _wsl.WslRunning switch
-                { true => widget.Confirmation is not null ? "confirm" : "running", false => "offline", _ => "error" });
+                { true => controls && widget.Confirmation is not null ? "confirm" : "running", false => "offline", _ => "error" });
             var metrics = _resources;
-            if (_wsl?.WslRunning != true || metrics.CheckedAt < DateTimeOffset.Now.AddSeconds(-30))
-                metrics = WslResources.Empty(_wsl?.WslRunning == false ? "offline" : "unavailable");
-            data = JsonSerializer.Serialize(new
+            if (_wsl?.WslRunning != true) metrics = WslResources.Empty(_wsl?.WslRunning == false ? "offline" : "unavailable");
+            bool metricsStale = metrics.Metrics is not null && (!live || metrics.CheckedAt < DateTimeOffset.Now.AddSeconds(-30));
+            return JsonSerializer.Serialize(new
             {
-                protocol = 1, kind = "state", session = widget.Nonce, revision = ++widget.Revision,
-                active = widget.Interested, canControl = widget.Interested && widget.Authenticated,
-                phase, checkedAt = _wsl?.CheckedAt, message = widget.Message,
-                metrics = metrics.Metrics, metricsStatus = metrics.Status,
-                confirmUntil = widget.Confirmation is null ? 0 : widget.ConfirmUntil.ToUnixTimeMilliseconds(),
-                confirmation = widget.Confirmation
+                protocol = 1, kind = "state", session = widget.Nonce, server = Server, client = widget.Client,
+                revision = ++widget.Revision, transport = native ? "native" : "resource",
+                active = widget.Interested, canControl = controls,
+                phase, cached = !live, checkedAt = _wsl?.CheckedAt, message = widget.Message,
+                metrics = metrics.Metrics, metricsStatus = metricsStale ? "stale" : metrics.Status,
+                confirmUntil = controls && widget.Confirmation is not null ? widget.ConfirmUntil.ToUnixTimeMilliseconds() : 0,
+                confirmation = controls ? widget.Confirmation : null
             }, Json);
         }
-        try { WidgetManager.GetDefault().SendMessageToContent(id, data); }
-        catch (Exception error) { Trace.TraceWarning("WSL content message: " + error.GetType().Name); }
+    }
+    private static void PushWeb(string id)
+    {
+        lock (Gate)
+            if (!Widgets.TryGetValue(id, out var widget) || !widget.Ready) return;
+        var data = BuildWebState(id, true);
+        try
+        {
+            WidgetManager.GetDefault().SendMessageToContent(id, data);
+            WidgetDiagnostics.Write("state-sent", id);
+        }
+        catch (Exception error) { WidgetDiagnostics.Write("state-send-error", id, error); }
     }
     private static void PublishInterested()
     {
@@ -214,17 +250,20 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
         lock (Gate) ids = Widgets.Values.Where(w => w.Interested).Select(w => w.Id).ToArray();
         foreach (var id in ids) Publish(id, false);
     }
-    public void OnResourceRequested(WidgetResourceRequestedArgs args)
+    public async void OnResourceRequested(WidgetResourceRequestedArgs args)
     {
-        Uri? uri = null; bool allowed = false;
+        var deferral = args.GetDeferral();
+        Uri? uri = null; bool allowed = false, read = false; string state = "{}";
+        var id = args.WidgetContext.Id;
         try
         {
             var context = args.WidgetContext;
-            if (context.DefinitionId == WidgetCards.WslId && Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out uri) && WslWebContent.IsLocal(uri))
+            if (context.DefinitionId == WidgetCards.WslId && args.Request.Method == "GET" &&
+                Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out uri) && WslWebContent.IsLocal(uri))
             {
                 lock (Gate)
                 {
-                    if (Widgets.TryGetValue(context.Id, out var widget))
+                    if (Widgets.TryGetValue(id, out var widget))
                     {
                         allowed = true;
                         if (uri.AbsolutePath == "/wsl/index.html")
@@ -234,20 +273,37 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
                             if (allowed)
                             {
                                 widget.Authenticated = string.Equals(query.GetValueOrDefault("auth"), "true", StringComparison.OrdinalIgnoreCase);
-                                widget.Ready = false; widget.Client = ""; widget.Sequence = 0;
-                                widget.Confirmation = null; widget.ConfirmUntil = default;
+                                read = WslWebContent.IsStateRead(args);
+                                if (!read)
+                                {
+                                    widget.Ready = false; widget.Client = ""; widget.Sequence = 0;
+                                    widget.Confirmation = null; widget.ConfirmUntil = default;
+                                }
+                                widget.ContentReady = true;
                             }
                         }
                     }
                 }
             }
-            WslWebContent.Respond(args, uri, allowed);
+            if (allowed && uri?.AbsolutePath == "/wsl/index.html")
+            {
+                state = BuildWebState(id, false);
+                WidgetDiagnostics.Write(read ? "state-resource-read" : "document-served", id);
+            }
+            await WslWebContent.RespondAsync(args, uri, allowed, state);
+            // A resource GET cannot invoke commands. Refresh still requires native visibility.
+            if (allowed && uri?.AbsolutePath == "/wsl/index.html")
+            {
+                if (read) PushWeb(id);
+                RequestRefresh();
+            }
         }
         catch (Exception error)
         {
-            Trace.TraceWarning("WSL resource: " + error.GetType().Name);
-            try { WslWebContent.Respond(args, null, false); } catch { /* host is closing */ }
+            WidgetDiagnostics.Write("resource-error", id, error);
+            try { WslWebContent.Deny(args); } catch { /* host is closing */ }
         }
+        finally { deferral.Complete(); }
     }
     public void OnMessageReceived(WidgetMessageReceivedArgs args)
     {
@@ -257,7 +313,9 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
         try
         {
             using var parsed = JsonDocument.Parse(args.Message);
-            var root = parsed.RootElement;
+            using var unwrapped = parsed.RootElement.ValueKind == JsonValueKind.String
+                ? JsonDocument.Parse(parsed.RootElement.GetString() ?? "null") : null;
+            var root = unwrapped?.RootElement ?? parsed.RootElement;
             if (root.ValueKind != JsonValueKind.Object || root.GetProperty("protocol").GetInt32() != 1) return;
             kind = root.GetProperty("kind").GetString() ?? "";
             var nonce = root.GetProperty("session").GetString();
@@ -266,11 +324,15 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
             if (client is null || client.Length > 80 || sequence <= 0) return;
             lock (Gate)
             {
-                if (!Widgets.TryGetValue(id, out var widget) || !widget.Active || nonce != widget.Nonce) return;
+                if (!Widgets.TryGetValue(id, out var widget) || nonce != widget.Nonce)
+                { WidgetDiagnostics.Write("message-session-rejected", id); return; }
+                if (kind is not ("ready" or "hidden" or "action" or "seen" or "diagnostic")) return;
                 if (kind == "ready")
                 {
                     if (client != widget.Client) { widget.Client = client; widget.Sequence = 0; widget.Confirmation = null; widget.ConfirmUntil = default; }
-                    widget.Ready = true; widget.WebHidden = false;
+                    // Remember early hello, but never poll or enable commands before Activate.
+                    widget.Ready = true; widget.ContentReady = true; widget.WebHidden = false;
+                    WidgetDiagnostics.Write(widget.Active ? "hello-active" : "hello-before-activate", id);
                 }
                 if (!widget.Ready || widget.Client != client || sequence <= widget.Sequence) return;
                 widget.Sequence = sequence; _lastUse = DateTimeOffset.UtcNow;
@@ -282,7 +344,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
                 {
                     if (!widget.Interested) return;
                     verb = root.GetProperty("verb").GetString() ?? "";
-                    if (verb != "refresh" && !widget.Authenticated) return;
+                    if (verb != "refresh" && (!widget.Authenticated || !_wslFresh)) return;
                     if (verb == "stop-confirm")
                     {
                         confirmation = root.GetProperty("confirmation").GetString() ?? "";
@@ -291,15 +353,16 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
                 }
             }
         }
-        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or OverflowException) { return; }
+        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or OverflowException)
+        { WidgetDiagnostics.Write("message-format-rejected", id, error); return; }
+        if (kind == "seen") { WidgetDiagnostics.Write("state-seen-by-page", id); return; }
+        if (kind == "diagnostic") { WidgetDiagnostics.Write("page-error-reported", id); return; }
         if (kind is "ready" or "hidden") { Visibility(); PushWeb(id); if (kind == "ready") RequestRefresh(); }
         else if (kind == "action") HandleAction(id, verb);
     }
     public void OnActionInvoked(WidgetActionInvokedArgs args)
     {
-        // WSL controls use the authenticated, per-instance web bridge only.
-        // Ignore obsolete Action.Execute messages cached from the previous UI.
-        // DevStack uses native Action.OpenUrl, which the host handles directly.
+        // Obsolete Action.Execute is ignored. DevStack's Action.OpenUrl is host-owned.
     }
     private static void HandleAction(string id, string verb)
     {
@@ -347,26 +410,25 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
             }
             if (current.WslRunning != !start)
             {
-                outcome = current.WslRunning is null ? "Nie mo\u017cna potwierdzi\u0107 stanu WSL." : start ? "Ubuntu ju\u017c dzia\u0142a." : "Ubuntu jest ju\u017c zatrzymane.";
-                lock (Gate) _wsl = current;
+                outcome = current.WslRunning is null ? "Nie można potwierdzić stanu WSL." : start ? "Ubuntu już działa." : "Ubuntu jest już zatrzymane.";
+                lock (Gate) { _wsl = current; _wslFresh = true; }
                 return;
             }
-            // These are deliberate user commands. Once issued, hiding the UI
-            // cannot undo Start/Stop; complete the command without background polling.
+            // Only explicit, confirmed user actions reach these calls. Never retry a command.
             var command = start ? await StateProbe.StartAsync() : await StateProbe.StopAsync();
-            if (command.ExitCode != 0) outcome = "Polecenie WSL nie powiod\u0142o si\u0119 (" + command.ExitCode + ").";
+            if (command.ExitCode != 0) outcome = "Polecenie WSL nie powiodło się (" + command.ExitCode + ").";
             CancellationToken verify;
             lock (Gate) verify = _visibleSession?.Token ?? new CancellationToken(true);
             if (!verify.IsCancellationRequested)
             {
                 var actual = await StateProbe.CaptureWslOnlyAsync(verify);
-                lock (Gate) { _wsl = actual; _services = actual.WslRunning == false ? actual : null; }
+                lock (Gate) { _wsl = actual; _wslFresh = true; _services = actual.WslRunning == false ? actual : null; }
                 if (command.ExitCode == 0 && actual.WslRunning != start) outcome = "Stan Ubuntu wymaga ponownego odczytu.";
             }
-            else lock (Gate) { _wsl = null; _services = null; }
+            else lock (Gate) { _wslFresh = false; _services = null; }
         }
-        catch (OperationCanceledException) { /* panel hidden before command or during verification */ }
-        catch (Exception error) { outcome = "B\u0142\u0105d operacji: " + error.GetType().Name; }
+        catch (OperationCanceledException) { /* hidden before command or during verification */ }
+        catch (Exception error) { outcome = "Błąd operacji: " + error.GetType().Name; }
         finally
         {
             lock (Gate)
@@ -400,7 +462,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
             }
             try { await RefreshAsync(epoch, token); }
             catch (OperationCanceledException) { }
-            catch (Exception error) { Trace.TraceWarning("Widget refresh: " + error.GetType().Name); }
+            catch (Exception error) { WidgetDiagnostics.Write("refresh-error", error: error); }
         }
     }
     private static bool Current(long epoch, CancellationToken token)
@@ -416,17 +478,18 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
         string[] ids;
         lock (Gate)
         {
-            _wsl = snapshot;
+            _wsl = snapshot; _wslFresh = true;
             if (snapshot.WslRunning != true) { _services = snapshot; _resources = WslResources.Empty(snapshot.WslRunning == false ? "offline" : "unavailable"); }
             ids = Widgets.Values.Where(w => w.Interested).Select(w => w.Id).ToArray();
         }
-        // Same fast status path as before; optional metrics never delay the status.
+        WslViewCache.Save(snapshot, _resources);
+        WidgetDiagnostics.Write("wsl-status-read");
         foreach (var id in ids) Publish(id, false);
         var work = new List<Task>();
         lock (Gate)
         {
             if (snapshot.WslRunning == true && Widgets.Values.Any(w => w.Interested && w.Definition == WidgetCards.ServicesId)) work.Add(ServicesAsync(snapshot, epoch, token));
-            if (snapshot.WslRunning == true && _wslSession is not null && Widgets.Values.Any(w => w.Interested && w.Ready && w.Definition == WidgetCards.WslId))
+            if (snapshot.WslRunning == true && _wslSession is not null && Widgets.Values.Any(w => w.Interested && w.ContentReady && w.Definition == WidgetCards.WslId))
                 work.Add(ResourcesAsync(snapshot, epoch, token, _wslSession.Token));
         }
         await Task.WhenAll(work);
@@ -446,6 +509,8 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
         if (linked.IsCancellationRequested || !Current(epoch, token)) return;
         string[] ids;
         lock (Gate) { _resources = resources; ids = Widgets.Values.Where(w => w.Interested && w.Definition == WidgetCards.WslId).Select(w => w.Id).ToArray(); }
+        WslViewCache.Save(snapshot, resources);
+        WidgetDiagnostics.Write("metrics-" + resources.Status);
         foreach (var id in ids) PushWeb(id);
     }
 }

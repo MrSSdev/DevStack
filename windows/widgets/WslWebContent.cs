@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Windows.Widgets.Providers;
@@ -5,11 +6,12 @@ using Windows.Storage.Streams;
 
 namespace DevStack.Widgets;
 
-/// <summary>Packaged HTML, not a Linux-hosted page; all resources are allowlisted.</summary>
+/// <summary>Versioned, self-contained local page. Never fall through to the Internet.</summary>
 internal static class WslWebContent
 {
     internal const string Origin = "https://devstack-widgets.invalid";
     internal const string Filter = Origin + "/*";
+    internal const string Version = "0.3.1";
     private static readonly Dictionary<string, (string File, string Type)> Resources = new()
     {
         ["/wsl/index.html"] = ("index.html", "text/html; charset=utf-8"),
@@ -18,48 +20,91 @@ internal static class WslWebContent
     };
     internal static string Template(string nonce, StateProbe.Snapshot? snapshot)
     {
-        var card = new JsonObject
+        return new JsonObject
         {
             ["type"] = "AdaptiveCard", ["version"] = "1.6", ["header"] = null,
             ["body"] = new JsonArray
             {
                 new JsonObject { ["type"] = "TextBlock", ["text"] = "Ubuntu", ["weight"] = "Bolder" },
                 new JsonObject { ["type"] = "TextBlock", ["wrap"] = true,
-                    ["text"] = "Ten panel Windows nie udostepnia zawartosci HTML. To widok zastepczy, nie zatwierdzony prototyp.", ["color"] = "Warning" },
-                new JsonObject { ["type"] = "TextBlock", ["wrap"] = true,
-                    ["text"] = "Wymagany host Web Widgets w EOG. Zaktualizuj Windows Web Experience Pack i otworz panel ponownie." }
+                    ["text"] = "Ten panel Windows nie udostepnia zawartosci HTML. To widok zastepczy, nie zatwierdzony prototyp.", ["color"] = "Warning" }
             },
             ["metadata"] = new JsonObject
             {
-                ["webUrl"] = Origin + "/wsl/index.html?session=" + nonce +
+                ["webUrl"] = Origin + "/wsl/index.html?v=" + Version + "&session=" + nonce +
                     "&theme=${$host.hostTheme}&auth=${$host.isUserContextAuthenticated}"
             }
-        };
-        return card.ToJsonString();
+        }.ToJsonString();
     }
 
-    internal static Dictionary<string, string> Query(Uri uri) => uri.Query.TrimStart('?')
-        .Split('&', StringSplitOptions.RemoveEmptyEntries)
-        .Select(p => p.Split('=', 2))
-        .GroupBy(p => Uri.UnescapeDataString(p[0]), StringComparer.Ordinal)
-        .Where(g => g.Count() == 1)
-        .ToDictionary(g => g.Key, g => g.First().Length > 1 ? Uri.UnescapeDataString(g.First()[1]) : "", StringComparer.Ordinal);
-
-    internal static bool IsLocal(Uri uri) => uri.Scheme == "https" &&
-        uri.Host == "devstack-widgets.invalid" && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo);
-
-    internal static void Respond(WidgetResourceRequestedArgs args, Uri? uri, bool allowed)
+    // Restore the host-owned URL instead of regenerating it at every COM restart.
+    // No command capability or authentication is restored by this method.
+    internal static (string? Nonce, bool Current) Resume(string? template)
     {
-        // Always supply a response, including failures: never fall through to DNS/network.
-        var good = allowed && uri is not null && IsLocal(uri) && Resources.TryGetValue(uri.AbsolutePath, out _);
+        if (string.IsNullOrEmpty(template) || template.Length > 32768) return (null, false);
+        try
+        {
+            using var doc = JsonDocument.Parse(template);
+            var raw = doc.RootElement.GetProperty("metadata").GetProperty("webUrl").GetString();
+            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || !IsLocal(uri) || uri.AbsolutePath != "/wsl/index.html") return (null, false);
+            var q = Query(uri); var nonce = q.GetValueOrDefault("session");
+            if (nonce?.Length != 64 || nonce.Any(c => !"0123456789abcdef".Contains(c))) return (null, false);
+            return (nonce, q.GetValueOrDefault("v") == Version);
+        }
+        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or UriFormatException) { return (null, false); }
+    }
+    internal static Dictionary<string, string> Query(Uri uri) => uri.Query.TrimStart('?')
+        .Split('&', StringSplitOptions.RemoveEmptyEntries).Select(p => p.Split('=', 2))
+        .GroupBy(p => Uri.UnescapeDataString(p[0]), StringComparer.Ordinal).Where(g => g.Count() == 1)
+        .ToDictionary(g => g.Key, g => g.First().Length > 1 ? Uri.UnescapeDataString(g.First()[1]) : "", StringComparer.Ordinal);
+    internal static bool IsLocal(Uri uri) => uri.Scheme == "https" && uri.Host == "devstack-widgets.invalid" &&
+        uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo);
+    internal static bool IsStateRead(WidgetResourceRequestedArgs args) =>
+        args.Request.Headers.TryGetValue("X-DevStack-View", out var value) && value == "state";
+
+    internal static async Task RespondAsync(WidgetResourceRequestedArgs args, Uri? uri, bool allowed, string bootstrap = "{}")
+    {
+        bool good = allowed && uri is not null && IsLocal(uri) && Resources.TryGetValue(uri.AbsolutePath, out _);
         var entry = good ? Resources[uri!.AbsolutePath] : ("unavailable.html", "text/html; charset=utf-8");
-        var stream = RandomAccessStreamReference.CreateFromUri(new Uri("ms-appx:///Web/" + entry.Item1));
-        var response = new WidgetResourceResponse(stream, good ? "OK" : "Forbidden", good ? 200 : 403);
-        response.Headers.Add("Content-Type", entry.Item2);
-        response.Headers.Add("Cache-Control", "no-store");
+        var directory = Path.Combine(AppContext.BaseDirectory, "Web");
+        WidgetResourceResponse response;
+        if (good && uri!.AbsolutePath == "/wsl/index.html")
+        {
+            bool stateRead = IsStateRead(args);
+            var boot = JsonNode.Parse(bootstrap)?.AsObject() ?? new JsonObject();
+            boot["documentUri"] = uri.AbsoluteUri;
+            bootstrap = boot.ToJsonString();
+            string text = stateRead ? bootstrap : (await File.ReadAllTextAsync(Path.Combine(directory, entry.Item1)))
+                .Replace("<!--WSL_BOOTSTRAP-->", "<script id=\"wsl-bootstrap\" type=\"application/json\">" + bootstrap + "</script>", StringComparison.Ordinal);
+            var stream = new InMemoryRandomAccessStream();
+            using (var writer = new DataWriter(stream.GetOutputStreamAt(0)))
+            {
+                writer.WriteBytes(Encoding.UTF8.GetBytes(text));
+                await writer.StoreAsync();
+                writer.DetachStream();
+            }
+            stream.Seek(0);
+            response = new WidgetResourceResponse(RandomAccessStreamReference.CreateFromStream(stream), "OK", 200);
+            response.Headers.Add("Content-Type", stateRead ? "application/json; charset=utf-8" : entry.Item2);
+            response.Headers.Add("Cache-Control", "private, no-cache");
+            if (!stateRead) response.Headers.Add("Content-Security-Policy", await File.ReadAllTextAsync(Path.Combine(directory, "csp.txt")));
+        }
+        else
+        {
+            var content = RandomAccessStreamReference.CreateFromUri(new Uri("ms-appx:///Web/" + entry.Item1));
+            response = new WidgetResourceResponse(content, good ? "OK" : "Forbidden", good ? 200 : 403);
+            response.Headers.Add("Content-Type", entry.Item2);
+            response.Headers.Add("Cache-Control", good ? "private, max-age=3600" : "no-store");
+        }
         response.Headers.Add("X-Content-Type-Options", "nosniff");
         response.Headers.Add("Referrer-Policy", "no-referrer");
-        response.Headers.Add("Content-Security-Policy", "default-src 'none'; style-src 'self'; script-src 'self'; img-src data: 'self'; connect-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'");
+        args.Response = response;
+    }
+    internal static void Deny(WidgetResourceRequestedArgs args)
+    {
+        var response = new WidgetResourceResponse(RandomAccessStreamReference.CreateFromUri(new Uri("ms-appx:///Web/unavailable.html")), "Forbidden", 403);
+        response.Headers.Add("Content-Type", "text/html; charset=utf-8");
+        response.Headers.Add("Cache-Control", "no-store");
         args.Response = response;
     }
 }

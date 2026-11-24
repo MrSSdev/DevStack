@@ -4,5 +4,8 @@
     <Compile Include="../../WidgetProvider.cs" Link="WidgetProvider.cs" />
     <Compile Include="../../WslWebContent.cs" Link="WslWebContent.cs" />
     <Compile Include="../../WslResources.cs" Link="WslResources.cs" />
+    <Compile Include="../../WslViewCache.cs" Link="WslViewCache.cs" />
+    <Compile Include="../../WidgetDiagnostics.cs" Link="WidgetDiagnostics.cs" />
+    <Content Include="../../Web/*.*" Link="Web/%(Filename)%(Extension)" CopyToOutputDirectory="Always" />
   </ItemGroup>
 </Project>
