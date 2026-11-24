@@ -33,5 +33,5 @@ jobs:
       - name: Test original CRLF failure and fixed install/retry/remove
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           ./windows/widgets/tests/Test-TelemetryInstaller.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Telemetry installer transport tests failed' }
