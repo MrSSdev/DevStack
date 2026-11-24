@@ -89,14 +89,15 @@ public static class FakeWsl {
 '@
     Add-Type -TypeDefinition $source -Language CSharp -OutputAssembly (Join-Path $fakeDir 'wsl.exe') -OutputType ConsoleApplication
     $env:PATH = $fakeDir + ';' + $oldPath
-    Assert ((Get-Command wsl.exe -CommandType Application).Source -eq (Join-Path $fakeDir 'wsl.exe')) 'Only fake WSL can execute'
+    $resolved = Get-Command wsl.exe -CommandType Application | Select-Object -First 1
+    Assert ($resolved.Source -eq (Join-Path $fakeDir 'wsl.exe')) 'Only fake WSL can execute'
     $installer = Join-Path $bundle 'Install-WslTelemetry.ps1'
     Copy-Item (Join-Path $root 'scripts\Install-WslTelemetry.ps1') $installer
     Copy-Item (Join-Path $root 'telemetry') (Join-Path $bundle 'telemetry') -Recurse
     $repro = Join-Path $temp 'old-pipeline.ps1'
     [IO.File]::WriteAllText($repro, "'systemctl is-active --quiet devstack-widget-metrics.socket' | wsl.exe -d Ubuntu-26.04 -u root -- /bin/sh -s`nexit `$LASTEXITCODE`n", $utf8)
     $engines = @((Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'))
-    $modern = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+    $modern = Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($modern) { $engines += $modern.Source }
     foreach ($engine in $engines) {
         $case = Join-Path $temp ([Guid]::NewGuid().ToString('N'))
