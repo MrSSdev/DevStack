@@ -36,11 +36,10 @@ html[data-host="windows"] .widget{position:relative;inset:auto;width:100%;height
 html[data-host="windows"] #menuButton{visibility:hidden}
 @media(max-height:435px){html[data-host="windows"] .widget-header{display:none}}
 .widget.paused *{animation-play-state:paused!important}
-/* 0.3.4: the ASUS captures show a lighter initial host tile than the WebView
-   backing. An 8% white fill maps neutral #202020 to #323232 and keeps its tint.
-   This is background alpha only, never opacity on content. It cannot style
-   Windows' pre-document spinner or guarantee identical host compositing. */
-html[data-host="windows"][data-theme="dark"] .widget{background:rgba(255,255,255,0.08)}
+/* 0.3.3: expose the Windows host surface, not a guessed flat screenshot colour.
+   Only the outer dark-theme background changes. Do not lower widget opacity:
+   approved inner cards, text, controls and the light theme remain unchanged. */
+html[data-host="windows"][data-theme="dark"] .widget{background:transparent}
 '''
     out=ROOT/'Web';out.mkdir(exist_ok=True)
     # Prevent Windows checkout line endings from invalidating CSP hashes.
