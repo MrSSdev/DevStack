@@ -45,16 +45,61 @@ printf '%s\n' '$token' > /etc/devstack-widgets/auth.token
 chmod 0644 /usr/local/lib/devstack-widgets/collector.py /etc/systemd/system/devstack-widget-metrics.socket /etc/systemd/system/devstack-widget-metrics@.service
 chmod 0600 /etc/devstack-widgets/auth.token
 systemctl daemon-reload
-systemctl enable --now devstack-widget-metrics.socket
-systemctl is-active --quiet devstack-widget-metrics.socket
+if ! systemctl enable --now devstack-widget-metrics.socket; then
+    systemctl --no-pager --full status devstack-widget-metrics.socket >&2 || true
+    exit 1
+fi
+if ! systemctl is-active --quiet devstack-widget-metrics.socket; then
+    systemctl --no-pager --full status devstack-widget-metrics.socket >&2 || true
+    exit 1
+fi
+printf 'Linux metrics socket: active\n'
 "@
 }
-$previousEncoding = $OutputEncoding
+# Do not pipe a PowerShell string into sh. On Windows the native pipeline
+# appends CRLF AFTER normalization, corrupting the final shell token.
+# Send exact UTF-8 bytes to stdin; BaseStream also works in PowerShell 5.1.
+$start = [System.Diagnostics.ProcessStartInfo]::new()
+$start.FileName = (Get-Command wsl.exe -CommandType Application -ErrorAction Stop).Source
+$start.Arguments = '-d Ubuntu-26.04 -u root -- /bin/sh -s'
+$start.UseShellExecute = $false
+$start.CreateNoWindow = $true
+$start.RedirectStandardInput = $true
+$start.RedirectStandardOutput = $true
+$start.RedirectStandardError = $true
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+$start.StandardOutputEncoding = $utf8
+$start.StandardErrorEncoding = $utf8
+$linuxScript = (($script -replace "`r`n", "`n") -replace "`r", "`n").TrimEnd([char]10) + "`n"
+$payload = $utf8.GetBytes($linuxScript)
+$process = [System.Diagnostics.Process]::new()
+$process.StartInfo = $start
 try {
-    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    ($script -replace "`r`n", "`n") | & wsl.exe -d $Distro -u root -- /bin/sh -s
-    if ($LASTEXITCODE -ne 0) { throw 'Linux collector setup failed; Windows settings were not changed.' }
-} finally { $OutputEncoding = $previousEncoding }
+    if (!$process.Start()) { throw 'Could not start the WSL setup process.' }
+    # Drain both pipes concurrently so diagnostics cannot fill either buffer.
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $inputStream = $process.StandardInput.BaseStream
+    try {
+        $inputStream.Write($payload, 0, $payload.Length)
+        $inputStream.Flush()
+    } finally {
+        $inputStream.Close()
+    }
+    if (!$process.WaitForExit(120000)) {
+        try { $process.Kill() } catch { }
+        throw 'Linux collector setup timed out. Some Linux files may already be installed; Windows settings were not changed.'
+    }
+    $output = $stdout.GetAwaiter().GetResult()
+    $errors = $stderr.GetAwaiter().GetResult()
+    if (![string]::IsNullOrWhiteSpace($output)) { Write-Host $output.TrimEnd() }
+    if (![string]::IsNullOrWhiteSpace($errors)) { Write-Host $errors.TrimEnd() }
+    if ($process.ExitCode -ne 0) {
+        throw ("Linux collector setup failed (exit {0}). Some Linux files may already be installed; Windows settings were not changed. See diagnostics above." -f $process.ExitCode)
+    }
+} finally {
+    $process.Dispose()
+}
 if ($Remove) {
     Remove-Item -LiteralPath $ConfigPath -Force -ErrorAction SilentlyContinue
     Write-Host 'Read-only metrics removed. WSL controls remain available.'
