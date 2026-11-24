@@ -1,0 +1,14 @@
+[Unit]
+Description=DevStack WSL widget read-only metrics listener
+
+[Socket]
+ListenStream=127.0.0.1:43871
+Accept=yes
+NoDelay=yes
+Backlog=8
+MaxConnections=8
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=120
+
+[Install]
+WantedBy=sockets.target
