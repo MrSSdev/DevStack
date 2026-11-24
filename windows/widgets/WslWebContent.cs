@@ -11,7 +11,7 @@ internal static class WslWebContent
 {
     internal const string Origin = "https://devstack-widgets.invalid";
     internal const string Filter = Origin + "/*";
-    internal const string Version = "0.3.2";
+    internal const string Version = "0.3.3";
     private static readonly Dictionary<string, (string File, string Type)> Resources = new()
     {
         ["/wsl/index.html"] = ("index.html", "text/html; charset=utf-8"),
