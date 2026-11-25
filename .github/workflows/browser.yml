@@ -59,6 +59,7 @@ jobs:
           python3 - <<'PY'
           import os, secrets, subprocess
           password = secrets.token_urlsafe(32)
+          print('::add-mask::' + password)
           subprocess.run(['sudo', 'php', '-r', '$p = stream_get_contents(STDIN); file_put_contents("/etc/devstack/auth.hash", password_hash($p, PASSWORD_DEFAULT)); chown("/etc/devstack/auth.hash", "root"); chgrp("/etc/devstack/auth.hash", "devstackweb"); chmod("/etc/devstack/auth.hash", 0640);'], input=password, text=True, check=True)
           subprocess.run(['sudo', 'sh', '-c', 'printf "required\\n" > /etc/devstack/auth.mode'], check=True)
           with open(os.environ['GITHUB_ENV'], 'a') as f:
@@ -72,6 +73,7 @@ jobs:
       - name: Exercise actual HTTPS, PHP, helper, services and Mailpit
         env:
           DEVSTACK_E2E_ISOLATED: '1'
+          NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/devstack-browser.crt
         run: /tmp/devstack-browser-venv/bin/python tests/browser-smoke.py
       - name: Diagnostics on failure
         if: failure()

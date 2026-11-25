@@ -154,6 +154,7 @@ class BrowserAcceptance(unittest.TestCase):
                         if route=='new':
                             self.page.get_by_role('combobox',name='Framework',exact=True).select_option('laravel')
                             expect(self.page.get_by_role('combobox',name='Technologia frontendowa')).to_be_enabled(timeout=60000)
+                            self.page.get_by_role('combobox',name='Technologia frontendowa').select_option('livewire')
                             self.shot(prefix+'new-laravel')
                         if route=='mail':
                             self.page.get_by_role('button',name='Konfiguracja poczty').click()
@@ -285,6 +286,12 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.get_by_role('textbox',name='Nazwa projektu',exact=True).fill('New browser fixture')
         expect(self.page.get_by_role('textbox',name='Identyfikator katalogu')).to_have_value('new-browser-fixture')
         expect(self.page.get_by_role('textbox',name='Domena .test')).to_have_value('new-browser-fixture.test')
+        expect(self.page.get_by_role('checkbox',name='Lokalna poczta testowa',exact=True)).not_to_be_checked()
+        self.page.get_by_role('checkbox',name='Lokalna poczta testowa',exact=True).check()
+        # Exercise the compact page-header submit button outside the form.
+        self.page.get_by_role('button',name='Utwórz projekt',exact=True).first.click()
+        expect(self.page.get_by_role('heading',name='New browser fixture',exact=True)).to_be_visible(timeout=30000)
+        self.goto('new')
         self.page.get_by_role('combobox',name='Framework',exact=True).select_option('laravel')
         self.page.get_by_role('button',name='Zarządzaj oficjalnym instalatorem w ustawieniach').click()
         expect(self.page.get_by_role('heading',name='Narzędzia instalacyjne')).to_be_visible()

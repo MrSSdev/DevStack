@@ -23,7 +23,8 @@ resolving to loopback, and the local CA trusted by the OS and Chromium. Install
 Playwright 1.60.0 and Chromium in a Python virtual environment, then run:
 
 ```bash
-DEVSTACK_E2E_ISOLATED=1 DEVSTACK_E2E_PASSWORD='<fixture panel password>' \
+NODE_EXTRA_CA_CERTS='/path/to/public/rootCA.pem' \
+  DEVSTACK_E2E_ISOLATED=1 DEVSTACK_E2E_PASSWORD='<fixture panel password>' \
   python tests/browser-smoke.py
 ```
 
