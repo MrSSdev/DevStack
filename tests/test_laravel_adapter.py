@@ -7,25 +7,26 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "framework-installers"))
 from laravel.adapter import (
-    AdapterError, DB_KEYS, LaravelAdapter, environment_values, project_path,
+    AdapterError, LaravelAdapter, environment_values, project_path,
     rewrite_environment, scaffold_argv, tool_argv, require_supported_frontend,
 )
 
 
 class LaravelAdapterTests(unittest.TestCase):
-    def test_official_packages_skip_all_composer_hooks(self):
-        for kit, package, constraint in (
-            ("none", "laravel/laravel", "^13.0"),
-            ("livewire", "laravel/livewire-starter-kit", "dev-main"),
-        ):
-            argv = scaffold_argv("/usr/bin/composer", "demo-app", kit)
-            self.assertEqual(argv[:5], ["/usr/bin/composer", "create-project", package, "demo-app", constraint])
-            self.assertIn("--no-scripts", argv)
-            self.assertIn("--no-interaction", argv)
-            self.assertNotIn("--force", argv)
+    def test_official_installer_never_forces_overwrite(self):
+        argv = scaffold_argv("/home/dev/.config/composer/vendor/bin/laravel", "demo-app", "livewire")
+        self.assertEqual(argv[:3], ["/home/dev/.config/composer/vendor/bin/laravel", "new", "demo-app"])
+        self.assertIn("--livewire", argv)
+        self.assertIn("--no-interaction", argv)
+        self.assertIn("--database=sqlite", argv)
+        self.assertIn("--database=mariadb", scaffold_argv("laravel", "demo", "livewire", "mariadb"))
+        with self.assertRaises(AdapterError):
+            scaffold_argv("laravel", "demo", "livewire", "other")
+        self.assertNotIn("--force", argv)
+        self.assertNotIn("--livewire", scaffold_argv("laravel", "demo", "none"))
         for slug, kit in (("../demo", "none"), ("--force", "none"), ("demo", "--force")):
             with self.assertRaises(AdapterError):
-                scaffold_argv("composer", slug, kit)
+                scaffold_argv("laravel", slug, kit)
 
     def test_existing_directory_and_symlink_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -52,15 +53,10 @@ class LaravelAdapterTests(unittest.TestCase):
         values = environment_values(data)
         actual = rewrite_environment("APP_KEY=unchanged\nAPP_URL=http://localhost\n"
                                      "DB_CONNECTION=sqlite\n# DB_HOST=localhost\n"
-                                     "DB_PASSWORD=old\nDB_PASSWORD=duplicate\n", values, commented=DB_KEYS)
+                                     "DB_PASSWORD=old\nDB_PASSWORD=duplicate\n", values)
         self.assertIn("APP_KEY=unchanged\n", actual)
         self.assertIn("APP_URL=https://demo.test\n", actual)
-        self.assertIn("DB_CONNECTION=sqlite\n", actual)
-        self.assertIn("# DB_DATABASE=demo_db\n", actual)
-        self.assertIn("# DB_USERNAME=demo_user\n", actual)
-        self.assertIn("# DB_PASSWORD=example_generated_token\n", actual)
-        self.assertNotIn("\nDB_DATABASE=", actual)
-        self.assertNotIn("DB_CONNECTION", values)
+        self.assertIn("DB_CONNECTION=mariadb\n", actual)
         self.assertEqual(actual.count("DB_PASSWORD="), 1)
         self.assertNotIn("duplicate", actual)
         self.assertNotIn("DB_CONNECTION", environment_values({"url": "https://demo.test"}))
@@ -75,15 +71,11 @@ class LaravelAdapterTests(unittest.TestCase):
             root = home / "projects" / "demo"
             root.mkdir(parents=True)
             env = root / ".env"
-            env.write_text("APP_KEY=unchanged\nDB_CONNECTION=sqlite\n")
+            env.write_text("APP_KEY=unchanged\n")
             adapter = LaravelAdapter(home, io.StringIO())
-            self.assertEqual(adapter.configure("demo", {"url": "https://demo.test", "db_name": "demo_db",
-                                                                "db_user": "demo_user", "db_password": "example_token"}), {"configured": True})
+            self.assertEqual(adapter.configure("demo", {"url": "https://demo.test"}), {"configured": True})
             self.assertEqual(env.stat().st_mode & 0o777, 0o600)
             self.assertIn("APP_KEY=unchanged\n", env.read_text())
-            self.assertIn("# DB_PASSWORD=example_token\n", env.read_text())
-            self.assertIn("DB_CONNECTION=sqlite\n", env.read_text())
-            self.assertFalse((root / ".env.example").exists())
             env.unlink()
             env.symlink_to(home / "other")
             with self.assertRaises(AdapterError):
@@ -113,46 +105,48 @@ class LaravelAdapterTests(unittest.TestCase):
             adapter = LaravelAdapter(home, io.StringIO())
             with patch("laravel.adapter.shutil.which", side_effect=lambda tool: "/usr/bin/" + tool), \
                  patch.object(adapter, "command", side_effect=["v22.22.1", "9.2.0"]) as command, \
-                 patch.object(adapter, "composer") as composer:
+                 patch.object(adapter, "installer") as installer:
                 with self.assertRaises(AdapterError) as error:
-                    adapter.scaffold("demo", "livewire")
+                    adapter.scaffold("demo", "livewire", "sqlite", {"url": "https://demo.test"})
                 self.assertEqual(error.exception.code, "frontend_npm")
-                composer.assert_not_called()
+                installer.assert_not_called()
                 self.assertEqual(command.call_count, 2)
             self.assertFalse((home / "projects" / "demo").exists())
 
-    def test_scaffold_only_prepares_environment_without_migrations(self):
-        import sqlite3
+    def test_scaffold_passes_mariadb_settings_only_in_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = pathlib.Path(tmp)
             (home / "projects").mkdir()
             root = home / "projects" / "demo"
             adapter = LaravelAdapter(home, io.StringIO())
+            settings = {"url": "https://demo.test", "db_name": "demo_db",
+                        "db_user": "demo_user", "db_password": "example_token"}
             calls = []
             def fake_command(argv, **kwargs):
-                calls.append(argv)
-                if "create-project" in argv:
-                    for directory in ("database", "vendor", "public/build", "app/Console/Commands"):
+                calls.append((argv, kwargs))
+                if "new" in argv:
+                    for directory in ("vendor", "public/build"):
                         (root / directory).mkdir(parents=True)
-                    for file in ("artisan", "composer.json", "public/index.php", "vendor/autoload.php",
-                                 "public/build/manifest.json", "rename_livewire_files.php",
-                                 "app/Console/Commands/InstallFeaturesCommand.php"):
+                    for file in ("artisan", "composer.json", "public/index.php",
+                                 "vendor/autoload.php", "public/build/manifest.json"):
                         (root / file).write_text("fixture")
-                    (root / ".env.example").write_text("APP_KEY=\nDB_CONNECTION=sqlite\n")
-                return ""
+                    (root / ".env").write_text("APP_KEY=unchanged\nDB_CONNECTION=mariadb\nDB_USERNAME=root\n")
+                    (root / ".env.example").write_text("DB_PASSWORD=\n")
+                return "0001_create_users ... [1] Ran" if "migrate:status" in argv else ""
             with patch.object(adapter, "require_frontend_tools"), \
-                 patch("laravel.adapter.shutil.which", side_effect=lambda tool: "/usr/bin/" + tool), \
+                 patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
+                 patch("laravel.adapter.shutil.which", return_value="/usr/bin/php"), \
                  patch.object(adapter, "command", side_effect=fake_command):
-                self.assertEqual(adapter.scaffold("demo", "livewire"), {"scaffolded": True})
-            self.assertIn("--no-scripts", calls[0])
-            self.assertTrue(all("migrate" not in arg for argv in calls for arg in argv))
-            self.assertFalse(hasattr(adapter, "migrate"))
-            db = root / "database/database.sqlite"
-            adapter.verify_empty_sqlite(db)
-            with sqlite3.connect(db) as conn:
-                conn.execute("CREATE TABLE unexpected (id INTEGER)")
-            with self.assertRaisesRegex(AdapterError, "Unexpected database schema"):
-                adapter.verify_empty_sqlite(db)
+                self.assertEqual(adapter.scaffold("demo", "livewire", "mariadb", settings),
+                                 {"scaffolded": True, "driver": "mariadb"})
+            self.assertIn("--database=mariadb", calls[0][0])
+            self.assertNotIn("example_token", " ".join(calls[0][0]))
+            self.assertEqual(calls[0][1]["env"]["DB_PASSWORD"], "example_token")
+            self.assertEqual(calls[0][1]["env"]["DB_DATABASE"], "demo_db")
+            self.assertNotIn("DB_PASSWORD", calls[1][1]["env"])
+            self.assertIn("DB_PASSWORD=example_token", (root / ".env").read_text())
+            self.assertNotIn("example_token", (root / ".env.example").read_text())
+            self.assertFalse(any("migrate" in argv for argv, _ in calls))
 
     def test_failed_scaffold_does_not_delete_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -165,11 +159,10 @@ class LaravelAdapterTests(unittest.TestCase):
                 (root / "partial").write_text("keep")
                 raise AdapterError("failed")
             with patch.object(adapter, "require_frontend_tools"), \
-                 patch.object(adapter, "composer", return_value="/fake/composer"), \
-                 patch("laravel.adapter.shutil.which", side_effect=lambda tool: "/usr/bin/" + tool), \
+                 patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
                  patch.object(adapter, "command", side_effect=fail):
                 with self.assertRaises(AdapterError):
-                    adapter.scaffold("demo", "livewire")
+                    adapter.scaffold("demo", "livewire", "sqlite", {"url": "https://demo.test"})
             self.assertTrue((root / "partial").is_file())
 
 

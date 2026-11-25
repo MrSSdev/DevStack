@@ -44,8 +44,11 @@ def main() -> int:
                 result = adapter.check()
             elif action in ("install-tool", "update-tool") and not args:
                 result = adapter.maintain(action)
-            elif action == "scaffold" and len(args) == 2:
-                result = adapter.scaffold(*args)
+            elif action == "scaffold" and len(args) == 3:
+                raw = sys.stdin.read(8193)
+                if len(raw) > 8192:
+                    raise AdapterError("Configuration exceeds the allowed size.")
+                result = adapter.scaffold(*args, json.loads(raw))
             elif action == "configure" and len(args) == 1:
                 raw = sys.stdin.read(8193)
                 if len(raw) > 8192:

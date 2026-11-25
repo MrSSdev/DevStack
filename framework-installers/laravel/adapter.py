@@ -1,4 +1,4 @@
-"""Official Laravel packages and CLI tooling; always run as the developer."""
+"""Laravel's official installer; this module must run as the developer."""
 from __future__ import annotations
 
 import json
@@ -6,15 +6,11 @@ import os
 import pathlib
 import re
 import shutil
-import sqlite3
 import subprocess
 import tempfile
 from typing import Any, TextIO
 
 PACKAGE = "laravel/installer"
-SCAFFOLDS = {"none": ("laravel/laravel", "^13.0"),
-             "livewire": ("laravel/livewire-starter-kit", "dev-main")}
-DB_KEYS = frozenset(("DB_HOST", "DB_PORT", "DB_DATABASE", "DB_USERNAME", "DB_PASSWORD"))
 SLUG = re.compile(r"[a-z][a-z0-9-]{1,39}\Z")
 VERSION = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+\Z")
 DB_IDENT = re.compile(r"[a-z0-9_]{1,64}\Z")
@@ -63,19 +59,17 @@ def project_path(projects: pathlib.Path, slug: str, *, exists: bool) -> pathlib.
     return root
 
 
-def scaffold_argv(composer: str, slug: str, kit: str) -> list[str]:
+def scaffold_argv(installer: str, slug: str, kit: str, driver: str = "sqlite") -> list[str]:
     if not isinstance(slug, str) or not SLUG.fullmatch(slug):
         raise AdapterError("Invalid project identifier.")
-    if kit not in SCAFFOLDS:
+    if kit not in ("none", "livewire"):
         raise AdapterError("Unsupported Laravel starter kit.")
-    package, constraint = SCAFFOLDS[kit]
-    # laravel new has no skip-migrations option in Installer 5.33.0.
-    # Composer's official create-project supports --no-scripts; both
-    # Laravel skeletons otherwise run migrations in post-create-project-cmd.
-    args = [composer, "create-project", package, slug, constraint,
-            "--no-scripts", "--no-interaction", "--no-ansi", "--no-progress", "--prefer-dist"]
+    if driver not in ("sqlite", "mariadb"):
+        raise AdapterError("Unsupported Laravel database driver.")
+    args = [installer, "new", slug, "--no-interaction", "--no-ansi",
+            "--database=" + driver, "--pest", "--npm", "--no-boost"]
     if kit == "livewire":
-        args.append("--stability=dev")
+        args.append("--livewire")
     return args
 
 
@@ -89,8 +83,8 @@ def tool_argv(composer: str, action: str) -> list[str]:
     raise AdapterError("Unsupported tool operation.")
 
 
-def rewrite_environment(original: str, values: dict[str, str], *, commented: frozenset[str] = frozenset()) -> str:
-    """Replace known keys exactly once; optional DB values stay commented for SQLite."""
+def rewrite_environment(original: str, values: dict[str, str]) -> str:
+    """Replace only known keys (including commented defaults), preserving the rest."""
     result = []
     written = set()
     for line in original.splitlines():
@@ -98,13 +92,13 @@ def rewrite_environment(original: str, values: dict[str, str], *, commented: fro
         key = match.group(1) if match else None
         if key in values:
             if key not in written:
-                result.append(f"{'# ' if key in commented else ''}{key}={values[key]}")
+                result.append(f"{key}={values[key]}")
                 written.add(key)
         else:
             result.append(line)
     for key, value in values.items():
         if key not in written:
-            result.append(f"{'# ' if key in commented else ''}{key}={value}")
+            result.append(f"{key}={value}")
     return "\n".join(result) + "\n"
 
 
@@ -118,7 +112,7 @@ def environment_values(settings: Any) -> dict[str, str]:
         for key, pattern in (("db_name", DB_IDENT), ("db_user", DB_IDENT), ("db_password", DB_SECRET)):
             if not isinstance(settings.get(key), str) or not pattern.fullmatch(settings[key]):
                 raise AdapterError("Invalid database configuration.")
-        values.update(DB_HOST="127.0.0.1", DB_PORT="3306",
+        values.update(DB_CONNECTION="mariadb", DB_HOST="127.0.0.1", DB_PORT="3306",
                       DB_DATABASE=settings["db_name"], DB_USERNAME=settings["db_user"],
                       DB_PASSWORD=settings["db_password"])
     return values
@@ -219,57 +213,26 @@ class LaravelAdapter:
             raise AdapterError("Unable to run npm.", "frontend_npm") from None
         require_supported_frontend(node_version, npm_version)
 
-    def scaffold(self, slug: str, kit: str) -> dict[str, Any]:
+    def scaffold(self, slug: str, kit: str, driver: str,
+                 settings: dict[str, Any]) -> dict[str, Any]:
         root = project_path(self.projects, slug, exists=False)
+        values = environment_values(settings)
+        if driver not in ("sqlite", "mariadb") or ("db_name" in settings) != (driver == "mariadb"):
+            raise AdapterError("Database choice does not match the supplied configuration.")
         self.require_frontend_tools()
-        composer = self.composer()
-        php = shutil.which("php")
-        npm = shutil.which("npm")
-        if not php or not npm:
-            raise AdapterError("PHP CLI and npm are required.")
-        self.command(scaffold_argv(composer, slug, kit), cwd=self.projects)
+        binary = self.installer()
+        # Laravel's own installer and its Composer hooks perform their normal
+        # migrations. PHP's dotenv loader preserves process environment values.
+        # Override the connection for the whole installer process, including
+        # early starter-kit hooks. Never put credentials in command arguments.
+        db_keys = {"DB_CONNECTION", "DB_HOST", "DB_PORT", "DB_DATABASE",
+                   "DB_USERNAME", "DB_PASSWORD", "DB_URL", "DATABASE_URL",
+                   "DB_SOCKET"}
+        clean_env = {key: value for key, value in os.environ.items() if key not in db_keys}
+        installer_env = {**clean_env, **values, "DB_CONNECTION": driver}
+        self.command(scaffold_argv(str(binary), slug, kit, driver),
+                     cwd=self.projects, env=installer_env)
         project_path(self.projects, slug, exists=True)
-
-        # Do not call laravel new, composer setup, post-create-project-cmd,
-        # or an arbitrary Composer hook: those run migrations upstream.
-        # Reproduce only the small non-migrating initialization steps.
-        example, env_file = root / ".env.example", root / ".env"
-        if example.is_symlink() or not example.is_file() or example.stat().st_size > 1024 * 1024:
-            raise AdapterError("Laravel environment example is missing or unsafe.")
-        if env_file.exists() or env_file.is_symlink():
-            raise AdapterError("Unexpected environment file in a fresh scaffold.")
-        source = example.read_text(encoding="utf-8")
-        if re.findall(r"(?m)^DB_CONNECTION\s*=\s*(\S+)\s*$", source) != ["sqlite"]:
-            raise AdapterError("The official template no longer defaults to SQLite.")
-        fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(source)
-
-        db = root / "database" / "database.sqlite"
-        if db.parent.is_symlink() or not db.parent.is_dir() or db.is_symlink():
-            raise AdapterError("Invalid SQLite path.")
-        if not db.exists():
-            db.touch(mode=0o600, exist_ok=False)
-        self.verify_empty_sqlite(db)
-        self.command([php, "artisan", "package:discover", "--no-interaction", "--no-ansi"], cwd=root)
-        self.command([php, "artisan", "key:generate", "--no-interaction", "--no-ansi"], cwd=root)
-        if kit == "livewire":
-            # Official Livewire starter kit initialization: normalize SFC file
-            # names and select the kit's default features. Its Chisel command
-            # performs file setup; skip its Node phase and build explicitly.
-            rename = root / "rename_livewire_files.php"
-            if rename.is_symlink():
-                raise AdapterError("Unsafe Livewire initialization script.")
-            if rename.is_file():
-                self.command([php, "rename_livewire_files.php"], cwd=root)
-            features = root / "app/Console/Commands/InstallFeaturesCommand.php"
-            if features.is_symlink():
-                raise AdapterError("Unsafe Livewire feature command.")
-            if features.is_file():
-                self.command([php, "artisan", "install:features", "--no-interaction", "--no-ansi"],
-                             cwd=root, env={**os.environ, "LARAVEL_INSTALLER_NO_NODE": "1"})
-        self.command([npm, "install", "--no-audit", "--no-fund"], cwd=root)
-        self.command([npm, "run", "build"], cwd=root)
         public = root / "public"
         if public.is_symlink() or not public.is_dir():
             raise AdapterError("Laravel public directory is missing or unsafe.")
@@ -278,20 +241,18 @@ class LaravelAdapter:
             target = root / rel
             if target.is_symlink() or not target.is_file():
                 raise AdapterError("Expected Laravel application or built assets are missing.")
-        self.verify_empty_sqlite(db)
-        return {"scaffolded": True}
-
-    @staticmethod
-    def verify_empty_sqlite(db: pathlib.Path) -> None:
-        """Fail closed if a changed upstream template prepared a database."""
-        if db.is_symlink() or not db.is_file():
-            raise AdapterError("SQLite file is missing or unsafe.")
-        try:
-            with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True) as conn:
-                if conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] != 0:
-                    raise AdapterError("Unexpected database schema; DevStack does not migrate.")
-        except sqlite3.Error:
-            raise AdapterError("Unable to verify empty SQLite database.") from None
+        # Persist the generated connection in .env after the official tool
+        # finishes. Verify the normal migrations against the actual saved
+        # configuration, without executing any additional migrations.
+        self.configure(slug, settings)
+        php = shutil.which("php")
+        if not php:
+            raise AdapterError("PHP CLI not available.")
+        status = self.command([php, "artisan", "migrate:status", "--no-interaction", "--no-ansi"],
+                              cwd=root, env=clean_env, capture=True)
+        if not re.search(r"\bRan\s*$", status, re.MULTILINE) or re.search(r"\bPending\s*$", status, re.MULTILINE):
+            raise AdapterError("The official installer did not complete its default migrations.")
+        return {"scaffolded": True, "driver": driver}
 
     def configure(self, slug: str, settings: dict[str, Any]) -> dict[str, Any]:
         values = environment_values(settings)
@@ -299,12 +260,7 @@ class LaravelAdapter:
         env = root / ".env"
         if env.is_symlink() or not env.is_file() or env.stat().st_size > 1024 * 1024:
             raise AdapterError("Laravel environment file is missing or unsafe.")
-        original = env.read_text(encoding="utf-8")
-        # Do not change the active database or uncomment DB_DATABASE (SQLite
-        # also reads that key and would treat the MariaDB name as a file path).
-        if re.findall(r"(?m)^DB_CONNECTION\s*=\s*(\S+)\s*$", original) != ["sqlite"]:
-            raise AdapterError("Expected the untouched SQLite connection.")
-        updated = rewrite_environment(original, values, commented=DB_KEYS)
+        updated = rewrite_environment(env.read_text(encoding="utf-8"), values)
         # This operation runs with the developer UID, never as root.
         temp = None
         try:
