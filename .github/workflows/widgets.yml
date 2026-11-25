@@ -106,10 +106,13 @@ jobs:
       - name: Build dashboard static deep-link update
         shell: pwsh
         run: |
-          npm --prefix frontend install --no-audit --no-fund
-          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency install failed' }
-          npm --prefix frontend run build
-          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+          Push-Location frontend
+          try {
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency install failed' }
+            npm run build
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+          } finally { Pop-Location }
           Compress-Archive -Path backend/public/index.html, backend/public/assets -DestinationPath DevStack-Frontend.zip
 
       - name: Restore NuGet packages
