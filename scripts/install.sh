@@ -55,7 +55,7 @@ if [[ -L "$SRC/engines" || -L "$SRC/engines/laravel" ]]; then
   exit 1
 fi
 install -d -m 0755 -o root -g root /opt/devstack/engines /opt/devstack/engines/laravel
-for item in catalog.json registry.py runner.py laravel/__init__.py laravel/adapter.py; do
+for item in catalog.json common.py registry.py runner.py laravel/__init__.py laravel/adapter.py; do
   [[ -f "$SRC/engines/$item" && ! -L "$SRC/engines/$item" ]] || { echo "Unsafe engine source: $item" >&2; exit 1; }
   install -m 0644 -o root -g root "$SRC/engines/$item" "/opt/devstack/engines/$item"
 done

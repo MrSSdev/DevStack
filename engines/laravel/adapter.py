@@ -18,8 +18,7 @@ DB_SECRET = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 URL = re.compile(r"https?://[a-z][a-z0-9-]{0,39}\.test\Z")
 
 
-class AdapterError(Exception):
-    pass
+from common import AdapterError
 
 
 def version(value: Any) -> str | None:

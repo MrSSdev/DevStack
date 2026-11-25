@@ -1,0 +1,65 @@
+name: Official Laravel Installer smoke test
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'engines/**'
+      - '.github/workflows/laravel-installer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  livewire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, bcmath, intl, curl, dom, zip, pdo_sqlite, sqlite3, fileinfo
+          tools: composer:v2
+          coverage: none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Official installer as unprivileged developer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(id -u)" -ne 0
+          git config --global user.name "DevStack CI"
+          git config --global user.email "ci@example.invalid"
+          mkdir -p "$HOME/projects"
+          test ! -e "$HOME/projects/devstack-ci-livewire"
+          python3 -I engines/runner.py laravel status > "$RUNNER_TEMP/engine-status.json"
+          if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["result"]["installed"] is None else 1)' "$RUNNER_TEMP/engine-status.json"; then
+            python3 -I engines/runner.py laravel install-tool
+          fi
+          python3 -I engines/runner.py laravel status
+          python3 -I engines/runner.py laravel check
+          python3 -I engines/runner.py laravel scaffold devstack-ci-livewire livewire
+          printf '%s' '{"url":"https://devstack-ci-livewire.test"}' | python3 -I engines/runner.py laravel configure devstack-ci-livewire
+          python3 -I engines/runner.py laravel migrate devstack-ci-livewire
+          cd "$HOME/projects/devstack-ci-livewire"
+          composer check-platform-reqs
+          composer show laravel/framework
+          composer show livewire/livewire
+          composer show livewire/flux
+          test -s public/build/manifest.json
+          grep -Fxq 'APP_URL=https://devstack-ci-livewire.test' .env
+          test "$(stat -c '%a' .env)" = 600
+          php artisan migrate:status --no-interaction
+      - name: Check existing directory is refused
+        shell: bash
+        run: |
+          if python3 -I engines/runner.py laravel scaffold devstack-ci-livewire livewire; then
+            echo 'Adapter unexpectedly accepted an existing project' >&2
+            exit 1
+          fi
+          test -s "$HOME/projects/devstack-ci-livewire/artisan"

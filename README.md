@@ -57,6 +57,16 @@ Readings refresh while the panel is open. Start Ubuntu explicitly when you want 
 
 Create a project in the dashboard, choose its local domain, source directory, document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Save your work before stopping Ubuntu or restarting services.
 
+## Framework installers
+
+When creating a project, select no engine or Laravel, then choose the supported
+installation variant. In Settings, manage the official installer (requires
+Composer, PHP, Node.js, npm and enabled panel password authentication). The
+installer creates a fresh directory before DevStack configures hosting; existing
+source directories are never overwritten. Long operations continue independently
+of the web request, and interrupted jobs retain files for review. See the
+[adapter contract](engines/README.md) for the draft workflow and acceptance tests.
+
 ## Documentation
 
 - [Installation and Windows integration](docs/INSTALL-WINDOWS-WSL.md)

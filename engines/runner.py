@@ -12,7 +12,7 @@ import tempfile
 # The installed runner and its modules are root-owned. Isolated Python is
 # invoked by the coordinator; never import modules from the working project.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from laravel.adapter import AdapterError
+from common import AdapterError
 from registry import ADAPTERS
 
 

@@ -32,7 +32,7 @@ jobs:
           php -l scripts/set-password.php
           php -l scripts/configure-auth.php
           bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh scripts/backup-project-db.sh scripts/verify-project-db-backup.sh scripts/update.sh scripts/apply-update.sh
-          python3 -m py_compile daemon/devstackd.py engines/runner.py engines/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py
+          python3 -m py_compile daemon/devstackd.py engines/common.py engines/registry.py engines/runner.py engines/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py
       - name: Backend unit tests
         run: |
           python3 -m unittest discover -s tests -v

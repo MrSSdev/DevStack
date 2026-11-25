@@ -1,4 +1,4 @@
-# Framework installer adapters (work in progress)
+# Framework installer adapters
 
 DevStack manages the project lifecycle; adapters delegate scaffolding and tool
 maintenance to the framework's official CLI. An engine is not a template
@@ -58,6 +58,10 @@ separate decision.
   project, marking its engine status as failed instead of ready.
 - Settings exposes explicit local version, check, install and update operations.
 - Both fresh installation and update package the root-owned adapter code.
+- The separate official-installer CI workflow runs the real CLI as an ordinary
+  Linux user, installs the Livewire kit, builds assets, configures SQLite and
+  checks migrations and existing-directory refusal. It does not exercise WSL
+  systemd, Nginx, MariaDB or Windows.
 - Required before release: CI plus a real isolated WSL test of the worker
   identity, constraints, complete workflow, Composer and npm versions, TLS,
   database configuration, failure/restart handling and no-engine regression.
