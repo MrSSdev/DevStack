@@ -9,11 +9,11 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "framework-installers"))
 from laravel.adapter import (
     AdapterError, LaravelAdapter, environment_values, project_path,
-    rewrite_environment, scaffold_argv, tool_argv, require_supported_frontend, discover_starter_kits,
+    rewrite_environment, scaffold_argv, tool_argv, require_supported_frontend, discover_starter_kits, discover_capabilities,
 )
 
 
-def help_fixture(kits=("react", "svelte", "vue", "livewire"), *, blank=True):
+def help_fixture(kits=("react", "svelte", "vue", "livewire"), *, blank=True, extra=True):
     def option(name, description="", accepts=False):
         return {"name": "--" + name, "description": description,
                 "accept_value": accepts, "is_multiple": False, "default": False}
@@ -23,6 +23,9 @@ def help_fixture(kits=("react", "svelte", "vue", "livewire"), *, blank=True):
     options["using"] = option("using", "Install the Custom Starter Kit", accepts=True)
     if blank:
         options["no-authentication"] = option("no-authentication")
+    if extra:
+        for name in ("workos", "teams", "livewire-class-components", "phpunit", "boost", "no-node"):
+            options[name] = option(name)
     return json.dumps({"name": "new", "definition": {"options": options}})
 
 
@@ -41,12 +44,44 @@ class LaravelAdapterTests(unittest.TestCase):
             with self.assertRaises(AdapterError):
                 discover_starter_kits(invalid)
 
+    def test_conditional_options_match_official_prompts(self):
+        from common import resolve_installer_options
+        kits, fields = discover_capabilities(help_fixture())
+        def argv(kit, selected):
+            return scaffold_argv("laravel", "demo", kit, choices=kits, fields=fields, selected=selected)
+        self.assertEqual(resolve_installer_options("livewire", fields, {}),
+                         {"auth-provider": "laravel", "livewire-components": "single-file", "teams": "no",
+                          "testing": "pest", "boost": "no", "assets": "yes"})
+        self.assertIn("--livewire-class-components", argv("livewire", {"livewire-components": "class"}))
+        self.assertIn("--teams", argv("livewire", {"teams": "yes"}))
+        self.assertIn("--teams", argv("react", {"teams": "yes"}))
+        self.assertIn("--workos", argv("livewire", {"auth-provider": "workos"}))
+        self.assertIn("--phpunit", argv("none", {"testing": "phpunit"}))
+        self.assertIn("--boost", argv("none", {"boost": "yes"}))
+        self.assertIn("--no-node", argv("none", {"assets": "no"}))
+        self.assertNotIn("--npm", argv("none", {"assets": "no"}))
+        for kit, selected in (
+            ("livewire", {"livewire-components": "class", "teams": "yes"}),
+            ("livewire", {"auth-provider": "workos", "teams": "yes"}),
+            ("livewire", {"auth-provider": "workos", "livewire-components": "class"}),
+            ("blank-livewire", {"teams": "yes"}), ("none", {"auth-provider": "workos"}),
+            ("vue", {"livewire-components": "class"}), ("react", {"testing": "--force"}),
+            ("react", {"force": "yes"}), ("react", {"teams": []}),
+        ):
+            with self.subTest(kit=kit, selected=selected), self.assertRaises(AdapterError):
+                argv(kit, selected)
+        old_kits, old_fields = discover_capabilities(help_fixture(extra=False))
+        self.assertEqual(old_fields, [])
+        with self.assertRaises(AdapterError):
+            scaffold_argv("laravel", "demo", "livewire", choices=old_kits, fields=old_fields,
+                          selected={"teams": "yes"})
+
     def test_help_failure_keeps_installer_version_and_maintenance_visible(self):
         adapter = LaravelAdapter(pathlib.Path("/home/dev"), io.StringIO())
         with patch("laravel.adapter.shutil.which", return_value="/usr/bin/composer"), \
              patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
              patch.object(adapter, "command", side_effect=["Laravel Installer 5.33.0", "not-json"]):
-            self.assertEqual(adapter.status(), {"composer": True, "installed": "5.33.0", "starter_kits": None})
+            self.assertEqual(adapter.status(), {"composer": True, "installed": "5.33.0", "starter_kits": None, "installer_options": None})
 
     def test_official_installer_never_forces_overwrite(self):
         choices = discover_starter_kits(help_fixture())
@@ -141,11 +176,11 @@ class LaravelAdapterTests(unittest.TestCase):
             adapter = LaravelAdapter(home, io.StringIO())
             with patch("laravel.adapter.shutil.which", side_effect=lambda tool: "/usr/bin/" + tool), \
                  patch.object(adapter, "command", side_effect=["v22.22.1", "9.2.0"]) as command, \
-                 patch.object(adapter, "installer") as installer:
+                 patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
+                 patch.object(adapter, "capabilities", return_value=discover_capabilities(help_fixture())):
                 with self.assertRaises(AdapterError) as error:
                     adapter.scaffold("demo", "livewire", "sqlite", {"url": "https://demo.test"})
                 self.assertEqual(error.exception.code, "frontend_npm")
-                installer.assert_not_called()
                 self.assertEqual(command.call_count, 2)
             self.assertFalse((home / "projects" / "demo").exists())
 
@@ -166,16 +201,19 @@ class LaravelAdapterTests(unittest.TestCase):
                     for file in ("artisan", "composer.json", "public/index.php",
                                  "vendor/autoload.php", "public/build/manifest.json"):
                         (root / file).write_text("fixture")
+                    (root / "composer.lock").write_text(json.dumps({"packages": [], "packages-dev": [{"name": "pestphp/pest"}]}))
                     (root / ".env").write_text("APP_KEY=unchanged\nDB_CONNECTION=mariadb\nDB_USERNAME=root\n")
                     (root / ".env.example").write_text("DB_PASSWORD=\n")
                 return "0001_create_users ... [1] Ran" if "migrate:status" in argv else ""
             with patch.object(adapter, "require_frontend_tools"), \
                  patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
-                 patch.object(adapter, "starter_kits", return_value=discover_starter_kits(help_fixture())), \
+                 patch.object(adapter, "capabilities", return_value=discover_capabilities(help_fixture())), \
                  patch("laravel.adapter.shutil.which", return_value="/usr/bin/php"), \
                  patch.object(adapter, "command", side_effect=fake_command):
                 self.assertEqual(adapter.scaffold("demo", "livewire", "mariadb", settings),
-                                 {"scaffolded": True, "driver": "mariadb"})
+                                 {"scaffolded": True, "driver": "mariadb", "webroot": "public",
+                                  "installer_options": {"auth-provider": "laravel", "livewire-components": "single-file",
+                                                        "teams": "no", "testing": "pest", "boost": "no", "assets": "yes"}})
             self.assertIn("--database=mariadb", calls[0][0])
             self.assertNotIn("example_token", " ".join(calls[0][0]))
             self.assertEqual(calls[0][1]["env"]["DB_PASSWORD"], "example_token")
@@ -197,7 +235,7 @@ class LaravelAdapterTests(unittest.TestCase):
                 raise AdapterError("failed")
             with patch.object(adapter, "require_frontend_tools"), \
                  patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
-                 patch.object(adapter, "starter_kits", return_value=discover_starter_kits(help_fixture())), \
+                 patch.object(adapter, "capabilities", return_value=discover_capabilities(help_fixture())), \
                  patch.object(adapter, "command", side_effect=fail):
                 with self.assertRaises(AdapterError):
                     adapter.scaffold("demo", "livewire", "sqlite", {"url": "https://demo.test"})
