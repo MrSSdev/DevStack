@@ -77,6 +77,7 @@ jobs:
               ("vue", "sqlite", "workos", {"auth-provider": "workos"}),
               ("none", "sqlite", "phpunit-boost", {"testing": "phpunit", "boost": "yes"}),
               ("none", "sqlite", "skip-assets", {"assets": "no"}),
+              ("livewire", "sqlite", "local-mail", {}),
           ):
               if kit not in ids:
                   continue
@@ -131,12 +132,16 @@ jobs:
           DRIVER: ${{ matrix.driver }}
           INSTALLER_VERSION: ${{ needs.discover.outputs.installer }}
           OPTIONS_JSON: ${{ matrix.options }}
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -Eeuo pipefail
           test "$(id -u)" -ne 0
           git config --global user.name "DevStack CI"
           git config --global user.email "ci@example.invalid"
           mkdir -p "$HOME/projects"
+          if [[ "$VARIANT" = local-mail ]]; then
+            sudo bash scripts/install-mailpit.sh
+          fi
           slug="ci-$KIT"
           test ! -e "$HOME/projects/$slug"
           runner="$PWD/framework-installers/runner.py"
@@ -154,7 +159,7 @@ jobs:
           else
             settings="{\"url\":\"https://$slug.test\"}"
           fi
-          settings="$(SETTINGS="$settings" python3 -c 'import os,json; data=json.loads(os.environ["SETTINGS"]); data["installer_options"]=json.loads(os.environ["OPTIONS_JSON"]); print(json.dumps(data))')"
+          settings="$(SETTINGS="$settings" python3 -c 'import os,json; data=json.loads(os.environ["SETTINGS"]); data["installer_options"]=json.loads(os.environ["OPTIONS_JSON"]); data["local_mail"]=os.environ["VARIANT"]=="local-mail"; print(json.dumps(data))')"
           if ! printf '%s' "$settings" | python3 -I "$runner" laravel scaffold "$slug" "$KIT" "$DRIVER" > "$RUNNER_TEMP/scaffold.json"; then
             echo "Official installer failed; CI fixture diagnostics:"
             find "$HOME/.cache/devstack/engines" -type f -name '*.log' -exec tail -n 120 {} +
@@ -164,6 +169,7 @@ jobs:
           import json, os, sys
           result = json.load(open(sys.argv[1]))["result"]
           assert result["webroot"] == "public"
+          assert result.get("local_mail", False) == (os.environ["VARIANT"] == "local-mail")
           for key, value in json.loads(os.environ["OPTIONS_JSON"]).items():
               assert result["installer_options"][key] == value
           PY
@@ -237,6 +243,24 @@ jobs:
             php -r '$db = new PDO("mysql:host=127.0.0.1;port=3306;dbname=fixture_db", "fixture_user", "fixture_password"); if ((int)$db->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()")->fetchColumn() !== 0) exit(1);'
           fi
           php artisan migrate:status --no-interaction --no-ansi
+          if [[ "$VARIANT" = local-mail ]]; then
+            grep -Fxq 'MAIL_MAILER=smtp' .env
+            grep -Fxq 'MAIL_HOST=127.0.0.1' .env
+            grep -Fxq 'MAIL_PORT=1025' .env
+            grep -Fxq "MAIL_FROM_ADDRESS=hello@$slug.test" .env
+            php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); if (config("mail.default") !== "smtp" || config("mail.mailers.smtp.host") !== "127.0.0.1" || (int)config("mail.mailers.smtp.port") !== 1025) exit(1); Illuminate\Support\Facades\Mail::raw("DevStack local mail fixture", function ($m) { $m->to("recipient@example.test")->subject("DevStack Laravel SMTP smoke"); });'
+            python3 - <<'PY'
+          import json, time, urllib.request
+          for _ in range(20):
+              data = json.load(urllib.request.urlopen("http://127.0.0.1:8025/api/v1/messages", timeout=3))
+              if any(m["Subject"] == "DevStack Laravel SMTP smoke" and m["From"]["Address"] == "hello@ci-livewire.test" for m in data.get("messages") or []):
+                  print("Laravel SMTP delivery captured locally.")
+                  break
+              time.sleep(0.5)
+          else:
+              raise SystemExit("Laravel fixture not captured")
+          PY
+          fi
       - name: Refuse an existing directory and extra migrations
         shell: bash
         env:

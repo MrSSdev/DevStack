@@ -77,4 +77,27 @@ try {
 } catch (RuntimeException $e) {
     check(str_contains($e->getMessage(), 'placeholder'), 'Missing placeholder detected');
 }
-echo "PHP session/CSRF tests: OK\n";
+$mailId = str_repeat('A', 22);
+check(devstack_mailpit_target('list', []) === ['GET', '/messages?start=0&limit=40', null], 'Mailpit fixed list target');
+check(devstack_mailpit_target('list', ['query' => 'from:hello@example.test&limit=500', 'start' => '40'])
+    === ['GET', '/search?query=from%3Ahello%40example.test%26limit%3D500&start=40&limit=40', null], 'Mail search is encoded');
+check(devstack_mailpit_target('message', ['id' => $mailId]) === ['GET', '/message/' . $mailId, null], 'Fixed message target');
+check(devstack_mailpit_target('attachment', ['id' => $mailId, 'part' => '1.2'])
+    === ['GET', '/message/' . $mailId . '/part/1.2', null], 'Attachment target');
+$delete = devstack_mailpit_target('delete', ['id' => $mailId]);
+check($delete[0] === 'DELETE' && json_decode($delete[2], true)['IDs'] === [$mailId], 'Delete exactly one message');
+foreach ([
+    ['delete', []], ['delete', ['id' => 'latest']], ['delete', ['id' => [$mailId]]],
+    ['message', ['id' => '../messages']], ['message', ['id' => 'http://evil.test']],
+    ['attachment', ['id' => $mailId, 'part' => '../raw']],
+    ['list', ['start' => '1&limit=500']], ['list', ['query' => ['bad']]],
+    ['list', ['start' => '501']], ['send', ['id' => $mailId]],
+] as [$operation, $data]) {
+    try {
+        devstack_mailpit_target($operation, $data);
+        check(false, 'Unsafe Mailpit target rejected');
+    } catch (InvalidArgumentException $e) {
+        check(true, 'Unsafe Mailpit target rejected');
+    }
+}
+echo "PHP session/CSRF and Mailpit target tests: OK\n";

@@ -25,6 +25,15 @@ sudo php-fpm8.5 -t
 
 Refresh https://devstack.test in the browser.
 
+## Optional local mail
+
+A normal DevStack update neither installs nor replaces Mailpit. If you want the
+local mailbox, use [the separate one-time installer](LOCAL-MAIL.md). Captured
+messages, project mail settings and the four core services are independent of
+this optional service. Its first-install script refuses to overwrite an
+existing installation; a future Mailpit version upgrade requires a reviewed
+upgrade procedure.
+
 ## Windows widgets
 
 Download and extract the complete matching `DevStack-Windows-Widgets-x64` bundle from [GitHub Actions](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml).

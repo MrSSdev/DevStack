@@ -251,6 +251,28 @@ class LaravelAdapterTests(unittest.TestCase):
             self.assertNotIn("example_token", (root / ".env.example").read_text())
             self.assertFalse(any("migrate" in argv for argv, _ in calls))
 
+    def test_local_mail_is_opt_in_and_uses_only_fixed_loopback(self):
+        original = "APP_KEY=keep\nMAIL_URL=smtp://old.example.test\nMAIL_MAILER=log\nMAIL_HOST=external.example.test\nMAIL_PASSWORD=fixture\n"
+        base = {"url": "https://demo.test"}
+        self.assertEqual(environment_values(base), {"APP_URL": "https://demo.test"})
+        self.assertEqual(environment_values({**base, "local_mail": False}), environment_values(base))
+        values = environment_values({**base, "local_mail": True})
+        self.assertEqual(values["MAIL_HOST"], "127.0.0.1")
+        self.assertEqual(values["MAIL_PORT"], "1025")
+        self.assertEqual(values["MAIL_FROM_ADDRESS"], "hello@demo.test")
+        self.assertEqual(values["MAIL_URL"], "null")
+        updated = rewrite_environment(original, values)
+        self.assertIn("APP_KEY=keep", updated)
+        self.assertIn("MAIL_MAILER=smtp", updated)
+        self.assertIn("MAIL_PASSWORD=null", updated)
+        self.assertNotIn("external.example.test", updated)
+        self.assertNotIn("old.example.test", updated)
+        for bad in ("yes", 1, None, {}, []):
+            with self.assertRaises(AdapterError):
+                environment_values({**base, "local_mail": bad})
+        with self.assertRaises(AdapterError):
+            environment_values({**base, "local_mail": True, "mail_host": "external.example.test"})
+
     def test_failed_scaffold_does_not_delete_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = pathlib.Path(tmp)

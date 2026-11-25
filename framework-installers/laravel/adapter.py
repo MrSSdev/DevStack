@@ -226,9 +226,18 @@ def rewrite_environment(original: str, values: dict[str, str]) -> str:
 def environment_values(settings: Any) -> dict[str, str]:
     if not isinstance(settings, dict) or not isinstance(settings.get("url"), str) or not URL.fullmatch(settings["url"]):
         raise AdapterError("Invalid application URL.")
-    if set(settings) not in ({"url"}, {"url", "db_name", "db_user", "db_password"}):
+    if set(settings) - {"local_mail"} not in ({"url"}, {"url", "db_name", "db_user", "db_password"}):
         raise AdapterError("Invalid application configuration.")
+    local_mail = settings.get("local_mail", False)
+    if not isinstance(local_mail, bool):
+        raise AdapterError("Invalid local mail option.")
     values = {"APP_URL": settings["url"]}
+    if local_mail:
+        domain = settings["url"].split("://", 1)[1]
+        values.update(MAIL_MAILER="smtp", MAIL_SCHEME="null", MAIL_URL="null",
+                      MAIL_HOST="127.0.0.1", MAIL_PORT="1025", MAIL_USERNAME="null",
+                      MAIL_PASSWORD="null", MAIL_ENCRYPTION="null",
+                      MAIL_FROM_ADDRESS="hello@" + domain)
     if "db_name" in settings:
         for key, pattern in (("db_name", DB_IDENT), ("db_user", DB_IDENT), ("db_password", DB_SECRET)):
             if not isinstance(settings.get(key), str) or not pattern.fullmatch(settings[key]):
@@ -371,7 +380,9 @@ class LaravelAdapter:
         db_keys = {"DB_CONNECTION", "DB_HOST", "DB_PORT", "DB_DATABASE",
                    "DB_USERNAME", "DB_PASSWORD", "DB_URL", "DATABASE_URL",
                    "DB_SOCKET"}
-        clean_env = {key: value for key, value in os.environ.items() if key not in db_keys}
+        local_mail = settings.get('local_mail', False)
+        clean_env = {key: value for key, value in os.environ.items()
+                     if key not in db_keys and not (local_mail and key.startswith('MAIL_'))}
         installer_env = {**clean_env, **values, "DB_CONNECTION": driver}
         self.command(argv, cwd=self.projects, env=installer_env)
         project_path(self.projects, slug, exists=True)
@@ -420,8 +431,11 @@ class LaravelAdapter:
                               cwd=root, env=clean_env, capture=True)
         if not re.search(r"\bRan\s*$", status, re.MULTILINE) or re.search(r"\bPending\s*$", status, re.MULTILINE):
             raise AdapterError("The official installer did not complete its default migrations.")
-        return {"scaffolded": True, "driver": driver, "webroot": "public",
-                "installer_options": resolve_installer_options(kit, fields, selected)}
+        result = {"scaffolded": True, "driver": driver, "webroot": "public",
+                  "installer_options": resolve_installer_options(kit, fields, selected)}
+        if local_mail:
+            result["local_mail"] = True
+        return result
 
     def configure(self, slug: str, settings: dict[str, Any]) -> dict[str, Any]:
         values = environment_values(settings)

@@ -10,6 +10,7 @@ Manage development projects, web servers, databases and local HTTPS from one web
 - Local HTTPS certificates and automatic synchronization of managed Windows hosts entries.
 - MariaDB databases, per-project accounts and connection tests.
 - Nginx configuration management with syntax validation.
+- Optional local [Mailpit inbox](docs/LOCAL-MAIL.md) inside DevStack, with per-project test SMTP configuration.
 - Two Windows 11 widgets: **Ubuntu** for WSL controls and resource readings, **DevStack** for service monitoring, restarts and project shortcuts.
 - Application updates and database backup utilities.
 
@@ -57,6 +58,17 @@ Readings refresh while the panel is open. Start Ubuntu explicitly when you want 
 
 Create a project in the dashboard. The folder identifier follows the project name as you type, and the local .test domain follows the identifier. Either field can be edited independently and restored to automatic generation. Choose the document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Save your work before stopping Ubuntu or restarting services.
 
+## Local test email (optional)
+
+Install Mailpit once in Ubuntu from a reviewed checkout:
+
+```bash
+cd ~/projects/devstack-source
+sudo bash scripts/install-mailpit.sh
+```
+
+Open **E-mail** in DevStack to read, search, download attachments and delete individual captured messages. Select **Lokalna poczta testowa** when creating a new project to configure its PHP-FPM mail transport and, for Laravel, its private `.env` SMTP settings. Existing projects are never changed automatically. See [Local test email](docs/LOCAL-MAIL.md) for limits, manual configuration and service management.
+
 ## Framework installers
 
 When creating a project, select no framework or Laravel, then choose a frontend technology from the currently installed official installer's reported capabilities. Choose the conditional official installer options (built-in authentication, no authentication or WorkOS where supported, Livewire component style, teams, testing, Boost and npm build where applicable). The public directory is set automatically by the chosen framework. In Settings, manage the official installer (requires
@@ -70,6 +82,7 @@ of the web request, and interrupted jobs retain files for review. See the
 - [Installation and Windows integration](docs/INSTALL-WINDOWS-WSL.md)
 - [Windows widgets](windows/widgets/README.md)
 - [Updating](docs/UPGRADING.md)
+- [Local test email](docs/LOCAL-MAIL.md)
 - [Local HTTPS certificate trust](docs/WINDOWS-CA.md)
 - [Backups and recovery](docs/BACKUP-RESTORE.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)

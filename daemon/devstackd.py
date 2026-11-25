@@ -29,6 +29,7 @@ SECRET_FILE = pathlib.Path('/var/lib/devstack/credentials.json')
 PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
 CA_PUBLIC_FILE = pathlib.Path('/var/lib/devstack/ca/rootCA.pem')  # Public cert ONLY; never expose rootCA-key.pem.
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
+MAILPIT_UNIT_FILE = pathlib.Path('/etc/systemd/system/devstack-mailpit.service')
 ENGINE_JOB_FILE = pathlib.Path('/var/lib/devstack/engine-job.json')
 ENGINE_DB_FILE = pathlib.Path('/var/lib/devstack/engine-db-reservation.json')
 AUTH_MODE_FILE = pathlib.Path('/etc/devstack/auth.mode')
@@ -311,8 +312,29 @@ def preferences(_: dict[str, Any]) -> dict[str, str]:
     return get_ui_preferences()
 
 
+def mailpit_status() -> str:
+    if not MAILPIT_UNIT_FILE.is_file():
+        return 'not-installed'
+    try:
+        result = subprocess.run(['/usr/bin/systemctl', 'is-active', 'devstack-mailpit.service'],
+                                capture_output=True, text=True, timeout=2)
+        state = result.stdout.strip()
+        return state if state in {'active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading'} else 'unknown'
+    except (OSError, subprocess.TimeoutExpired):
+        return 'unknown'
+
+
+def require_local_mail(data: dict[str, Any]) -> bool:
+    value = data.get('local_mail', False)
+    if not isinstance(value, bool):
+        raise InputError('Nieprawidlowe ustawienie poczty lokalnej.')
+    if value and mailpit_status() != 'active':
+        raise InputError('Najpierw uruchom lokalna skrzynke Mailpit w zakladce E-mail.')
+    return value
+
+
 def status(_: dict[str, Any]) -> dict[str, Any]:
-    return {'services': service_status(), 'projects': public_projects(),
+    return {'services': service_status(), 'mailpit': mailpit_status(), 'projects': public_projects(),
             'preferences': get_ui_preferences(), 'engine_job': public_engine_job(),
             'engines': engine_catalog(), 'engine_access_allowed': engine_access_allowed()}
 
@@ -401,7 +423,7 @@ def grant_public_access(root: pathlib.Path, public: pathlib.Path, dev_user: str)
                    '/usr/bin/setfacl', '-d', '-m', 'u:www-data:rX', '--', '{}', '+'])
 
 
-def php_pool(slug: str, user: str) -> str:
+def php_pool(slug: str, user: str, local_mail: bool = False) -> str:
     return f'''[devstack-{slug}]
 user = {user}
 group = {user}
@@ -416,7 +438,7 @@ pm.max_requests = 500
 security.limit_extensions = .php
 clear_env = yes
 php_admin_value[expose_php] = Off
-'''
+''' + ('php_admin_value[sendmail_path] = /opt/devstack-mailpit/mailpit sendmail -S 127.0.0.1:1025 -t -i\n' if local_mail else '')
 
 
 def nginx_conf(slug: str, domain: str, public: pathlib.Path, ssl_enabled: bool,
@@ -556,6 +578,7 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
     name = check_name(data.get('name'))
     domain = check_domain(data.get('domain'))
     webroot = check_webroot(data.get('webroot'))
+    local_mail = require_local_mail(data)
     database = data.get('database') is True
     if prepared_db is not None and (not database or prepared_db[:2] != db_identifiers(slug)):
         raise RuntimeError('Niespojna rezerwacja MariaDB.')
@@ -580,7 +603,7 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
             db_info = prepared_db if prepared_db is not None else create_db(slug)
         if https:
             generated = mkcert_for(slug, domain)
-        pool_file.write_text(php_pool(slug, cfg['dev_user']), encoding='utf-8')
+        pool_file.write_text(php_pool(slug, cfg['dev_user'], local_mail), encoding='utf-8')
         pool_created = True
         run(['/usr/sbin/php-fpm8.5', '-t'])
         site_file.write_text(nginx_conf(slug, domain, public, https), encoding='utf-8')
@@ -594,7 +617,7 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
         defer_php_fpm_reload()
         state[slug] = {
             'name': name, 'domain': domain, 'path': str(root), 'webroot': webroot,
-            'https': https, 'database': database,
+            'https': https, 'database': database, 'local_mail': local_mail,
             'db_name': db_info[0] if db_info else '',
             'db_user': db_info[1] if db_info else '',
             'overrides': '', 'extra_locations': '',
@@ -1196,6 +1219,7 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
     if engine == 'none':
         return create_environment(data)
     require_engine_auth()
+    local_mail = require_local_mail(data)
     definition = engine_definition(engine)
     slug = check_slug(data.get('slug'))
     name = check_name(data.get('name'))
@@ -1238,7 +1262,7 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
               for field in fields if field['id'] in selected}
     # Root-owned reservation (one operation at a time) precedes any install.
     request = {'slug': slug, 'name': name, 'domain': domain, 'webroot': webroot,
-               'database': data['database'], 'https': data['https'],
+               'database': data['database'], 'https': data['https'], 'local_mail': local_mail,
                'engine': engine, 'starter_kit': kit, 'starter_kit_label': choices[kit],
                'installer_options': selected, 'installer_option_labels': list(labels.values())}
     job = {'id': secrets.token_hex(16), 'action': 'create', 'engine': engine,
@@ -1248,6 +1272,8 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
     driver = 'mariadb' if request['database'] else 'sqlite'
     settings = {'url': ('https://' if request['https'] else 'http://') + domain,
                 'installer_options': selected}
+    if local_mail:
+        settings['local_mail'] = True
     job.update(state='preparing', message='Przygotowywanie zasobow instalatora...')
     write_json_atomic(ENGINE_JOB_FILE, job)
     try:
@@ -1321,6 +1347,7 @@ def poll_engine_results() -> None:
                 driver = 'mariadb' if request['database'] else 'sqlite'
                 if (result.get('scaffolded') is not True or result.get('driver') != driver
                         or result.get('webroot') != request['webroot']
+                        or result.get('local_mail', False) != request.get('local_mail', False)
                         or result.get('installer_options') != request['installer_options']):
                     raise RuntimeError('Invalid scaffold result')
                 # The official installer already completed the default migrations

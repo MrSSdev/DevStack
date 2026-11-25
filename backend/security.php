@@ -190,3 +190,74 @@ function devstack_login_limit(bool $failure = false, bool $reset = false): bool
         fclose($fp);
     }
 }
+
+/** Fixed loopback Mailpit API; never accept a URL, arbitrary path or method. */
+function devstack_mailpit_target(string $action, array $data): array
+{
+    if ($action === 'list') {
+        $start = $data['start'] ?? '0';
+        $query = $data['query'] ?? '';
+        if (!is_string($start) || !preg_match('~^[0-9]{1,4}$~D', $start) ||
+            (int)$start > 500 || !is_string($query) || strlen($query) > 200 ||
+            preg_match('~[\x00-\x1f\x7f]~', $query)) {
+            throw new InvalidArgumentException('Nieprawidłowe wyszukiwanie wiadomości.');
+        }
+        $query = trim($query);
+        return ['GET', ($query === '' ? '/messages?' : '/search?query=' . rawurlencode($query) . '&') .
+                'start=' . (int)$start . '&limit=40', null];
+    }
+    $id = $data['id'] ?? null;
+    // Mailpit 1.34 uses 22-character shortuuid identifiers; exclude "latest".
+    if (!is_string($id) || !preg_match('~^[A-Za-z0-9]{22}$~D', $id)) {
+        throw new InvalidArgumentException('Nieprawidłowy identyfikator wiadomości.');
+    }
+    if ($action === 'message') return ['GET', '/message/' . $id, null];
+    if ($action === 'delete') return ['DELETE', '/messages', json_encode(['IDs' => [$id]], JSON_THROW_ON_ERROR)];
+    if ($action === 'attachment') {
+        $part = $data['part'] ?? null;
+        if (!is_string($part) || !preg_match('~^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$~D', $part)) {
+            throw new InvalidArgumentException('Nieprawidłowy identyfikator załącznika.');
+        }
+        return ['GET', '/message/' . $id . '/part/' . rawurlencode($part), null];
+    }
+    throw new InvalidArgumentException('Nieznana operacja poczty.');
+}
+
+function devstack_mailpit_request(string $action, array $data): array|string
+{
+    [$method, $path, $body] = devstack_mailpit_target($action, $data);
+    if (!is_file('/etc/systemd/system/devstack-mailpit.service')) {
+        throw new RuntimeException('Zainstaluj lokalną skrzynkę Mailpit.');
+    }
+    $headers = "Accept-Encoding: identity\r\nConnection: close\r\n";
+    $http = ['method' => $method, 'timeout' => 4.0, 'ignore_errors' => true,
+             'follow_location' => 0, 'max_redirects' => 0];
+    if ($body !== null) {
+        $headers .= "Content-Type: application/json\r\n";
+        $http['content'] = $body;
+    }
+    $http['header'] = $headers;
+    $limit = $action === 'attachment' ? 10 * 1024 * 1024 : 4 * 1024 * 1024;
+    $response = @file_get_contents('http://127.0.0.1:8025/api/v1' . $path, false,
+                                  stream_context_create(['http' => $http]), 0, $limit + 1);
+    $responseHeaders = function_exists('http_get_last_response_headers')
+        ? http_get_last_response_headers() : ($http_response_header ?? []);
+    if (!is_string($response) || !preg_match('~^HTTP/\S+ 2[0-9]{2}(?: |$)~', $responseHeaders[0] ?? '')) {
+        throw new RuntimeException('Skrzynka Mailpit jest niedostępna lub wiadomość już nie istnieje.');
+    }
+    if (strlen($response) > $limit) {
+        throw new RuntimeException('Wiadomość jest za duża dla podglądu DevStack. Użyj pełnego interfejsu Mailpit.');
+    }
+    if ($action === 'attachment') return $response;
+    if ($action === 'delete') {
+        if (trim($response) !== 'ok') throw new RuntimeException('Mailpit nie potwierdził usunięcia.');
+        return ['deleted' => true];
+    }
+    try {
+        $decoded = json_decode($response, true, 32, JSON_THROW_ON_ERROR);
+    } catch (JsonException $e) {
+        throw new RuntimeException('Nieprawidłowa odpowiedź Mailpit.');
+    }
+    if (!is_array($decoded)) throw new RuntimeException('Nieprawidłowa odpowiedź Mailpit.');
+    return $decoded;
+}
