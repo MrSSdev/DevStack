@@ -33,7 +33,8 @@ private .env, verifies the result, and returns a small JSON response.
 Only then does DevStack publish the Nginx/PHP-FPM configuration and domain.
 
 Tool installation/updates and framework creation require an authenticated
-panel. Tool output is stored in a private developer log. Do not copy
+panel or explicit root-controlled consent for passwordless local use.
+See [Security](../SECURITY.md) for the one-time opt-in/revocation commands. Tool output is stored in a private developer log. Do not copy
 credentials into .env.example or public logs. Partial sources are retained
 after failures; a fresh, known unregistered database reservation may be
 rolled back. An uncertain reservation is retained for administrator review.

@@ -111,14 +111,14 @@ try {
     }
     $engineRoute = preg_match('~^/api/engines/([a-z][a-z0-9-]{1,39})$~D', $path, $engineMatch) === 1;
     if ($method === 'GET' && $engineRoute) {
-        if (!devstack_password_required()) {
-            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
+        if (!devstack_engine_access_allowed()) {
+            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
         }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_status', ['engine' => $engineMatch[1]])]);
     }
     if ($method === 'POST' && $engineRoute) {
-        if (!devstack_password_required()) {
-            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
+        if (!devstack_engine_access_allowed()) {
+            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
         }
         if (count($body) !== 1 || !is_string($body['action'] ?? null) ||
             !in_array($body['action'], ['check', 'install-tool', 'update-tool'], true)) {
@@ -133,8 +133,8 @@ try {
         if (!is_string($engine) || !preg_match('~^[a-z][a-z0-9-]{1,39}$~D', $engine)) {
             devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowy silnik projektu.']);
         }
-        if ($engine !== 'none' && !devstack_password_required()) {
-            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
+        if ($engine !== 'none' && !devstack_engine_access_allowed()) {
+            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
         }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('create', [
             'slug' => $body['slug'] ?? null,

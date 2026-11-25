@@ -31,6 +31,7 @@ SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
 ENGINE_JOB_FILE = pathlib.Path('/var/lib/devstack/engine-job.json')
 ENGINE_DB_FILE = pathlib.Path('/var/lib/devstack/engine-db-reservation.json')
 AUTH_MODE_FILE = pathlib.Path('/etc/devstack/auth.mode')
+ENGINE_ACCESS_FILE = pathlib.Path('/etc/devstack/engine-access.mode')
 ENGINE_RUNNER = '/opt/devstack/framework-installers/runner.py'
 ENGINE_CATALOG_FILE = pathlib.Path(__file__).resolve().parents[1] / 'framework-installers/catalog.json'
 ENGINE_RESULTS = queue.SimpleQueue()
@@ -306,7 +307,7 @@ def preferences(_: dict[str, Any]) -> dict[str, str]:
 def status(_: dict[str, Any]) -> dict[str, Any]:
     return {'services': service_status(), 'projects': public_projects(),
             'preferences': get_ui_preferences(), 'engine_job': public_engine_job(),
-            'engines': engine_catalog()}
+            'engines': engine_catalog(), 'engine_access_allowed': engine_access_allowed()}
 
 
 
@@ -990,11 +991,26 @@ def adapter_call(unit: str, action: str, args: list[str],
     return {'ok': False}
 
 
+def engine_access_allowed() -> bool:
+    # The web peer still enforces the authenticated session/CSRF boundary.
+    # Only a root-owned explicit policy can enable the passwordless exception.
+    try:
+        mode = AUTH_MODE_FILE.read_text(encoding='utf-8').strip()
+    except FileNotFoundError:
+        return True  # Same as PHP: missing auth.mode requires login.
+    except (OSError, UnicodeError):
+        return False
+    if mode != 'disabled':
+        return True
+    try:
+        return ENGINE_ACCESS_FILE.read_text(encoding='utf-8').strip() == 'allow-passwordless'
+    except (OSError, UnicodeError):
+        return False
+
+
 def require_engine_auth() -> None:
-    # PHP authenticates the session and CSRF token. Enforce the password-mode
-    # requirement again at the trusted local RPC boundary.
-    if AUTH_MODE_FILE.exists() and AUTH_MODE_FILE.read_text(encoding='utf-8').strip() == 'disabled':
-        raise InputError('Instalatory wymagaja wlaczonego logowania do panelu.')
+    if not engine_access_allowed():
+        raise InputError('Instalatory wymagaja logowania lub jednorazowej zgody administratora na prace bez hasla.')
 
 
 def reserve_engine_database(job: dict[str, Any]) -> tuple[str, str, str]:

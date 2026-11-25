@@ -77,15 +77,33 @@ class EngineJobTests(unittest.TestCase):
                 result = d.adapter_call(unit, "scaffold", ["demo", "livewire"])
             self.assertEqual(result, {"ok": False, "code": expected, "log": "laravel-test.log"})
 
-    def test_passwordless_mode_blocks_framework_operations(self):
+    def test_passwordless_mode_requires_explicit_installer_consent(self):
         with tempfile.TemporaryDirectory() as tmp:
             mode = pathlib.Path(tmp) / "auth.mode"
+            consent = pathlib.Path(tmp) / "engine-access.mode"
             mode.write_text("disabled")
-            with patch.object(d, "AUTH_MODE_FILE", mode):
+            with patch.object(d, "AUTH_MODE_FILE", mode), \
+                 patch.object(d, "ENGINE_ACCESS_FILE", consent):
+                self.assertFalse(d.engine_access_allowed())
                 with self.assertRaises(d.InputError):
                     d.engine_tool_status({"engine": "laravel"})
                 with self.assertRaises(d.InputError):
                     d.engine_tool_action({"engine": "laravel", "action": "check"})
+                with patch.object(d, "ENGINE_JOB_FILE", pathlib.Path(tmp) / "job.json"), \
+                     patch.object(d, "start_engine_phase") as start:
+                    with self.assertRaises(d.InputError):
+                        d.create({"engine": "laravel"})
+                    start.assert_not_called()
+                for value in ("invalid", "deny-passwordless", ""):
+                    consent.write_text(value)
+                    self.assertFalse(d.engine_access_allowed())
+                consent.write_text("allow-passwordless\n")
+                self.assertTrue(d.engine_access_allowed())
+                d.require_engine_auth()
+                consent.unlink()
+                self.assertFalse(d.engine_access_allowed())
+                mode.write_text("required\n")
+                self.assertTrue(d.engine_access_allowed())
 
     def test_mariadb_reservation_is_private_and_cleanup_is_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -30,6 +30,29 @@ try {
 } finally {
     if (is_file($modeFile)) unlink($modeFile);
 }
+$authMode = tempnam(sys_get_temp_dir(), 'devstack-engine-auth-');
+$engineMode = tempnam(sys_get_temp_dir(), 'devstack-engine-consent-');
+check(is_string($authMode) && is_string($engineMode), 'Temporary installer policy files');
+try {
+    file_put_contents($authMode, "disabled\n");
+    unlink($engineMode);
+    check(!devstack_engine_access_allowed($authMode, $engineMode), 'Missing consent denies passwordless installers');
+    foreach (['invalid', 'deny-passwordless', ''] as $value) {
+        file_put_contents($engineMode, $value);
+        check(!devstack_engine_access_allowed($authMode, $engineMode), 'Invalid/denied consent blocks installers');
+    }
+    file_put_contents($engineMode, "allow-passwordless\n");
+    check(devstack_engine_access_allowed($authMode, $engineMode), 'Explicit installer consent allows passwordless mode');
+    check(!devstack_password_required($authMode), 'Installer consent does not enable authentication');
+    unlink($engineMode);
+    check(!devstack_engine_access_allowed($authMode, $engineMode), 'Revocation blocks passwordless installers');
+    file_put_contents($authMode, "required\n");
+    check(devstack_engine_access_allowed($authMode, $engineMode), 'Normal authenticated installer access does not need consent');
+    check(!devstack_is_authenticated(true), 'Installer policy does not grant an authenticated session');
+} finally {
+    if (is_file($authMode)) unlink($authMode);
+    if (is_file($engineMode)) unlink($engineMode);
+}
 $statusRpc = json_decode(devstack_rpc_wire('status', []));
 check(is_object($statusRpc), 'RPC request is a JSON object');
 check(is_object($statusRpc->data), 'Empty PHP array encoded as JSON object');
