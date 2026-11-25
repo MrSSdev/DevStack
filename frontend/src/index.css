@@ -72,5 +72,4 @@
 * { border-color: var(--border); }
 html { @apply bg-background text-foreground; }
 body { @apply bg-background text-foreground antialiased; }
-button, input, textarea { font: inherit; }
 ::selection { @apply bg-foreground/15; }
