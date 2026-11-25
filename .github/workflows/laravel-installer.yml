@@ -175,7 +175,15 @@ jobs:
           PY
           cd "$HOME/projects/$slug"
           composer check-platform-reqs
-          composer show laravel/framework
+          composer show laravel/framework --format=json > "$RUNNER_TEMP/framework-composer.json"
+          printf '["%s"]' "$slug" | python3 -I "$GITHUB_WORKSPACE/daemon/project_frameworks.py" > "$RUNNER_TEMP/framework-detected.json"
+          python3 - "$slug" "$RUNNER_TEMP/framework-composer.json" "$RUNNER_TEMP/framework-detected.json" <<'PY'
+          import json, sys
+          composer = json.load(open(sys.argv[2]))
+          detected = json.load(open(sys.argv[3]))[sys.argv[1]]
+          versions = [version.lstrip('* ').lstrip('v') for version in composer['versions']]
+          assert detected['name'] == 'Laravel' and detected['version'] in versions, (detected, versions)
+          PY
           case "$KIT" in
             livewire)
               composer show livewire/livewire

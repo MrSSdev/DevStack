@@ -44,6 +44,18 @@ sudo php /opt/devstack/scripts/configure-auth.php --status
 The permission persists across code updates until explicitly revoked.
 Revocation blocks new framework operations, not an already-running installer.
 
+### Project framework badges
+
+Project versions are best-effort labels from installed Composer metadata, read
+by a fixed isolated Python process launched by systemd with the configured
+developer identity, read-only home and system directories, no new privileges,
+and inaccessible protected DevStack state. The daemon passes only registered
+project slugs.
+The reader rejects symlinks and non-regular or oversized metadata files, executes
+no project code and returns only recognized package names and bounded versions.
+Missing, unreadable or malformed metadata does not block the dashboard. Labels
+are informational, not a security or integrity attestation.
+
 ## Windows integration and widgets
 
 Review privileged installation scripts. Verify the public mkcert CA fingerprint before importing it into Windows. Keep the private CA key inside Ubuntu. Install the widget MSIX using its matching public code-signing certificate and installer from the same trusted build.

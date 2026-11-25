@@ -311,13 +311,77 @@ def defer_php_fpm_reload() -> None:
          '/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
 
 
+def project_frameworks(slugs: list[str]) -> dict[str, dict[str, Any]]:
+    """Only the developer identity may inspect project-controlled metadata."""
+    if not slugs:
+        return {}
+    try:
+        user, home = engine_identity()
+        account = pwd.getpwnam(user)
+        if account.pw_uid == 0 or account.pw_gid == 0:
+            return {}
+        # PID 1 switches identity before applying restrictions, just like
+        # the established installer and project-directory workers. Direct
+        # credential changes in children of the hardened daemon can fail.
+        unit = 'devstack-frameworks-' + secrets.token_hex(8)
+        result = subprocess.run(
+            ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+             '--service-type=exec', '--unit=' + unit,
+             '--uid=' + user, '--gid=' + str(account.pw_gid),
+             '--working-directory=/', '--setenv=HOME=' + home,
+             '--setenv=PATH=/usr/bin:/bin',
+             '--property=NoNewPrivileges=yes',
+             '--property=ProtectSystem=strict', '--property=ProtectHome=read-only',
+             '--property=PrivateTmp=yes', '--property=PrivateDevices=yes',
+             '--property=ProtectKernelTunables=yes', '--property=ProtectKernelModules=yes',
+             '--property=ProtectControlGroups=yes', '--property=RestrictSUIDSGID=yes',
+             '--property=InaccessiblePaths=-/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack -/mnt/c',
+             '--property=PartOf=devstackd.service', '--property=RuntimeMaxSec=5s',
+             '--property=UMask=0077',
+             '/usr/bin/python3', '-I', str(pathlib.Path(__file__).resolve().with_name('project_frameworks.py'))],
+            input=json.dumps(slugs), capture_output=True, text=True, timeout=10,
+            check=True, close_fds=True,
+        )
+        if len(result.stdout) > 1024 * 1024:
+            raise ValueError('oversized framework response')
+        raw = json.loads(result.stdout)
+        if not isinstance(raw, dict):
+            return {}
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as exc:
+        # Keep the dashboard usable and emit only a bounded diagnostic, never
+        # raw project metadata or stderr from the worker.
+        code = (' (exit ' + str(exc.returncode) + ')') if isinstance(exc, subprocess.CalledProcessError) else ''
+        print('Framework metadata worker unavailable: ' + type(exc).__name__ + code, file=sys.stderr, flush=True)
+        return {}
+    labels = {'Laravel', 'Symfony', 'CakePHP', 'CodeIgniter', 'Yii', 'Slim'}
+    allowed = set(slugs)
+    output = {}
+    for slug, value in raw.items():
+        if slug not in allowed or not isinstance(value, dict):
+            continue
+        label, version = value.get('name'), value.get('version')
+        if not isinstance(label, str) or label not in labels:
+            continue
+        if version is not None and (not isinstance(version, str) or not re.fullmatch(
+            r'[0-9]{1,5}\.[0-9]{1,5}(?:\.[0-9]{1,5}){0,2}(?:[-+][0-9A-Za-z][0-9A-Za-z.+-]{0,47})?', version
+        )):
+            continue
+        output[slug] = {'name': label, 'version': version}
+    return output
+
+
 def public_projects() -> list[dict[str, Any]]:
     output = []
-    for slug, p in sorted(read_json(STATE_FILE).items()):
+    state = read_json(STATE_FILE)
+    frameworks = project_frameworks([slug for slug, p in state.items() if SLUG.fullmatch(slug) and isinstance(p, dict)])
+    for slug, p in sorted(state.items()):
         if not SLUG.fullmatch(slug) or not isinstance(p, dict):
             continue
         item = dict(p)
         item['slug'] = slug
+        item.pop('detected_framework', None)
+        if slug in frameworks:
+            item['detected_framework'] = frameworks[slug]
         path = site_path(slug)
         item['nginx_config'] = path.read_text(encoding='utf-8') if path.is_file() else ''
         output.append(item)

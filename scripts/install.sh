@@ -24,7 +24,7 @@ if [[ ! -f "$SRC/backend/public/index.html" ]] || [[ ! -d "$SRC/backend/public/a
   echo 'Frontend is not built. First run bash scripts/build-frontend.sh as normal user.' >&2
   exit 1
 fi
-if [[ ! -f "$SRC/backend/public/index.php" || ! -f "$SRC/daemon/devstackd.py" ]]; then
+if [[ ! -f "$SRC/backend/public/index.php" || ! -f "$SRC/daemon/devstackd.py" || ! -f "$SRC/daemon/project_frameworks.py" ]]; then
   echo 'Source tree is incomplete.' >&2
   exit 1
 fi
@@ -50,6 +50,7 @@ install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web /var/lib/
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
 install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
+install -m 0644 -o root -g root "$SRC/daemon/project_frameworks.py" /opt/devstack/daemon/project_frameworks.py
 install -m 0644 -o root -g root "$SRC/daemon/managed_services.py" /opt/devstack/daemon/managed_services.py
 install -m 0644 -o root -g root "$SRC/daemon/service-catalog.json" /opt/devstack/daemon/service-catalog.json
 if [[ -L "$SRC/framework-installers" || -L "$SRC/framework-installers/laravel" ]]; then

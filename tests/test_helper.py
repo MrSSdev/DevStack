@@ -74,6 +74,41 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(d.InputError):
             d.update_config({'slug':'alpha','rules':'','overrides':''})
 
+    def test_framework_reader_uses_only_developer_credentials_and_known_results(self):
+        from types import SimpleNamespace
+        account = SimpleNamespace(pw_uid=1001, pw_gid=1001)
+        output = {
+            'demo': {'name': 'Laravel', 'version': '13.42.0', 'untrusted': 'discard'},
+            'other': {'name': 'Symfony', 'version': '<script>'},
+            'unknown': {'name': 'Unknown', 'version': '1.0'},
+            'not-requested': {'name': 'Laravel', 'version': '13.0'},
+        }
+        with patch.object(d, 'engine_identity', return_value=('developer', '/home/developer')), \
+             patch.object(d.pwd, 'getpwnam', return_value=account), \
+             patch.object(d.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps(output))) as run:
+            result = d.project_frameworks(['demo','other','unknown'])
+            self.assertEqual(result, {'demo': {'name': 'Laravel', 'version': '13.42.0'}})
+            args, kwargs = run.call_args
+            self.assertEqual(args[0][0], '/usr/bin/systemd-run')
+            self.assertEqual(args[0][-3:-1], ['/usr/bin/python3','-I'])
+            self.assertTrue(args[0][-1].endswith('/daemon/project_frameworks.py'))
+            self.assertIn('--uid=developer', args[0])
+            self.assertIn('--gid=1001', args[0])
+            self.assertIn('--working-directory=/', args[0])
+            self.assertIn('--property=NoNewPrivileges=yes', args[0])
+            self.assertIn('--property=ProtectHome=read-only', args[0])
+            self.assertIn('--property=ProtectSystem=strict', args[0])
+            self.assertIn('--property=RuntimeMaxSec=5s', args[0])
+            self.assertIn('--property=InaccessiblePaths=-/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack -/mnt/c', args[0])
+            self.assertNotIn('user', kwargs)
+            self.assertNotIn('group', kwargs)
+            self.assertEqual(json.loads(kwargs['input']), ['demo','other','unknown'])
+            self.assertEqual(kwargs['timeout'], 10)
+        with patch.object(d, 'engine_identity', return_value=('developer','/home/developer')), \
+             patch.object(d.pwd,'getpwnam',return_value=account), \
+             patch.object(d.subprocess,'run',side_effect=OSError('unavailable')):
+            self.assertEqual(d.project_frameworks(['demo']), {})
+
     def test_theme_defaults_and_persists_server_side(self):
         with tempfile.TemporaryDirectory() as tmp:
             pref = Path(tmp) / 'preferences.json'
