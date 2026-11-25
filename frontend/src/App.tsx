@@ -126,7 +126,7 @@ export function App() {
   const [kitError,setKitError]=useState('')
   const [kitRefresh,setKitRefresh]=useState(0)
   const [installerChoices,setInstallerChoices]=useState<InstallerValues>({})
-  const [rules,setRules]=useState('')
+  const [rulesDraft,setRulesDraft]=useState<{slug:string;value:string}|null>(null)
   const [fullOpen,setFullOpen]=useState(false)
   const [fullEditing,setFullEditing]=useState(false)
   const [fullConfig,setFullConfig]=useState('')
@@ -157,6 +157,9 @@ export function App() {
   const toolDefinition=engines[toolId]
   const engineBusy=!!engineJob && !['succeeded','failed'].includes(engineJob.state)
   const current=projects.find(p=>p.slug===selected)
+  // Display persisted rules immediately; an edit belongs to one project only.
+  // Do not clear or rehydrate the editor in a post-render effect.
+  const rules=rulesDraft&&rulesDraft.slug===current?.slug?rulesDraft.value:nginxRules(current)
   const title:Record<View,string>={dashboard:'Przegląd',projects:'Projekty',new:'Nowy projekt',project:current?.name??'Projekt',mail:'E-mail',settings:'Ustawienia'}
   const notify=(message:string)=>{setNotice(message);setError('')}
   const fail=(reason:unknown)=>{setError(reason instanceof Error?reason.message:'Nieznany błąd.');setNotice('')}
@@ -261,7 +264,6 @@ export function App() {
     return ()=>window.clearInterval(id)
   },[authenticated,refresh])
   useEffect(()=>{
-    setRules(nginxRules(current))
     setFullOpen(false)
     setFullEditing(false)
     setFullPassword('')
@@ -284,7 +286,7 @@ export function App() {
   async function logout(){
     try {const info=await request<{csrf:string}>('POST','/api/logout',csrf,{});setCsrf(info.csrf)}
     catch(e){fail(e);return}
-    setNavOpen(false);setAuthenticated(false);setDbSecret('');setServer({services:{},projects:[],preferences:{theme:'light'}});setSelected('');setView('dashboard')
+    setNavOpen(false);setAuthenticated(false);setDbSecret('');setRulesDraft(null);setServer({services:{},projects:[],preferences:{theme:'light'}});setSelected('');setView('dashboard')
   }
   useEffect(()=>{
     if(!authenticated || initializing || engineJob?.state!=='succeeded' || !showJobNotice(engineJob,dismissedJob))return
@@ -354,7 +356,7 @@ export function App() {
       const payload={...draft,...projectIdentityPayload(draft),webroot:draftEngine?undefined:draft.webroot.trim(),installer_options:draftEngine?resolvedOptions.values:{}}
       const answer=await request<{message:string;job_id?:string}>('POST','/api/projects',csrf,payload)
       await refresh();setDraft(blank);setInstallerChoices({})
-      if(!answer.job_id){setSelected(payload.slug);setView('project');notify(answer.message)}
+      if(!answer.job_id){setRulesDraft(null);setSelected(payload.slug);setView('project');notify(answer.message)}
     }catch(e){fail(e)}finally{setBusy(false)}
   }
   async function testDatabase(){
@@ -376,6 +378,7 @@ export function App() {
       setDeleteOpen(false)
       setDeleteConfirmation('')
       setDeleteDbConfirm(false)
+      setRulesDraft(null)
       setSelected('')
       setView('projects')
       setDbSecret('')
@@ -387,7 +390,7 @@ export function App() {
     if(!current)return;setBusy(true)
     try {
       const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config',csrf,{slug:current.slug,rules})
-      setRules(nginxRules(result))
+      setRulesDraft({slug:current.slug,value:nginxRules(result)})
       await refresh();notify(result.message)
     }catch(e){fail(e)}finally{setBusy(false)}
   }
@@ -396,7 +399,7 @@ export function App() {
     setBusy(true)
     try {
       const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword})
-      setRules(nginxRules(result))
+      setRulesDraft({slug:current.slug,value:nginxRules(result)})
       setFullPassword('')
       setFullEditing(false)
       await refresh()
@@ -428,7 +431,7 @@ export function App() {
     // views have stable, shareable hash URLs used by Windows Widgets.
     if(next!=='project')window.location.hash='/'+next
   }
-  function details(slug:string){setSelected(slug);go('project')}
+  function details(slug:string){setRulesDraft(null);setSelected(slug);go('project')}
   const linkStyle=(active:boolean)=>cn('flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',active?'bg-foreground text-background':'text-muted-foreground hover:bg-secondary hover:text-foreground')
 
   if(initializing) return <div className="flex min-h-screen items-center justify-center gap-3 text-sm text-muted-foreground"><RefreshCw className="size-5 animate-spin"/>Uruchamianie DevStack…</div>
@@ -460,7 +463,7 @@ export function App() {
       {view==='project'&&current&&<div className="space-y-3"><div className="grid gap-3 xl:grid-cols-2"><Card><CardHeader><div className="flex items-center justify-between gap-3"><CardTitle>Projekt</CardTitle>{current.https&&<HttpsBadge/>}</div></CardHeader><CardContent className="space-y-3"><Info label="Domena" value={current.domain} action={<Button variant="ghost" size="icon" aria-label="Otwórz stronę" onClick={()=>window.open(`${current.https?'https':'http'}://${current.domain}`,'_blank','noopener,noreferrer')}><ExternalLink/></Button>}/><Info label="Folder" value={current.path}/><Info label="Webroot" value={current.webroot}/>{current.engine&&current.engine!=='none'&&<><Info label="Framework" value={(engines[current.engine]?.label??current.engine)+' · '+(current.starter_kit_label??(current.starter_kit==='none'?'Blade (bez starter kitu)':current.starter_kit==='livewire'?'Livewire':current.starter_kit??''))}/>{current.installer_option_labels?.map((option,i)=><Info key={i} label={option.label} value={option.value}/>)}{current.installer_options?.assets==='no'&&<p className="text-xs text-muted-foreground">Budowanie zasobów pominięto podczas instalacji. Przygotuj je przed otwarciem aplikacji, jeśli jeszcze nie zostały zbudowane.</p>}<Info label="Instalacja" value={current.engine_status==='ready'?'Środowisko gotowe':current.engine_status==='failed'?'Wymaga kontroli':'W toku'}/></>}<Info label="Auto SSL" value={current.https?'Włączone':'Wyłączone'}/><Info label="Poczta testowa" value={current.local_mail?'Mailpit · ustawiono przy tworzeniu':'Nie skonfigurowano przez DevStack'} action={<Button size="icon" variant="ghost" aria-label="Przejdź do skrzynki E-mail" onClick={()=>go('mail')}><Mail/></Button>}/></CardContent></Card><Card><CardHeader><CardTitle>{!current.database&&current.engine==='laravel'?'SQLite':'MariaDB'}</CardTitle><CardDescription>{current.engine==='laravel'?(current.database?'Dane połączenia zapisane w pliku .env.':'Lokalny plik bazy aplikacji Laravel.'):'Konto przypisane tylko do tej bazy'}</CardDescription></CardHeader><CardContent className="space-y-3">{current.database?<><Info label="Host" value="127.0.0.1" action={<Button variant="ghost" size="icon" aria-label="Kopiuj host" onClick={()=>{void copy('127.0.0.1')}}><Copy/></Button>}/><Info label="Port" value="3306"/><Info label="Baza" value={current.db_name} action={<Button variant="ghost" size="icon" aria-label="Kopiuj bazę" onClick={()=>{void copy(current.db_name)}}><Copy/></Button>}/><Info label="Użytkownik" value={current.db_user} action={<Button variant="ghost" size="icon" aria-label="Kopiuj użytkownika" onClick={()=>{void copy(current.db_user)}}><Copy/></Button>}/><form onSubmit={reveal} className="rounded-xl border bg-secondary/30 p-3"><Field label={passwordRequired?'Potwierdź hasło panelu, aby zobaczyć hasło bazy':'Pokaż hasło lokalnej bazy'}><div className="flex gap-2">{passwordRequired&&<Input type="password" autoComplete="off" aria-label="Hasło panelu" value={revealPassword} onChange={e=>setRevealPassword(e.target.value)} required/>}<Button type="submit" disabled={busy}>Pokaż</Button></div></Field>{dbSecret&&<div className="mt-3 flex items-center gap-2"><code className="min-w-0 flex-1 select-all break-all rounded-md bg-background p-3 text-xs">{dbSecret}</code><Button size="icon" variant="outline" aria-label="Kopiuj hasło" onClick={()=>{void copy(dbSecret)}}><Copy/></Button><Button size="icon" variant="outline" aria-label="Ukryj hasło" onClick={()=>setDbSecret('')}><X/></Button></div>}<p className="mt-2 text-xs text-muted-foreground">Hasło znika po 20 sekundach. W trybie bez logowania lokalny dostęp do panelu wystarcza do jego ujawnienia.</p></form><Button variant="outline" className="w-full" disabled={busy||testingDb} onClick={()=>{void testDatabase()}}><Database/>{testingDb?'Testowanie MariaDB…':'Test połączenia MariaDB'}</Button></>:<p className="text-sm text-muted-foreground">{current.engine==='laravel'?'SQLite: database/database.sqlite w katalogu projektu.':'Ten projekt nie ma zarządzanej bazy MariaDB.'}</p>}</CardContent></Card></div>
         <Card><CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Konfiguracja Nginx</CardTitle></div><Badge><FileCode2 className="size-3"/>Zarządzana</Badge></div></CardHeader><CardContent className="space-y-3">
           <Field label="Dodatkowe reguły Nginx" hint="Dyrektywy limitów i timeoutów oraz dozwolone bloki location dla zasobów aplikacji.">
-            <Textarea aria-label="Dodatkowe reguły Nginx" className="min-h-36 font-mono text-xs" spellCheck={false} disabled={busy||fullEditing} value={rules} onChange={e=>setRules(e.target.value)} rows={8}/>
+            <Textarea aria-label="Dodatkowe reguły Nginx" className="min-h-36 font-mono text-xs" spellCheck={false} disabled={busy||fullEditing} value={rules} onChange={e=>setRulesDraft({slug:current.slug,value:e.target.value})} rows={8}/>
             <details className="text-xs text-muted-foreground"><summary className="cursor-pointer font-medium text-foreground">Obsługiwane reguły i przykład</summary><p className="mt-2">client_max_body_size (1–999m), client_body_timeout i send_timeout (1–999s). W blokach location obsługiwane są konkretne ścieżki JS/CSS, opcjonalne expires off oraz try_files. DevStack umieszcza reguły we właściwych sekcjach.</p><pre className="mt-2 overflow-x-auto rounded-md border bg-secondary/40 p-2 font-mono">{'client_max_body_size 64m;\n\nlocation ~* ^/flux/(flux|editor)(\\.min)?\\.(js|css)$ {\n    expires off;\n    try_files $uri $uri/ /index.php?$query_string;\n}'}</pre></details>
           </Field>
           <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Kopia → nginx -t → reload albo cofnięcie.</p><Button disabled={busy || fullEditing} onClick={()=>{void saveConfig()}}><Check/>{busy?'Zapisywanie…':'Sprawdź i zastosuj'}</Button></div>

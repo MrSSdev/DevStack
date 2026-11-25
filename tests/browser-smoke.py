@@ -145,21 +145,28 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.locator('main button').filter(has_text='Browser fixture').click()
         editor = self.page.get_by_role('textbox',name='Dodatkowe reguły Nginx',exact=True)
         expect(editor).to_have_count(1)
-        self.assertIn('client_max_body_size 64m;', editor.input_value())
-        self.assertIn('location ~* ^/flux/', editor.input_value())
+        legacy_rules = legacy.json()['result']
+        expect(editor).to_have_value(legacy_rules['overrides'] + '\n\n' + legacy_rules['extra_locations'])
         expect(self.page.get_by_text('Dodatkowe reguły — location /',exact=True)).to_have_count(0)
         expect(self.page.get_by_text('Dodatkowe lokalizacje zasobów JS/CSS',exact=True)).to_have_count(0)
         editor.fill('client_max_body_size 128m;\n\n' + flux)
         self.page.get_by_role('button',name='Sprawdź i zastosuj',exact=True).click()
         expect(self.page.get_by_role('status').filter(has_text='Konfiguracja przetestowana')).to_be_visible()
-        self.assertIn('client_max_body_size 128m;', editor.input_value())
-        self.assertIn('expires off;', editor.input_value())
+        expected_rules = 'client_max_body_size 128m;\n\n' + legacy_rules['extra_locations']
+        expect(editor).to_have_value(expected_rules)
         invalid = self.post('/api/config', {'slug':'browser-fixture','rules':'include /etc/shadow;'})
         self.assertEqual(invalid.status,422)
+        # Verify actual persisted state and the generated vhost, independent
+        # of the React draft. An invalid edit must not change either region.
+        persisted = self.context.request.get(BASE + '/api/state').json()['result']
+        saved = next(p for p in persisted['projects'] if p['slug']=='browser-fixture')
+        self.assertEqual(saved['overrides'], 'client_max_body_size 128m;')
+        self.assertEqual(saved['extra_locations'], legacy_rules['extra_locations'])
+        self.assertIn('client_max_body_size 128m;', saved['nginx_config'])
+        self.assertIn('location ~* ^/flux/', saved['nginx_config'])
         self.goto('projects')
         self.page.locator('main button').filter(has_text='Browser fixture').click()
-        self.assertIn('client_max_body_size 128m;', editor.input_value())
-        self.assertIn('location ~* ^/flux/', editor.input_value())
+        expect(editor).to_have_value(expected_rules)
         long_slug='long-'+'a'*35
         response=self.post('/api/projects',dict(slug=long_slug,name='A'*70,domain=long_slug+'.test',webroot='public',database=False,https=False,local_mail=False,engine='none',starter_kit='none',installer_options={}))
         self.assertEqual(response.status,200,response.text())
