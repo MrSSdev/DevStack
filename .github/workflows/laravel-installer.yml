@@ -98,7 +98,7 @@ jobs:
           git config --global user.name "DevStack CI"
           git config --global user.email "ci@example.invalid"
           mkdir -p "$HOME/projects"
-          slug="devstack-ci-$KIT"
+          slug="ci-$KIT"
           test ! -e "$HOME/projects/$slug"
           runner="$PWD/framework-installers/runner.py"
           composer global require "laravel/installer:$INSTALLER_VERSION" --no-interaction --no-ansi --no-progress --prefer-dist
@@ -166,12 +166,12 @@ jobs:
           KIT: ${{ matrix.kit }}
           DRIVER: ${{ matrix.driver }}
         run: |
-          if printf '%s' '{"url":"https://existing.test"}' | python3 -I framework-installers/runner.py laravel scaffold "devstack-ci-$KIT" "$KIT" "$DRIVER"; then
+          if printf '%s' '{"url":"https://existing.test"}' | python3 -I framework-installers/runner.py laravel scaffold "ci-$KIT" "$KIT" "$DRIVER"; then
             echo 'Adapter unexpectedly accepted an existing project' >&2
             exit 1
           fi
-          if python3 -I framework-installers/runner.py laravel migrate "devstack-ci-$KIT"; then
+          if python3 -I framework-installers/runner.py laravel migrate "ci-$KIT"; then
             echo 'Adapter unexpectedly accepted a separate migration operation' >&2
             exit 1
           fi
-          test -s "$HOME/projects/devstack-ci-$KIT/artisan"
+          test -s "$HOME/projects/ci-$KIT/artisan"
