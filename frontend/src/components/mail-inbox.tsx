@@ -18,7 +18,7 @@ const idPattern=/^[A-Za-z0-9]{22}$/
 const partPattern=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const pageSize=40
 const installCommand='cd ~/projects/devstack-source && sudo bash scripts/install-mailpit.sh'
-const manualConfig=['MAIL_MAILER=smtp','MAIL_SCHEME=null','MAIL_URL=null','MAIL_HOST=127.0.0.1','MAIL_PORT=1025','MAIL_USERNAME=null','MAIL_PASSWORD=null','MAIL_FROM_ADDRESS="hello@twoj-projekt.test"'].join('\n')
+const manualConfig=['MAIL_MAILER=smtp','MAIL_SCHEME=null','MAIL_URL=null','MAIL_HOST=127.0.0.1','MAIL_PORT=1025','MAIL_USERNAME=null','MAIL_PASSWORD=null','MAIL_ENCRYPTION=null','MAIL_FROM_ADDRESS="hello@twoj-projekt.test"'].join('\n')
 const messageDate=(s?:string)=>s&&!Number.isNaN(Date.parse(s))?new Date(s).toLocaleString('pl-PL'):''
 function address(a?:Address|null):string{return a?(a.Name&&a.Address?a.Name+' <'+a.Address+'>':a.Address||a.Name||'—'):'—'}
 function addresses(a?:Address[]|null):string{return Array.isArray(a)?a.map(address).join(', '):'—'}

@@ -44,7 +44,7 @@ php tests/php-security.php
 bash scripts/security-scan.sh
 
 echo '[3/5] Checking syntax...'
-bash -n scripts/update.sh scripts/apply-update.sh
+bash -n scripts/update.sh scripts/apply-update.sh scripts/install-mailpit.sh
 php -l backend/public/index.php
 php -l backend/security.php
 php -l scripts/set-password.php

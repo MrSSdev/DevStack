@@ -1,0 +1,85 @@
+name: Local Mailpit smoke test
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/install-mailpit.sh'
+      - 'backend/**'
+      - 'daemon/devstackd.py'
+      - '.github/workflows/mailpit.yml'
+      - 'tests/test_mailpit.py'
+      - 'tests/mailpit-smoke.php'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mailpit:
+    name: Mailpit install, capture and API
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+      - name: Install pinned local-only service
+        run: |
+          if bash scripts/install-mailpit.sh; then
+            echo 'Unprivileged installation was incorrectly accepted' >&2
+            exit 1
+          fi
+          sudo bash scripts/install-mailpit.sh
+          systemctl is-active --quiet devstack-mailpit.service
+          systemctl is-enabled --quiet devstack-mailpit.service
+          test "$(stat -c '%U:%G %a' /opt/devstack-mailpit/mailpit)" = 'root:root 755'
+          test "$(cat /opt/devstack-mailpit/VERSION)" = v1.34.0
+          python3 - <<'PY'
+          import subprocess
+          listeners = subprocess.check_output(["ss", "-H", "-ltn"], text=True)
+          for port in (1025, 8025):
+              matched = [line.split()[3] for line in listeners.splitlines() if line.split()[3].endswith(":" + str(port))]
+              assert matched == [f"127.0.0.1:{port}"], matched
+          PY
+      - name: Capture SMTP and native PHP mail
+        run: |
+          python3 - <<'PY'
+          from email.message import EmailMessage
+          import smtplib
+          message = EmailMessage()
+          message["From"] = "hello@project.test"
+          message["To"] = "recipient@example.test"
+          message["Subject"] = "DevStack SMTP fixture"
+          message.set_content("Plain fixture body")
+          message.add_alternative('<p>HTML fixture body</p><img src="https://example.invalid/tracker">', subtype="html")
+          message.add_attachment(b"DevStack fixture attachment\n", maintype="application", subtype="octet-stream", filename="fixture.txt")
+          with smtplib.SMTP("127.0.0.1", 1025, timeout=5) as smtp:
+              smtp.send_message(message)
+          PY
+          php -d 'sendmail_path=/opt/devstack-mailpit/mailpit sendmail -S 127.0.0.1:1025 -t -i' -r 'if (!mail("recipient@example.test", "DevStack PHP fixture", "Local PHP body", "From: hello@php.test")) exit(1);'
+          php tests/mailpit-smoke.php
+      - name: Preserve messages across restart and refuse reinstallation
+        run: |
+          sudo systemctl restart devstack-mailpit.service
+          for attempt in {1..15}; do
+            if curl -fsS --noproxy '*' --max-time 2 http://127.0.0.1:8025/api/v1/messages > /tmp/devstack-mailpit-smoke.json; then
+              break
+            fi
+            sleep 1
+          done
+          python3 - <<'PY'
+          import json
+          data = json.load(open("/tmp/devstack-mailpit-smoke.json"))
+          assert data["total"] == 1
+          assert data["messages"][0]["Subject"] == "DevStack PHP fixture"
+          PY
+          if sudo bash scripts/install-mailpit.sh; then
+            echo 'Existing installation was incorrectly overwritten' >&2
+            exit 1
+          fi
+          systemctl is-active --quiet devstack-mailpit.service
