@@ -29,10 +29,12 @@ PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
 CA_PUBLIC_FILE = pathlib.Path('/var/lib/devstack/ca/rootCA.pem')  # Public cert ONLY; never expose rootCA-key.pem.
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
 ENGINE_JOB_FILE = pathlib.Path('/var/lib/devstack/engine-job.json')
+ENGINE_DB_FILE = pathlib.Path('/var/lib/devstack/engine-db-reservation.json')
+AUTH_MODE_FILE = pathlib.Path('/etc/devstack/auth.mode')
 ENGINE_RUNNER = '/opt/devstack/framework-installers/runner.py'
 ENGINE_CATALOG_FILE = pathlib.Path(__file__).resolve().parents[1] / 'framework-installers/catalog.json'
 ENGINE_RESULTS = queue.SimpleQueue()
-ENGINE_ACTIVE = {'scaffolding', 'configuring', 'migrating', 'checking', 'installing', 'updating'}
+ENGINE_ACTIVE = {'preparing', 'scaffolding', 'configuring', 'migrating', 'checking', 'installing', 'updating'}
 ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
 ENGINE_UNIT = re.compile(r'devstack-engine-[0-9a-f]{32}-[a-z-]+\Z')
 WINDOWS_SCHTASKS = pathlib.Path('/mnt/c/Windows/System32/schtasks.exe')
@@ -375,11 +377,20 @@ def ensure_project_paths(root: pathlib.Path, webroot: str, dev_user: str) -> pat
 
 def grant_public_access(root: pathlib.Path, public: pathlib.Path, dev_user: str) -> None:
     base = pathlib.Path('/home') / dev_user / 'projects'
-    for path in [base.parent, base, root]:
-        run(['/usr/bin/setfacl', '-m', 'u:www-data:--x', str(path)])
-    run(['/usr/bin/setfacl', '-R', '-m', 'u:www-data:rX', str(public)])
-    for folder, dirs, files in os.walk(public, followlinks=False):
-        run(['/usr/bin/setfacl', '-d', '-m', 'u:www-data:rX', folder])
+    # The freshly installed tree is developer-controlled. Never recursively
+    # change its permissions as root; avoid following symlinks.
+    pwd.getpwnam(dev_user)
+    def developer_acl(argv: list[str]) -> None:
+        run(['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+             '--uid=' + dev_user, '--unit=devstack-acl-' + secrets.token_hex(8),
+             '--property=NoNewPrivileges=yes', '--property=RuntimeMaxSec=40s',
+             '--property=ProtectSystem=strict', '--property=ReadWritePaths=' + str(base.parent),
+             *argv])
+    developer_acl(['/usr/bin/setfacl', '-P', '-m', 'u:www-data:--x', '--',
+                   str(base.parent), str(base), str(root)])
+    developer_acl(['/usr/bin/setfacl', '-P', '-R', '-m', 'u:www-data:rX', '--', str(public)])
+    developer_acl(['/usr/bin/find', '-P', str(public), '-type', 'd', '-exec',
+                   '/usr/bin/setfacl', '-d', '-m', 'u:www-data:rX', '--', '{}', '+'])
 
 
 def php_pool(slug: str, user: str) -> str:
@@ -500,16 +511,24 @@ def mariadb_execute(sql: str) -> None:
         raise RuntimeError('MariaDB nie wykonala operacji. Sprawdz log serwera.') from None
 
 
-def create_db(slug: str) -> tuple[str, str, str]:
+def create_db(slug: str, *, password: str | None = None) -> tuple[str, str, str]:
     name, user = db_identifiers(slug)
-    password = secrets.token_urlsafe(36)
+    password = password if password is not None else secrets.token_urlsafe(36)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', password):
+        raise RuntimeError('Nieprawidlowe haslo generowanej bazy.')
+    # Do not adopt an existing database or drop a pre-existing account if
+    # CREATE USER fails. Roll back only resources we know we created.
+    created_user = False
     mariadb_execute(f'CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;')
     try:
         mariadb_execute(f"CREATE USER '{user}'@'127.0.0.1' IDENTIFIED BY '{password}';")
+        created_user = True
         mariadb_execute(f"GRANT ALL PRIVILEGES ON `{name}`.* TO '{user}'@'127.0.0.1';")
     except Exception:
         try:
-            drop_db(name, user)
+            mariadb_execute(f"DROP DATABASE IF EXISTS `{name}`;")
+            if created_user:
+                mariadb_execute(f"DROP USER IF EXISTS '{user}'@'127.0.0.1';")
         except Exception:
             print('Failed database cleanup for ' + slug, file=sys.stderr)
         raise
@@ -523,13 +542,15 @@ def drop_db(name: str, user: str) -> None:
     mariadb_execute(f"DROP DATABASE IF EXISTS `{name}`; DROP USER IF EXISTS '{user}'@'127.0.0.1';")
 
 
-def create_environment(data: dict[str, Any]) -> dict[str, str]:
+def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str] | None = None) -> dict[str, str]:
     cfg = config()
     slug = check_slug(data.get('slug'))
     name = check_name(data.get('name'))
     domain = check_domain(data.get('domain'))
     webroot = check_webroot(data.get('webroot'))
     database = data.get('database') is True
+    if prepared_db is not None and (not database or prepared_db[:2] != db_identifiers(slug)):
+        raise RuntimeError('Niespojna rezerwacja MariaDB.')
     https = data.get('https') is True
     state = read_json(STATE_FILE)
     secrets_state = read_json(SECRET_FILE)
@@ -548,7 +569,7 @@ def create_environment(data: dict[str, Any]) -> dict[str, str]:
         public = ensure_project_paths(root, webroot, cfg['dev_user'])
         grant_public_access(root, public, cfg['dev_user'])
         if database:
-            db_info = create_db(slug)
+            db_info = prepared_db if prepared_db is not None else create_db(slug)
         if https:
             generated = mkcert_for(slug, domain)
         pool_file.write_text(php_pool(slug, cfg['dev_user']), encoding='utf-8')
@@ -585,7 +606,7 @@ def create_environment(data: dict[str, Any]) -> dict[str, str]:
             pool_file.unlink(missing_ok=True)
         for file in generated:
             file.unlink(missing_ok=True)
-        if db_info:
+        if db_info and prepared_db is None:
             try:
                 drop_db(db_info[0], db_info[1])
             except Exception:
@@ -905,14 +926,20 @@ def engine_unit_args(unit: str, action: str, args: list[str], timeout: int,
     ]
 
 
-def stop_engine_unit(unit: Any) -> None:
+def stop_engine_unit(unit: Any) -> bool:
     if not isinstance(unit, str) or not ENGINE_UNIT.fullmatch(unit):
-        return
+        return False
     try:
-        subprocess.run(['/usr/bin/systemctl', 'stop', unit + '.service'],
-                       capture_output=True, timeout=10, check=False)
+        stopped = subprocess.run(['/usr/bin/systemctl', 'stop', unit + '.service'],
+                                 capture_output=True, timeout=10, check=False)
+        if stopped.returncode == 0:
+            return True
+        state = subprocess.run(['/usr/bin/systemctl', 'show', '-p', 'ActiveState',
+                                '--value', unit + '.service'], capture_output=True,
+                               text=True, timeout=5, check=False)
+        return state.returncode == 0 and state.stdout.strip() in ('inactive', 'failed')
     except (OSError, subprocess.TimeoutExpired):
-        pass
+        return False
 
 
 def sanitize_tool_result(value: Any) -> dict[str, Any]:
@@ -956,13 +983,92 @@ def adapter_call(unit: str, action: str, args: list[str],
                 re.fullmatch(re.escape(engine) + r'-[A-Za-z0-9_-]+\.log', log) else None,
                 'code': code if isinstance(code, str) and code in ENGINE_FAILURE_MESSAGES else None}
     except subprocess.TimeoutExpired:
-        stop_engine_unit(unit)
+        if not stop_engine_unit(unit):
+            return {'ok': False, 'keep_db': True}
     except (OSError, ValueError, RuntimeError):
         pass
     return {'ok': False}
 
 
+def require_engine_auth() -> None:
+    # PHP authenticates the session and CSRF token. Enforce the password-mode
+    # requirement again at the trusted local RPC boundary.
+    if AUTH_MODE_FILE.exists() and AUTH_MODE_FILE.read_text(encoding='utf-8').strip() == 'disabled':
+        raise InputError('Instalatory wymagaja wlaczonego logowania do panelu.')
+
+
+def reserve_engine_database(job: dict[str, Any]) -> tuple[str, str, str]:
+    if ENGINE_DB_FILE.exists():
+        raise InputError('Poprzednia rezerwacja MariaDB wymaga sprawdzenia przez administratora.')
+    slug = job['slug']
+    name, user = db_identifiers(slug)
+    password = secrets.token_urlsafe(36)
+    # Private root-owned reservation, separate from the publicly projected job.
+    # A crash in the preparing phase is uncertain: do not delete any resource
+    # based only on a guessed name. An administrator must reconcile it.
+    record = {'id': job['id'], 'slug': slug, 'name': name, 'user': user,
+              'password': password, 'phase': 'preparing'}
+    write_json_atomic(ENGINE_DB_FILE, record)
+    result = create_db(slug, password=password)
+    if result != (name, user, password):
+        raise RuntimeError('Niespojna rezerwacja MariaDB.')
+    record['phase'] = 'ready'
+    write_json_atomic(ENGINE_DB_FILE, record)
+    return result
+
+
+def engine_database_record(job: dict[str, Any]) -> dict[str, Any]:
+    record = read_json(ENGINE_DB_FILE)
+    if not record or record.get('id') != job.get('id'):
+        return {}
+    slug = check_slug(job.get('slug'))
+    if (record.get('slug') != slug
+            or (record.get('name'), record.get('user')) != db_identifiers(slug)
+            or not isinstance(record.get('password'), str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', record['password'])):
+        raise RuntimeError('Niespojna rezerwacja MariaDB.')
+    return record
+
+
+def prepared_engine_database(job: dict[str, Any]) -> tuple[str, str, str]:
+    record = engine_database_record(job)
+    if record.get('phase') != 'ready':
+        raise RuntimeError('Brak zakonczonej rezerwacji MariaDB.')
+    return record['name'], record['user'], record['password']
+
+
+def release_engine_database(job: dict[str, Any], *, allow_cleanup: bool) -> str:
+    """Keep the registered database, or roll back only a known fresh reservation."""
+    try:
+        record = engine_database_record(job)
+        if not record:
+            return ''
+        slug = job['slug']
+        state = read_json(STATE_FILE)
+        secret_state = read_json(SECRET_FILE)
+        project = state.get(slug)
+        credential = secret_state.get(slug)
+        if isinstance(project, dict):
+            if (project.get('db_name'), project.get('db_user')) != (record['name'], record['user']) or credential != {'password': record['password']}:
+                raise RuntimeError('Niespojna rezerwacja MariaDB.')
+            ENGINE_DB_FILE.unlink(missing_ok=True)
+            return ''
+        if not allow_cleanup or record.get('phase') != 'ready':
+            return ' Rezerwacja MariaDB wymaga sprawdzenia przez administratora.'
+        if credential is not None and credential != {'password': record['password']}:
+            raise RuntimeError('Niespojna rezerwacja MariaDB.')
+        drop_db(record['name'], record['user'])
+        if credential is not None:
+            secret_state.pop(slug)
+            write_json_atomic(SECRET_FILE, secret_state)
+        ENGINE_DB_FILE.unlink(missing_ok=True)
+        return ' Niezarejestrowana baza testowa instalatora zostala wycofana.'
+    except Exception:
+        return ' Rezerwacja MariaDB wymaga sprawdzenia przez administratora.'
+
+
 def engine_tool_status(data: dict[str, Any]) -> dict[str, Any]:
+    require_engine_auth()
     if set(data) != {'engine'}:
         raise InputError('Nieobslugiwany instalator.')
     engine = data.get('engine')
@@ -998,6 +1104,7 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
     engine = data.get('engine', 'none')
     if engine == 'none':
         return create_environment(data)
+    require_engine_auth()
     definition = engine_definition(engine)
     slug = check_slug(data.get('slug'))
     name = check_name(data.get('name'))
@@ -1023,12 +1130,26 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
                'engine': engine, 'starter_kit': kit}
     job = {'id': secrets.token_hex(16), 'action': 'create', 'engine': engine,
            'slug': slug, 'request': request}
-    start_engine_phase(job, 'scaffolding', 'scaffold', [slug, request['starter_kit']],
-                       'Przygotowywanie ' + definition['label'] + ' i budowanie zasobow...')
+    if request['database'] and ENGINE_DB_FILE.exists():
+        raise InputError('Poprzednia rezerwacja MariaDB wymaga sprawdzenia przez administratora.')
+    driver = 'mariadb' if request['database'] else 'sqlite'
+    settings = {'url': ('https://' if request['https'] else 'http://') + domain}
+    job.update(state='preparing', message='Przygotowywanie zasobow instalatora...')
+    write_json_atomic(ENGINE_JOB_FILE, job)
+    try:
+        if request['database']:
+            db_name, db_user, db_password = reserve_engine_database(job)
+            settings.update(db_name=db_name, db_user=db_user, db_password=db_password)
+        start_engine_phase(job, 'scaffolding', 'scaffold', [slug, request['starter_kit'], driver],
+                           'Instalowanie ' + definition['label'] + ' (' + driver + ') i budowanie zasobow...', settings)
+    except Exception:
+        finish_engine_job(job, success=False, message='Nie udalo sie przygotowac instalacji.')
+        raise InputError(engine_job().get('message', 'Nie udalo sie przygotowac instalacji.')) from None
     return {'message': job['message'], 'job_id': job['id']}
 
 
 def engine_tool_action(data: dict[str, Any]) -> dict[str, Any]:
+    require_engine_auth()
     ensure_engine_idle()
     if set(data) != {'engine', 'action'}:
         raise InputError('Nieobslugiwany instalator.')
@@ -1047,7 +1168,7 @@ def engine_tool_action(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def finish_engine_job(job: dict[str, Any], *, success: bool, message: str,
-                      log: str | None = None) -> None:
+                      log: str | None = None, allow_db_cleanup: bool = True) -> None:
     if job.get('action') == 'create':
         slug = job['slug']
         state = read_json(STATE_FILE)
@@ -1055,6 +1176,7 @@ def finish_engine_job(job: dict[str, Any], *, success: bool, message: str,
         if isinstance(project, dict) and project.get('engine') == job.get('engine'):
             project['engine_status'] = 'ready' if success else 'failed'
             write_json_atomic(STATE_FILE, state)
+        message += release_engine_database(job, allow_cleanup=allow_db_cleanup)
     job.update(state='succeeded' if success else 'failed', message=message)
     if log:
         job['log'] = log
@@ -1076,30 +1198,21 @@ def poll_engine_results() -> None:
             finish_engine_job(job, success=False,
                               message=ENGINE_FAILURE_MESSAGES.get(outcome.get('code'),
                                   'Operacja nie powiodla sie. Istniejace pliki pozostawiono bez usuwania.'),
-                              log=outcome.get('log'))
+                              log=outcome.get('log'), allow_db_cleanup=not outcome.get('keep_db', False))
             continue
         try:
             result = outcome['result']
             if action == 'scaffold':
-                if result.get('scaffolded') is not True:
-                    raise RuntimeError('Invalid scaffold result')
                 request = job['request']
-                slug = job['slug']
-                # Reuse the normal infrastructure transaction only after the
-                # installer has completed. It creates the public ACL, pool,
-                # database, certificate and managed hosts entry.
-                create_environment(request)
-                settings = {'url': ('https://' if request['https'] else 'http://') + request['domain']}
-                if request['database']:
-                    project = read_json(STATE_FILE)[slug]
-                    settings.update(db_name=project['db_name'], db_user=project['db_user'],
-                                    db_password=read_json(SECRET_FILE)[slug]['password'])
-                start_engine_phase(job, 'configuring', 'configure', [slug],
-                                   'Przygotowywanie pliku .env...', settings)
-            elif action == 'configure':
-                if result.get('configured') is not True:
-                    raise RuntimeError('Invalid configuration result')
-                finish_engine_job(job, success=True, message=engine_definition(job['engine'])['label'] + ' przygotowany. Migracje uruchom samodzielnie.')
+                driver = 'mariadb' if request['database'] else 'sqlite'
+                if result.get('scaffolded') is not True or result.get('driver') != driver:
+                    raise RuntimeError('Invalid scaffold result')
+                # The official installer already completed the default migrations
+                # and persisted .env. Publish hosting only after that success.
+                prepared = prepared_engine_database(job) if request['database'] else None
+                create_environment(request, prepared_db=prepared)
+                finish_engine_job(job, success=True,
+                                  message=engine_definition(job['engine'])['label'] + ' zainstalowany (' + driver + '). Srodowisko gotowe.')
             elif action in ('check', 'install-tool', 'update-tool'):
                 job['tool'] = sanitize_tool_result(result)
                 if action != 'check' and job['tool']['installed'] is None:
@@ -1116,8 +1229,8 @@ def poll_engine_results() -> None:
 def recover_engine_job() -> None:
     job = engine_job()
     if job.get('state') in ENGINE_ACTIVE:
-        stop_engine_unit(job.get('unit'))
-        finish_engine_job(job, success=False,
+        stopped = stop_engine_unit(job['unit']) if job.get('unit') else job.get('state') == 'preparing'
+        finish_engine_job(job, success=False, allow_db_cleanup=stopped,
                           message='Operacja przerwana przez restart DevStack. Nie zostala automatycznie ponowiona.')
 
 

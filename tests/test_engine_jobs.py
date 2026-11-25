@@ -77,21 +77,66 @@ class EngineJobTests(unittest.TestCase):
                 result = d.adapter_call(unit, "scaffold", ["demo", "livewire"])
             self.assertEqual(result, {"ok": False, "code": expected, "log": "laravel-test.log"})
 
-    def test_configure_finishes_without_a_migration_worker(self):
+    def test_passwordless_mode_blocks_framework_operations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mode = pathlib.Path(tmp) / "auth.mode"
+            mode.write_text("disabled")
+            with patch.object(d, "AUTH_MODE_FILE", mode):
+                with self.assertRaises(d.InputError):
+                    d.engine_tool_status({"engine": "laravel"})
+                with self.assertRaises(d.InputError):
+                    d.engine_tool_action({"engine": "laravel", "action": "check"})
+
+    def test_mariadb_reservation_is_private_and_cleanup_is_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = pathlib.Path(tmp)
-            job = {"id": "b"*32, "action": "create", "engine": "laravel", "slug": "demo",
-                   "state": "configuring", "unit": "devstack-engine-" + "b"*32 + "-configure"}
-            with patch.object(d, "ENGINE_JOB_FILE", base / "job.json"), \
+            job = {"id": "b"*32, "slug": "demo", "engine": "laravel", "action": "create"}
+            name, user = d.db_identifiers("demo")
+            with patch.object(d, "ENGINE_DB_FILE", base / "reservation.json"), \
                  patch.object(d, "STATE_FILE", base / "state.json"), \
-                 patch.object(d, "start_engine_phase") as start:
-                d.write_json_atomic(d.ENGINE_JOB_FILE, job)
-                d.write_json_atomic(d.STATE_FILE, {"demo": {"engine": "laravel", "engine_status": "configuring"}})
-                d.ENGINE_RESULTS.put((job["id"], job["unit"], "configure", {"ok": True, "result": {"configured": True}}))
-                d.poll_engine_results()
-                self.assertEqual(d.engine_job()["state"], "succeeded")
-                self.assertEqual(d.read_json(d.STATE_FILE)["demo"]["engine_status"], "ready")
-                start.assert_not_called()
+                 patch.object(d, "SECRET_FILE", base / "credentials.json"), \
+                 patch.object(d, "create_db", side_effect=lambda slug, password: (name, user, password)) as create_db, \
+                 patch.object(d, "drop_db") as drop_db:
+                reservation = d.reserve_engine_database(job)
+                self.assertEqual(reservation[:2], (name, user))
+                self.assertEqual(d.ENGINE_DB_FILE.stat().st_mode & 0o777, 0o600)
+                create_db.assert_called_once()
+                self.assertEqual(d.prepared_engine_database(job), reservation)
+                self.assertNotIn("password", d.public_engine_job() or {})
+                self.assertIn("wymaga", d.release_engine_database(job, allow_cleanup=False))
+                drop_db.assert_not_called()
+                d.release_engine_database(job, allow_cleanup=True)
+                drop_db.assert_called_once_with(name, user)
+                self.assertFalse(d.ENGINE_DB_FILE.exists())
+
+    def test_success_keeps_registered_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            name, user = d.db_identifiers("demo")
+            job = {"id": "c"*32, "slug": "demo", "engine": "laravel", "action": "create"}
+            with patch.object(d, "ENGINE_DB_FILE", base / "reservation.json"), \
+                 patch.object(d, "STATE_FILE", base / "state.json"), \
+                 patch.object(d, "SECRET_FILE", base / "credentials.json"), \
+                 patch.object(d, "drop_db") as drop_db:
+                d.write_json_atomic(d.ENGINE_DB_FILE, {"id": job["id"], "slug": "demo", "name": name,
+                    "user": user, "password": "fixture", "phase": "ready"})
+                d.write_json_atomic(d.STATE_FILE, {"demo": {"db_name": name, "db_user": user}})
+                d.write_json_atomic(d.SECRET_FILE, {"demo": {"password": "fixture"}})
+                self.assertEqual(d.release_engine_database(job, allow_cleanup=True), "")
+                drop_db.assert_not_called()
+                self.assertFalse(d.ENGINE_DB_FILE.exists())
+
+    def test_existing_mariadb_user_is_not_dropped(self):
+        statements = []
+        def sql(statement):
+            statements.append(statement)
+            if statement.startswith("CREATE USER"):
+                raise RuntimeError("existing user")
+        with patch.object(d, "mariadb_execute", side_effect=sql):
+            with self.assertRaises(RuntimeError):
+                d.create_db("demo", password="fixture")
+        self.assertTrue(any(s.startswith("DROP DATABASE") for s in statements))
+        self.assertFalse(any(s.startswith("DROP USER") for s in statements))
 
     def test_restart_does_not_retry_running_job(self):
         with tempfile.TemporaryDirectory() as tmp:

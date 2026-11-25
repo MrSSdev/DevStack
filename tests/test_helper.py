@@ -134,7 +134,7 @@ class ValidationTests(unittest.TestCase):
             commands = []
             def fake_run(argv, *args, **kwargs):
                 commands.append(argv)
-                if argv[:2] == ['/usr/bin/setfacl', '-m']:
+                if '/usr/bin/setfacl' in argv:
                     raise RuntimeError('Cannot grant public access')
                 return ''
             with patch.object(d, 'config', return_value={'dev_user':'ubuntu','projects_dir':str(project_dir)}), \
@@ -149,7 +149,8 @@ class ValidationTests(unittest.TestCase):
                     d.create({'slug':'demo', 'name':'Demo', 'domain':'demo.test',
                               'webroot':'public', 'database':False, 'https':False})
             self.assertFalse(any(argv[:3] == ['/usr/bin/systemctl','reload','php8.5-fpm'] for argv in commands))
-            self.assertFalse(any(argv[0] == '/usr/bin/systemd-run' for argv in commands))
+            self.assertFalse(any('reload' in argv and 'php8.5-fpm' in argv for argv in commands))
+            self.assertTrue(any('--uid=ubuntu' in argv and '/usr/bin/setfacl' in argv for argv in commands))
             self.assertFalse(site.exists())
             self.assertFalse(pool.exists())
 
