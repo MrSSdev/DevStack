@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Children, cloneElement, isValidElement, useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactElement, type ReactNode } from 'react'
 import {
   Activity, ArrowLeft, ArrowRight, Blocks, Check, ChevronRight, CircleAlert,
   Copy, Database, ExternalLink, FileCode2, FolderCode, Pencil, ChevronDown, ChevronUp,
@@ -68,7 +68,10 @@ function Dot({ state }: {state:string}) {
   return <Badge className={good?'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300':'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-950 dark:bg-amber-950 dark:text-amber-300'}><span className={cn('size-1.5 rounded-full',good?'bg-emerald-500':'bg-amber-500')}/>{good?'Działa':state||'Nieznany'}</Badge>
 }
 function Field({label,hint,children}:{label:string;hint?:string;children:ReactNode}) {
-  return <div className="space-y-1.5"><label className="block text-sm font-medium">{label}</label>{children}{hint&&<p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>}</div>
+  const id=useId()
+  const items=Children.toArray(children)
+  const control=items.find(child=>isValidElement(child)&&(child.type===Input||child.type===Textarea||child.type==='select'))
+  return <div className="space-y-1.5">{control?<label htmlFor={id} className="block text-sm font-medium">{label}</label>:<div className="text-sm font-medium">{label}</div>}{items.map(child=>child===control?cloneElement(child as ReactElement<{id?:string}>,{id}):child)}{hint&&<p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>}</div>
 }
 function IconBox({children}:{children:ReactNode}) {
   return <span className="flex size-8 shrink-0 items-center justify-center rounded-xl border bg-secondary text-secondary-foreground">{children}</span>

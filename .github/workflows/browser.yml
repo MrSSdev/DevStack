@@ -42,6 +42,9 @@ jobs:
         run: npm ci --no-audit --no-fund && npm test && npm run build
       - name: Install real stack in the disposable runner
         run: |
+          # The product targets Ubuntu 26.04. The 24.04 CI image needs the
+          # upstream PHP packaging repository for the same 8.5 FPM packages.
+          sudo add-apt-repository -y ppa:ondrej/php
           mkdir -p "$HOME/projects"
           printf '2\nDISABLE\n' | sudo bash scripts/install.sh
           sudo bash scripts/install-mailpit.sh

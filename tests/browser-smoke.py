@@ -87,6 +87,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.wait_total(0)
 
     def tearDown(self):
+        self.page.screenshot(path=str(OUT / (self._testMethodName+'-last.png')), full_page=True)
         self.assertEqual(self.errors, [], 'Browser runtime errors')
         self.assertEqual(self.external, [], 'Unexpected external requests from message content')
 
@@ -108,7 +109,10 @@ class BrowserAcceptance(unittest.TestCase):
         dark = self.page.locator('html').evaluate("e=>e.classList.contains('dark')")
         if dark != (theme=='dark'):
             self.page.get_by_role('button', name='Włącz jasny motyw' if dark else 'Włącz ciemny motyw').click()
-        expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b')) if theme=='dark' else expect(self.page.locator('html')).not_to_have_class(re.compile(r'\bdark\b'))
+        if theme=='dark':
+            expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
+        else:
+            expect(self.page.locator('html')).not_to_have_class(re.compile(r'\bdark\b'))
         for b in self.page.locator('[role="status"] button[aria-label="Zamknij"]').all():b.click()
 
     def shot(self, name):
@@ -188,6 +192,12 @@ class BrowserAcceptance(unittest.TestCase):
         with self.page.expect_download() as download:
             article.get_by_role('link').filter(has_text='fixture.txt').click()
         self.assertEqual(pathlib.Path(download.value.path()).read_bytes(),b'Exact fixture bytes\n')
+        message_id=next(m['ID'] for m in mailpit()['messages'] if m['Subject']==HTML_SUBJECT)
+        message=self.context.request.get(BASE+'/api/mail/message/'+message_id).json()['result']
+        part=message['Attachments'][0]['PartID']
+        attachment=self.context.request.get(BASE+'/api/mail/message/'+message_id+'/part/'+part)
+        self.assertEqual(attachment.headers['content-type'],'application/octet-stream')
+        self.assertEqual(attachment.headers['content-disposition'],'attachment')
         self.page.get_by_role('button',name='Tekst',exact=True).click()
         expect(article.get_by_text('Plain fixture body — Zażółć gęślą jaźń',exact=False)).to_be_visible()
         self.page.get_by_role('button',name='Źródło HTML',exact=True).click()
@@ -226,11 +236,15 @@ class BrowserAcceptance(unittest.TestCase):
         self.addCleanup(anonymous.close)
         for path in ['/api/mail/messages','/api/mail/message/'+'A'*22]:
             self.assertEqual(anonymous.request.get(BASE+path).status,401)
+        token=anonymous.request.get(BASE+'/api/session').json()['csrf']
+        self.assertEqual(anonymous.request.post(BASE+'/api/mail/clear',data={'confirmation':'delete-all'},headers={'Origin':BASE,'X-CSRF-Token':token}).status,401)
         for headers in [{'Origin':BASE},{'Origin':'https://evil.invalid','X-CSRF-Token':self.csrf}]:
             self.assertEqual(self.context.request.post(BASE+'/api/mail/clear',data={'confirmation':'delete-all'},headers=headers).status,403)
         for path,data in [('/api/mail/clear',{}),('/api/mail/clear',{'confirmation':True}),('/api/mail/delete-many',{'ids':[]}),('/api/mail/delete-many',{'ids':['latest']}),('/api/mail/delete-many',{'ids':['A'*22]*41}),('/api/mail/delete',{'id':'../messages'})]:
             self.assertEqual(self.post(path,data).status,422)
         self.assertEqual(self.context.request.get(BASE+'/api/mail/messages?query=%00').status,422)
+        self.assertEqual(self.post('/api/mail/clear',[]).status,400)
+        self.assertEqual(self.post('/api/mail/clear',{'confirmation':'x'*17000}).status,413)
         self.assertEqual(self.context.request.get(BASE+'/api/mail/message/latest').status,404)
         self.assertEqual(self.context.request.get(BASE+'/api/mail/relay').status,404)
         response=self.context.request.get(BASE+'/api/mail/messages')
@@ -294,6 +308,23 @@ class BrowserAcceptance(unittest.TestCase):
         dialog.get_by_role('button',name='Potwierdź',exact=True).click()
         expect(dialog.get_by_text('Działa',exact=True)).to_be_visible(timeout=12000)
 
+    def test_05_login_screen_and_form(self):
+        anonymous=self.browser.new_context(viewport={'width':853,'height':950})
+        self.addCleanup(anonymous.close)
+        login=anonymous.new_page()
+        for theme in ['light','dark']:
+            self.assertEqual(self.post('/api/preferences',{'theme':theme}).status,200)
+            login.goto(BASE)
+            expect(login.get_by_role('heading',name='Logowanie',exact=True)).to_be_visible()
+            login.screenshot(path=str(OUT / ('853-'+theme+'-login.png')),full_page=True)
+        login.get_by_label('Hasło administratora',exact=True).fill(os.environ['DEVSTACK_E2E_PASSWORD'])
+        login.get_by_role('button',name='Zaloguj się',exact=True).click()
+        expect(login.get_by_role('heading',name='Przegląd',exact=True)).to_be_visible()
+        login.get_by_role('button',name='Otwórz menu').click()
+        login.get_by_role('button',name='Wyloguj',exact=True).click()
+        expect(login.get_by_role('heading',name='Logowanie',exact=True)).to_be_visible()
+        expect(login.get_by_label('Hasło administratora',exact=True)).to_have_value('')
+
 
 if __name__=='__main__':
     # Rate limiting is tested last because it is deliberately shared by all sessions.
@@ -301,4 +332,5 @@ if __name__=='__main__':
     tests=list(suite)
     tests.sort(key=lambda t:t._testMethodName=='test_03_session_csrf_origin_validation_and_rate_limit')
     result=unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(tests))
+    (OUT / 'report.json').write_text(json.dumps({'tests':result.testsRun,'failures':[(str(t),msg) for t,msg in result.failures],'errors':[(str(t),msg) for t,msg in result.errors],'success':result.wasSuccessful()},ensure_ascii=False,indent=2))
     raise SystemExit(not result.wasSuccessful())
