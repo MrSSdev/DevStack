@@ -1,6 +1,7 @@
 import { createElement, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Copy, Download, ExternalLink, Paperclip, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { toast, beginNotice, notify, fail } from '@/components/ui/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -13,7 +14,7 @@ type Summary={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null
 type Message={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null; Cc?:Address[]|null; Bcc?:Address[]|null; Date?:string; Text?:string; HTML?:string; Attachments?:Attachment[]|null; Inline?:Attachment[]|null}
 type Page={total:number; unread:number; messages_count:number; start:number; messages:Summary[]|null}
 type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown)=>Promise<T>
-type Props={status?:string; csrf:string; request:Request; refreshStatus:()=>void; notices?:ReactNode}
+type Props={status?:string; csrf:string; request:Request; refreshStatus:()=>void}
 
 const idPattern=/^[A-Za-z0-9]{22}$/
 const partPattern=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -27,7 +28,7 @@ function renderPreview(nodes:PreviewNode[]):ReactNode[]{
   return nodes.map((node,index)=>typeof node==='string'?node:createElement(node.tag,{key:index},...renderPreview(node.children)))
 }
 
-export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
+export function MailInbox({status,csrf,request,refreshStatus}:Props){
   const [query,setQuery]=useState('')
   const [appliedQuery,setAppliedQuery]=useState('')
   const [start,setStart]=useState(0)
@@ -43,11 +44,7 @@ export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
   const [checked,setChecked]=useState<string[]>([])
   const settingsDialog=useRef<HTMLDialogElement>(null)
   const readerHeading=useRef<HTMLHeadingElement>(null)
-  const [actionError,setActionError]=useState('')
-  const [actionNotice,setActionNotice]=useState('')
   const [listError,setListError]=useState('')
-  const [detailError,setDetailError]=useState('')
-  const [copied,setCopied]=useState('')
   const active=status==='active'
 
   useEffect(()=>{
@@ -58,23 +55,23 @@ export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
     void request<Page>('GET','/api/mail/messages?'+params.toString()).then(result=>{
       if(disposed)return
       const valid=Array.isArray(result.messages)?result.messages.filter(m=>typeof m.ID==='string'&&idPattern.test(m.ID)):[]
-      setPage({...result,messages:valid})
+      toast.close('mail-list-error');setPage({...result,messages:valid})
       setChecked(ids=>ids.filter(id=>valid.some(m=>m.ID===id)))
       if(!valid.length&&start>0)setStart(s=>Math.max(0,s-pageSize))
-    }).catch(e=>{if(!disposed){setListError(e instanceof Error?e.message:'Nie można pobrać wiadomości.');setPage(null)}}).finally(()=>{if(!disposed)setLoading(false)})
+    }).catch(e=>{if(!disposed){setListError('Nie można pobrać wiadomości.');fail(e,'mail-list-error','Nie można pobrać wiadomości.');setPage(null)}}).finally(()=>{if(!disposed)setLoading(false)})
     return ()=>{disposed=true}
   },[active,appliedQuery,start,revision,request])
 
   useEffect(()=>{
-    if(!active||!selected){setMessage(null);setOpening(false);setDetailError('');return}
+    if(!active||!selected){setMessage(null);setOpening(false);return}
     let disposed=false
-    setMessage(null);setConfirmDelete(null);setOpening(true);setDetailError('')
+    setMessage(null);setConfirmDelete(null);setOpening(true)
     void request<Message>('GET','/api/mail/message/'+encodeURIComponent(selected)).then(result=>{
       if(disposed)return
       if(result.ID!==selected)throw new Error('Nieprawidłowa odpowiedź skrzynki.')
-      setMessage(result);setFormat(result.HTML?'html':'text')
+      toast.close('mail-detail-error');setMessage(result);setFormat(result.HTML?'html':'text')
       setPage(p=>p?{...p,unread:Math.max(0,p.unread-((p.messages??[]).some(m=>m.ID===selected&&!m.Read)?1:0)),messages:(p.messages??[]).map(m=>m.ID===selected?{...m,Read:true}:m)}:p)
-    }).catch(e=>{if(!disposed)setDetailError(e instanceof Error?e.message:'Nie można otworzyć wiadomości.')}).finally(()=>{if(!disposed)setOpening(false)})
+    }).catch(e=>{if(!disposed)fail(e,'mail-detail-error','Nie można otworzyć wiadomości.')}).finally(()=>{if(!disposed)setOpening(false)})
     return ()=>{disposed=true}
   },[active,selected,request])
 
@@ -91,13 +88,14 @@ export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
   const refresh=()=>{setRevision(v=>v+1);refreshStatus()}
   function search(e:FormEvent){e.preventDefault();setChecked([]);setStart(0);setAppliedQuery(query.trim());setRevision(v=>v+1)}
   function changePage(next:number){setChecked([]);setStart(next)}
-  function back(){setSelected('');setMessage(null);setConfirmDelete(null);setCopied('');setActionError('');setRevision(v=>v+1)}
+  function back(){setSelected('');setMessage(null);setConfirmDelete(null);setRevision(v=>v+1)}
   async function remove(){
     if(deleting||!confirmDelete)return
     const mode=confirmDelete
     const ids=mode==='one'&&selected?[selected]:checked
     if(mode!=='all'&&(!ids.length||ids.some(id=>!idPattern.test(id))))return
-    setDeleting(true);setActionError('');setActionNotice('')
+    setDeleting(true)
+    const pending=beginNotice(mode==='all'?'Opróżnianie skrzynki…':'Usuwanie wiadomości…')
     try{
       if(mode==='all')await request('POST','/api/mail/clear',csrf,{confirmation:'delete-all'})
       else if(mode==='one')await request('POST','/api/mail/delete',csrf,{id:ids[0]})
@@ -105,14 +103,14 @@ export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
       setSelected('');setMessage(null);setConfirmDelete(null);setChecked([])
       if(mode==='all'){setQuery('');setAppliedQuery('');setStart(0)}
       else if(messages.every(m=>ids.includes(m.ID))&&start>0)setStart(Math.max(0,start-pageSize))
-      setActionNotice(mode==='all'?'Opróżniono skrzynkę.':mode==='one'?'Usunięto wiadomość.':'Usunięto wiadomości.')
+      notify(mode==='all'?'Opróżniono skrzynkę.':mode==='one'?'Usunięto wiadomość.':'Usunięto wiadomości.',pending)
       setRevision(v=>v+1)
-    }catch(e){setActionError(e instanceof Error?e.message:'Nie udało się usunąć wiadomości.')}
+    }catch(e){fail(e,pending,'Nie udało się usunąć wiadomości.')}
     finally{setDeleting(false)}
   }
   async function copy(value:string,label:string){
-    try{await navigator.clipboard.writeText(value);setCopied(label+' — skopiowano.')}
-    catch{setCopied('Nie udało się skopiować. Zaznacz tekst ręcznie.')}
+    try{await navigator.clipboard.writeText(value);notify(label+' — skopiowano.')}
+    catch{fail('Nie udało się skopiować. Zaznacz tekst ręcznie.')}
   }
 
   return <div className="min-w-0 space-y-3">
@@ -125,26 +123,23 @@ export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
             {active&&<Button size="icon" variant="outline" title="Otwórz Mailpit" aria-label="Otwórz Mailpit" onClick={()=>window.open('http://127.0.0.1:8025/','_blank','noopener,noreferrer')}><ExternalLink/></Button>}
             <Button size="icon" variant="outline" aria-label="Konfiguracja poczty" title="Konfiguracja poczty" disabled={deleting||!!confirmDelete} onClick={()=>settingsDialog.current?.showModal()}><Settings/></Button>
     </>}/>
-    {notices}
     <Card className="min-w-0">
       {!selected&&<CardHeader><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold tracking-tight">Odebrane</h2>{page&&<Badge>Wiadomości: {page.total} · Nieprzeczytane: {page.unread}</Badge>}</div></CardHeader>}
       <CardContent className={selected?'space-y-3 p-3':'space-y-3'}>
-        {actionNotice&&<p role="status" className="text-xs text-muted-foreground">{actionNotice}</p>}
-        {actionError&&<p role="alert" className="text-sm text-destructive">{actionError}</p>}
         {confirmDelete&&<div className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-2 text-sm" role="alert">
           <span className="flex-1">{confirmDelete==='all'?'Trwale usunąć wszystkie wiadomości ze wszystkich projektów, także poza aktualnym wyszukiwaniem?':confirmDelete==='many'?'Usunąć zaznaczone wiadomości ('+checked.length+')?':'Trwale usunąć tę wiadomość?'}</span>
-          <Button size="sm" variant="destructive" disabled={deleting} onClick={()=>{void remove()}}>{deleting?'Usuwanie…':'Potwierdź'}</Button><Button size="sm" variant="outline" disabled={deleting} onClick={()=>{setConfirmDelete(null);setActionError('')}}>Anuluj</Button>
+          <Button size="sm" variant="destructive" disabled={deleting} onClick={()=>{void remove()}}>{deleting?'Usuwanie…':'Potwierdź'}</Button><Button size="sm" variant="outline" disabled={deleting} onClick={()=>{setConfirmDelete(null)}}>Anuluj</Button>
         </div>}
         {!active&&<div className="rounded-md border p-4 text-sm"><p className="font-medium">{status==='not-installed'?'Mailpit nie jest zainstalowany':status==='inactive'?'Mailpit jest zatrzymany':status==='failed'?'Błąd Mailpit':'Brak połączenia z Mailpit'}</p><p className="mt-1 text-muted-foreground">Otwórz konfigurację, aby sprawdzić polecenia.</p><Button className="mt-3" size="sm" variant="outline" onClick={()=>settingsDialog.current?.showModal()}><Settings/>Konfiguracja</Button></div>}
         {active&&!selected&&<>
           <form onSubmit={search} className="flex gap-2"><Input aria-label="Szukaj wiadomości" placeholder="Temat, nadawca, treść…" maxLength={200} value={query} onChange={e=>setQuery(e.target.value)} disabled={deleting||!!confirmDelete}/><Button type="submit" variant="outline" size="icon" aria-label="Szukaj" disabled={deleting||!!confirmDelete}><Search/></Button>{appliedQuery&&<Button type="button" size="icon" variant="ghost" aria-label="Wyczyść wyszukiwanie" disabled={deleting||!!confirmDelete} onClick={()=>{setQuery('');setAppliedQuery('');changePage(0)}}><X/></Button>}</form>
-          {listError&&<p role="alert" className="text-sm text-destructive">{listError}</p>}
+          {listError&&<p className="py-8 text-center text-sm text-muted-foreground">Skrzynka niedostępna. Odśwież dane.</p>}
           {!messages.length&&!listError&&<p className="py-8 text-center text-sm text-muted-foreground">{loading?'Pobieranie wiadomości…':appliedQuery?'Brak wyników.':'Skrzynka jest pusta.'}</p>}
           {messages.length>0&&<div className="overflow-hidden rounded-md border">
             <div className="flex items-center gap-2 border-b bg-secondary/40 px-2 py-1.5 text-xs text-muted-foreground"><input type="checkbox" ref={node=>{if(node)node.indeterminate=checked.length>0&&!messages.every(m=>checked.includes(m.ID))}} className="size-4 accent-primary" aria-label="Zaznacz wszystkie wiadomości na stronie" checked={messages.every(m=>checked.includes(m.ID))} disabled={deleting||!!confirmDelete||loading} onChange={e=>setChecked(e.target.checked?messages.map(m=>m.ID):[])}/><span className="flex-1">{checked.length?'Zaznaczono: '+checked.length:'Wiadomości'}</span><span>{count} {appliedQuery?'wyników':'łącznie'}</span></div>
             <div className="max-h-[max(16rem,calc(100dvh-20rem))] divide-y overflow-y-auto">{messages.map(m=><div key={m.ID} className="flex min-w-0 items-center gap-2 px-2 hover:bg-secondary/50">
               <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={'Zaznacz: '+(m.Subject||'bez tematu')} checked={checked.includes(m.ID)} disabled={deleting||!!confirmDelete||loading} onChange={e=>setChecked(ids=>e.target.checked?[...ids,m.ID]:ids.filter(id=>id!==m.ID))}/>
-              <button type="button" disabled={deleting||!!confirmDelete} onClick={()=>{setChecked([]);setActionError('');setActionNotice('');setCopied('');setSelected(m.ID)}} className="grid min-w-0 flex-1 gap-0.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-ring sm:grid-cols-[minmax(7rem,0.8fr)_minmax(0,1.4fr)_auto] sm:items-center sm:gap-2">
+              <button type="button" disabled={deleting||!!confirmDelete} onClick={()=>{setChecked([]);setSelected(m.ID)}} className="grid min-w-0 flex-1 gap-0.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-ring sm:grid-cols-[minmax(7rem,0.8fr)_minmax(0,1.4fr)_auto] sm:items-center sm:gap-2">
                 <span className={'min-w-0 truncate text-xs '+(!m.Read?'font-semibold':'text-muted-foreground')}>{address(m.From)}</span>
                 <span className="min-w-0"><span className={'block truncate text-sm '+(!m.Read?'font-semibold':'font-medium')}>{!m.Read&&<span className="mr-1.5 inline-block size-2 rounded-full bg-blue-500"/>}{m.Subject||'(bez tematu)'}</span><span className="block truncate text-xs text-muted-foreground">{m.Snippet??''}</span></span>
                 <span className="flex items-center gap-1 text-xs text-muted-foreground sm:justify-end">{!!m.Attachments&&<Paperclip className="size-3"/>}<time dateTime={m.Created}>{messageDate(m.Created)}</time></span>
@@ -155,12 +150,12 @@ export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
         </>}
         {active&&selected&&<article className="min-w-0 space-y-3">
           <h2 ref={readerHeading} tabIndex={-1} className="break-words text-xl font-semibold outline-none">{message?.Subject|| (opening?'Otwieranie wiadomości…':'Wiadomość')}</h2>
-          {detailError&&<p role="alert" className="text-sm text-destructive">{detailError}</p>}
+          {!opening&&!message&&<p className="py-6 text-center text-sm text-muted-foreground">Wiadomość niedostępna.</p>}
           {opening&&<p className="py-6 text-center text-sm text-muted-foreground">Wczytywanie…</p>}
           {message&&<>
             <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 break-words text-sm"><dt className="text-muted-foreground">Od</dt><dd className="font-medium">{address(message.From)}</dd><dt className="text-muted-foreground">Do</dt><dd>{addresses(message.To)}</dd>{message.Cc?.length?<><dt className="text-muted-foreground">DW</dt><dd>{addresses(message.Cc)}</dd></>:null}{message.Bcc?.length?<><dt className="text-muted-foreground">UDW</dt><dd>{addresses(message.Bcc)}</dd></>:null}<dt className="text-muted-foreground">Data</dt><dd>{messageDate(message.Date)}</dd></dl>
             <div className="flex flex-wrap items-center gap-1.5 border-y py-2">{message.HTML&&<Button size="sm" variant={format==='html'?'default':'ghost'} onClick={()=>setFormat('html')}>HTML</Button>}<Button size="sm" variant={format==='text'?'default':'ghost'} onClick={()=>setFormat('text')}>Tekst</Button>{message.HTML&&<Button size="sm" variant={format==='source'?'default':'ghost'} onClick={()=>setFormat('source')}>Źródło HTML</Button>}<Button size="icon" variant="ghost" aria-label="Kopiuj treść" title="Kopiuj treść" onClick={()=>{void copy(format==='text'?message.Text??'':message.HTML??'','Treść')}}><Copy/></Button></div>
-            {copied&&<p role="status" className="text-xs">{copied}</p>}
+            
             {attachments.length>0&&<div className="space-y-1.5"><h3 className="text-xs font-semibold text-muted-foreground">Załączniki ({attachments.length})</h3><div className="flex flex-wrap gap-2">{attachments.map((a,i)=><a key={a.PartID+'-'+i} href={'/api/mail/message/'+message.ID+'/part/'+encodeURIComponent(a.PartID)} download={a.FileName||'mailpit-attachment'} className="flex min-w-0 max-w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-secondary"><Download className="size-4 shrink-0"/><span className="min-w-0 break-all">{a.FileName||a.ContentType||'Załącznik'}</span><span className="shrink-0 text-xs text-muted-foreground">{typeof a.Size==='number'?Math.ceil(a.Size/1024)+' KB':''}</span></a>)}</div></div>}
             {format==='html'?<><div className="overflow-x-auto break-words rounded-md border bg-background p-4 text-sm leading-relaxed [&_h1]:text-2xl [&_h2]:text-xl [&_h3]:text-lg [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_p]:my-2 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_pre]:whitespace-pre-wrap [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:p-2 [&_hr]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:pl-3">{renderPreview(preview)}</div><p className="text-xs text-muted-foreground">Bez zewnętrznych obrazów, aktywnych linków i stylów nadawcy.{(message.HTML?.length??0)>250000?' Podgląd skrócono; pełna treść dostępna w Mailpit.':''}</p></>:<pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 text-sm">{(format==='source'?message.HTML:message.Text)||'(brak treści w tym formacie)'}</pre>}
           </>}
@@ -176,7 +171,7 @@ export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
         <p className="text-xs text-muted-foreground">Mailpit przechwytuje pocztę testową; nie wysyła jej do internetu.</p>
         <div className="border-t pt-3"><h3 className="font-semibold">Konfiguracja projektu</h3><p className="mt-1 text-muted-foreground">Nowy projekt: zaznacz „Lokalna poczta testowa”. Laravel otrzyma ustawienia SMTP, a PHP — przechwytywanie mail().</p></div>
         <details><summary className="cursor-pointer font-medium">Istniejący projekt Laravel (.env)</summary><p className="my-2 text-muted-foreground">Zmień MAIL_* lokalnie, ustaw adres nadawcy i wykonaj <code>php artisan config:clear</code>. Nie używaj tej konfiguracji na produkcji.</p><pre className="overflow-x-auto rounded-md bg-secondary p-2 text-xs">{manualConfig}</pre><Button className="mt-2" size="sm" variant="outline" onClick={()=>{void copy(manualConfig,'Konfiguracja SMTP')}}><Copy/>Kopiuj ustawienia</Button></details>
-        {copied&&<p role="status" className="text-xs">{copied}</p>}
+        
       </div>
     </dialog>
   </div>
