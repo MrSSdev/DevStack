@@ -1,0 +1,24 @@
+name: DevStack reader sandbox
+
+on:
+  pull_request:
+    paths:
+      - 'windows/widgets/services/**'
+      - 'windows/widgets/scripts/Test-DevStackReaderSystemd.py'
+      - '.github/workflows/widget-reader.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reader:
+    name: Real systemd reader without root
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reader policy and installer tests
+        run: python3 -m unittest discover -s windows/widgets/services -p 'test_*.py' -v
+      - name: Real system bus with the exact reader sandbox
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 windows/widgets/scripts/Test-DevStackReaderSystemd.py

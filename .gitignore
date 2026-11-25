@@ -1,0 +1,33 @@
+# Never commit machine-specific state or secrets.
+.env
+.env.*
+*.pem
+*.pfx
+*.p12
+*.key
+*.sqlite
+*.db
+credentials.json
+auth.hash
+rootCA-key.pem
+**/node_modules/
+**/dist/
+backend/public/index.html
+backend/public/assets/
+**/__pycache__/
+*.pyc
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Private planning documents belong in DevStackDoc, not public DevStack.
+/ROADMAP.md
+/ASUS/
+
+# Generated from the exact approved DevStack source and production script.
+windows/widgets/ServicesWeb/index.html
+windows/widgets/ServicesWeb/services.css
+windows/widgets/ServicesWeb/csp.txt
+windows/widgets/ServicesWeb/unavailable.html
+windows/widgets/design/approved-devstack-03.html.gz

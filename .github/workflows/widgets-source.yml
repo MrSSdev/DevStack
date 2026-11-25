@@ -1,0 +1,31 @@
+name: DevStack Widgets source snapshot
+
+on:
+  pull_request:
+    paths: ['windows/widgets/**', '.github/workflows/widgets-source.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Export exact tracked sources, without Git credentials or build files
+        run: |
+          git rev-parse HEAD > source-commit.txt
+          git archive --format=zip --output=devstack-source.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DevStack-Widget-Source
+          path: |
+            devstack-source.zip
+            source-commit.txt
+          retention-days: 7
+          if-no-files-found: error

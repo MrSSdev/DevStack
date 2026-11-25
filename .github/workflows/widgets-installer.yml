@@ -1,0 +1,37 @@
+name: Widget telemetry installer
+
+on:
+  push:
+    branches: [main, feature/windows-widgets]
+    paths:
+      - 'windows/widgets/scripts/Install-WslTelemetry.ps1'
+      - 'windows/widgets/tests/Test-TelemetryInstaller.ps1'
+      - 'windows/widgets/telemetry/**'
+      - '.github/workflows/widgets-installer.yml'
+  pull_request:
+    paths:
+      - 'windows/widgets/scripts/Install-WslTelemetry.ps1'
+      - 'windows/widgets/tests/Test-TelemetryInstaller.ps1'
+      - 'windows/widgets/telemetry/**'
+      - '.github/workflows/widgets-installer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: widget-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-powershell:
+    name: PowerShell 5.1 and 7 installer transport
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test original CRLF failure and fixed install/retry/remove
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./windows/widgets/tests/Test-TelemetryInstaller.ps1

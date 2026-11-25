@@ -1,0 +1,12 @@
+[Unit]
+Description=DevStack widget control loopback listener
+[Socket]
+ListenStream=127.0.0.1:43873
+Accept=yes
+NoDelay=yes
+MaxConnections=4
+Backlog=8
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=60
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,27 @@
+[Unit]
+Description=One read-only WSL metrics request
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -I /usr/local/lib/devstack-widgets/collector.py
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+DynamicUser=yes
+LoadCredential=auth:/etc/devstack-widgets/auth.token
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=64M
+TasksMax=4
+RuntimeMaxSec=5
+TimeoutStopSec=1

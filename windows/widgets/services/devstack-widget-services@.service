@@ -1,0 +1,31 @@
+[Unit]
+Description=One bounded DevStack widget read request
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -I /usr/local/lib/devstack-widgets/services-bridge.py read
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+# Setup preallocates this local, non-login system identity for dbus-daemon.
+# DynamicUser still supplies its sandbox defaults, but reuses the static UID.
+User=devstack-widget-reader
+Group=devstack-widget-reader
+DynamicUser=yes
+LoadCredential=projects:/var/lib/devstack/projects.json
+LoadCredential=auth:/etc/devstack-widgets/services-read.token
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=96M
+TasksMax=12
+RuntimeMaxSec=8
+TimeoutStopSec=1

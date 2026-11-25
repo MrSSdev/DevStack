@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Bridge/**/*.cs" />
+    <Compile Include="../DevStackData.cs" Link="DevStackData.cs" />
+    <Compile Include="../StateProbe.cs" Link="StateProbe.cs" />
+    <Compile Include="../WidgetCards.cs" Link="WidgetCards.cs" />
+    <Compile Include="../WidgetDesign.cs" Link="WidgetDesign.cs" />
+    <Compile Include="../WidgetServerLaunch.cs" Link="WidgetServerLaunch.cs" />
+    <Compile Include="../SelfTest.cs" Link="SelfTest.cs" />
+    <Content Include="../Templates/*.json" Link="Templates/%(Filename)%(Extension)" CopyToOutputDirectory="Always" />
+    <Content Include="../ProviderAssets/UI_*.png" Link="ProviderAssets/%(Filename)%(Extension)" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+</Project>
