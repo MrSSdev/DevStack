@@ -45,10 +45,35 @@ jobs:
           ids = [item["id"] for item in kits]
           assert "none" in ids and len(ids) > 1
           print("Discovered starter kits:", ", ".join(ids))
-          matrix = {"include": [{"kit": kit, "driver": driver}
-                                for kit in ids
-                                for driver in ("sqlite", "mariadb")
-                                if not (kit.startswith("blank-") and driver == "mariadb")]}
+          fields = result["installer_options"]
+          assert isinstance(fields, list)
+          print("Discovered installer fields:", ", ".join(field["id"] for field in fields))
+          cases = [{"kit": kit, "driver": driver, "variant": "default", "options": "{}"}
+                   for kit in ids for driver in ("sqlite", "mariadb")
+                   if not (kit.startswith("blank-") and driver == "mariadb")]
+          # Add real representative installations for conditional options.
+          # The shared resolver verifies that the requested option combination
+          # really exists in this installed version before adding it.
+          sys.path.insert(0, "framework-installers")
+          from common import resolve_installer_options
+          for kit, driver, variant, selected in (
+              ("livewire", "sqlite", "class", {"livewire-components": "class"}),
+              ("livewire", "mariadb", "teams", {"teams": "yes"}),
+              ("react", "sqlite", "teams", {"teams": "yes"}),
+              ("livewire", "sqlite", "workos", {"auth-provider": "workos"}),
+              ("vue", "sqlite", "workos", {"auth-provider": "workos"}),
+              ("none", "sqlite", "phpunit-boost", {"testing": "phpunit", "boost": "yes"}),
+              ("none", "sqlite", "skip-assets", {"assets": "no"}),
+          ):
+              if kit not in ids:
+                  continue
+              try:
+                  resolve_installer_options(kit, fields, selected)
+              except ValueError:
+                  continue
+              cases.append({"kit": kit, "driver": driver, "variant": variant,
+                            "options": json.dumps(selected, separators=(",", ":"))})
+          matrix = {"include": cases}
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               print("matrix=" + json.dumps(matrix, separators=(",", ":")), file=out)
               print("installer=" + result["installed"], file=out)
@@ -92,6 +117,7 @@ jobs:
           KIT: ${{ matrix.kit }}
           DRIVER: ${{ matrix.driver }}
           INSTALLER_VERSION: ${{ needs.discover.outputs.installer }}
+          OPTIONS_JSON: ${{ matrix.options }}
         run: |
           set -Eeuo pipefail
           test "$(id -u)" -ne 0
@@ -115,11 +141,19 @@ jobs:
           else
             settings="{\"url\":\"https://$slug.test\"}"
           fi
-          if ! printf '%s' "$settings" | python3 -I "$runner" laravel scaffold "$slug" "$KIT" "$DRIVER"; then
+          settings="$(SETTINGS="$settings" python3 -c 'import os,json; data=json.loads(os.environ["SETTINGS"]); data["installer_options"]=json.loads(os.environ["OPTIONS_JSON"]); print(json.dumps(data))')"
+          if ! printf '%s' "$settings" | python3 -I "$runner" laravel scaffold "$slug" "$KIT" "$DRIVER" > "$RUNNER_TEMP/scaffold.json"; then
             echo "Official installer failed; CI fixture diagnostics:"
             find "$HOME/.cache/devstack/engines" -type f -name '*.log' -exec tail -n 120 {} +
             exit 1
           fi
+          python3 - "$RUNNER_TEMP/scaffold.json" <<'PY'
+          import json, os, sys
+          result = json.load(open(sys.argv[1]))["result"]
+          assert result["webroot"] == "public"
+          for key, value in json.loads(os.environ["OPTIONS_JSON"]).items():
+              assert result["installer_options"][key] == value
+          PY
           cd "$HOME/projects/$slug"
           composer check-platform-reqs
           composer show laravel/framework
@@ -129,7 +163,30 @@ jobs:
             react|blank-react|vue|blank-vue|svelte|blank-svelte)
               STACK="${KIT#blank-}" node -e 'const p=require("./package.json"); if (!({...p.dependencies,...p.devDependencies})[process.env.STACK]) process.exit(1)' ;;
           esac
-          test -s public/build/manifest.json
+          python3 - "$RUNNER_TEMP/scaffold.json" <<'PY'
+          import json, pathlib, sys
+          chosen = json.load(open(sys.argv[1]))["result"]["installer_options"]
+          lock = json.load(open("composer.lock"))
+          packages = {p["name"] for p in lock.get("packages", []) + lock.get("packages-dev", [])}
+          assert "public" == json.load(open(sys.argv[1]))["result"]["webroot"]
+          assert pathlib.Path("public/index.php").is_file()
+          if chosen.get("testing") == "phpunit":
+              assert "phpunit/phpunit" in packages and "pestphp/pest" not in packages
+          else:
+              assert "pestphp/pest" in packages
+          if chosen.get("boost") == "yes":
+              assert "laravel/boost" in packages
+          if chosen.get("auth-provider") == "workos":
+              assert "laravel/workos" in packages
+          if chosen.get("teams") == "yes":
+              assert list(pathlib.Path("database/migrations").glob("*create_teams_table.php"))
+          if chosen.get("livewire-components") == "class":
+              assert pathlib.Path("app/Livewire/Settings").is_dir()
+          if chosen.get("assets") == "no":
+              assert not pathlib.Path("public/build/manifest.json").exists()
+          else:
+              assert pathlib.Path("public/build/manifest.json").stat().st_size > 0
+          PY
           grep -Fxq "APP_URL=https://$slug.test" .env
           grep -Fxq "DB_CONNECTION=$DRIVER" .env
           grep -qE '^APP_KEY=base64:.+' .env
