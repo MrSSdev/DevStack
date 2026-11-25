@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { acknowledgeJob, readAcknowledgedJob, rememberVisibleSuccess, showJobNotice } from '@/lib/engine-job-notice'
 
 type View = 'dashboard' | 'projects' | 'new' | 'project' | 'settings'
 
@@ -102,7 +103,7 @@ export function App() {
   const [busy,setBusy]=useState(false)
   const [draft,setDraft]=useState<Draft>(blank)
   const [selectedTool,setSelectedTool]=useState('')
-  const [dismissedJob,setDismissedJob]=useState('')
+  const [dismissedJob,setDismissedJob]=useState(readAcknowledgedJob)
   const [toolInfo,setToolInfo]=useState<ToolInfo|null>(null)
   const [toolLoading,setToolLoading]=useState(false)
   const [toolError,setToolError]=useState('')
@@ -239,6 +240,15 @@ export function App() {
     catch(e){fail(e);return}
     setAuthenticated(false);setDbSecret('');setServer({services:{},projects:[],preferences:{theme:'light'}});setSelected('');setView('dashboard')
   }
+  useEffect(()=>{
+    if(!authenticated || initializing || engineJob?.state!=='succeeded' || !showJobNotice(engineJob,dismissedJob))return
+    // Remember success only once it has been presented in a visible panel.
+    // Keep the current card in this render until dismissed or reloaded.
+    const remember=()=>rememberVisibleSuccess(engineJob,document.visibilityState==='visible')
+    remember()
+    document.addEventListener('visibilitychange',remember)
+    return ()=>document.removeEventListener('visibilitychange',remember)
+  },[authenticated,initializing,engineJob,dismissedJob])
   useEffect(()=>{
     if(!authenticated || !engineBusy)return
     const id=window.setInterval(()=>{if(document.visibilityState==='visible')void refresh()},1500)
@@ -383,7 +393,7 @@ export function App() {
       <main className="mx-auto max-w-7xl space-y-7 px-5 py-8 sm:px-8 sm:py-10"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-xs font-medium tracking-wide text-muted-foreground">LOKALNE ŚRODOWISKO PROGRAMISTYCZNE</p><h1 className="text-3xl font-semibold tracking-tight">{title[view]}</h1><p className="mt-2 text-sm text-muted-foreground">Zarządzaj projektami i usługami z jednego miejsca.</p></div>{view!=='new'&&<Button onClick={()=>go('new')}><Plus/>Nowy projekt</Button>}</div>
       {notice&&<div role="status" className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"><Check className="size-4 shrink-0"/>{notice}<button className="ml-auto" aria-label="Zamknij" onClick={()=>setNotice('')}><X className="size-4"/></button></div>}
       {error&&<div role="alert" className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><CircleAlert className="size-4 shrink-0"/>{error}<button className="ml-auto" aria-label="Zamknij" onClick={()=>setError('')}><X className="size-4"/></button></div>}
-      {engineJob&&(engineBusy||engineJob.id!==dismissedJob)&&<Card><CardHeader><div className="flex items-center justify-between gap-2"><CardTitle>{engineJob.action==='create'?'Instalacja projektu':engines[engineJob.engine??'']?.tool??'Instalator'}</CardTitle>{!engineBusy&&<Button type="button" variant="ghost" size="icon" aria-label="Zamknij wynik instalatora" onClick={()=>setDismissedJob(engineJob.id)}><X/></Button>}</div><CardDescription>{engineJob.slug||'Narzędzia instalacyjne'}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex flex-wrap items-center gap-2" role="status" aria-live="polite">{engineBusy?<RefreshCw className="size-4 animate-spin"/>:engineJob.state==='succeeded'?<Check className="size-4 text-emerald-600"/>:<CircleAlert className="size-4 text-destructive"/>}<span className="text-sm">{engineJob.message}</span></div>{engineJob.log&&<p className="text-xs text-muted-foreground">Prywatny log w Ubuntu: <code>~/.cache/devstack/engines/{engineJob.log}</code></p>}{!engineBusy&&engineJob.slug&&projects.some(p=>p.slug===engineJob.slug)&&<Button variant="outline" size="sm" onClick={()=>details(engineJob.slug!)}>Przejdź do projektu<ArrowRight/></Button>}{engineJob.state==='failed'&&<p className="text-xs text-muted-foreground">Nie ponawiamy instalacji automatycznie. Sprawdź stan projektu i log przed kolejną próbą.</p>}</CardContent></Card>}
+      {engineJob&&showJobNotice(engineJob,dismissedJob)&&<Card><CardHeader><div className="flex items-center justify-between gap-2"><CardTitle>{engineJob.action==='create'?'Instalacja projektu':engines[engineJob.engine??'']?.tool??'Instalator'}</CardTitle>{!engineBusy&&<Button type="button" variant="ghost" size="icon" aria-label="Zamknij wynik instalatora" onClick={()=>setDismissedJob(acknowledgeJob(engineJob))}><X/></Button>}</div><CardDescription>{engineJob.slug||'Narzędzia instalacyjne'}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex flex-wrap items-center gap-2" role="status" aria-live="polite">{engineBusy?<RefreshCw className="size-4 animate-spin"/>:engineJob.state==='succeeded'?<Check className="size-4 text-emerald-600"/>:<CircleAlert className="size-4 text-destructive"/>}<span className="text-sm">{engineJob.message}</span></div>{engineJob.log&&<p className="text-xs text-muted-foreground">Prywatny log w Ubuntu: <code>~/.cache/devstack/engines/{engineJob.log}</code></p>}{!engineBusy&&engineJob.slug&&projects.some(p=>p.slug===engineJob.slug)&&<Button variant="outline" size="sm" onClick={()=>details(engineJob.slug!)}>Przejdź do projektu<ArrowRight/></Button>}{engineJob.state==='failed'&&<p className="text-xs text-muted-foreground">Nie ponawiamy instalacji automatycznie. Sprawdź stan projektu i log przed kolejną próbą.</p>}</CardContent></Card>}
       {view==='dashboard'&&<><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Projekty" value={String(projects.length)} foot="Skonfigurowane domeny .test" icon={<FolderCode className="size-5"/>}/><Metric label="Aktywne usługi" value={`${Object.values(server.services).filter(s=>s==='active').length}/4`} foot="Nginx, PHP, MariaDB, Redis" icon={<Activity className="size-5"/>}/><Metric label="HTTPS" value={String(projects.filter(p=>p.https).length)} foot="Projekty z Auto SSL" icon={<LockKeyhole className="size-5"/>}/><Metric label="Bazy danych" value={String(projects.filter(p=>p.database).length)} foot="Oddzielne konta MariaDB" icon={<Database className="size-5"/>}/></div>
         <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]"><Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>Stan usług</CardTitle><CardDescription>Usługi uruchamiane przez systemd w Ubuntu</CardDescription></div><Badge>systemd</Badge></div></CardHeader><CardContent><div className="divide-y">{serviceInfo.map(s=><div key={s.key} className="flex items-center gap-3 py-3"><IconBox><s.icon className="size-4"/></IconBox><div className="min-w-0 flex-1"><div className="text-sm font-medium">{s.name}</div><div className="text-xs text-muted-foreground">{s.detail}</div></div><Dot state={server.services[s.key]??'unknown'}/></div>)}</div></CardContent></Card>
         <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>Ostatnie projekty</CardTitle><CardDescription>Przejdź do konfiguracji wybranej witryny</CardDescription></div><Button size="sm" variant="outline" onClick={()=>go('projects')}>Wszystkie<ArrowRight/></Button></div></CardHeader><CardContent>{projects.length===0?<p className="py-8 text-center text-sm text-muted-foreground">Brak projektów. Utwórz pierwszy projekt, aby rozpocząć.</p>:<div className="divide-y">{projects.slice(0,5).map(p=><button key={p.slug} className="flex w-full items-center gap-3 py-3 text-left hover:opacity-75" onClick={()=>details(p.slug)}><IconBox><FolderCode className="size-4"/></IconBox><div className="flex-1"><div className="text-sm font-medium">{p.name}</div><span className="text-xs text-muted-foreground">{p.domain}</span></div>{p.https&&<LockKeyhole className="size-4 text-emerald-600"/>}<ChevronRight className="size-4 text-muted-foreground"/></button>)}</div>}</CardContent></Card></div></>}

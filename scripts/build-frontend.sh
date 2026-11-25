@@ -10,5 +10,6 @@ if [[ -f package-lock.json ]]; then
 else
   npm install --no-audit --no-fund
 fi
+npm test
 npm run build
 printf 'Built static frontend in backend/public. No Node.js server is required at runtime.\n'
