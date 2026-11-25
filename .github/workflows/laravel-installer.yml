@@ -44,18 +44,31 @@ jobs:
           assert kits and result["installed"], "Could not discover installer capabilities"
           ids = [item["id"] for item in kits]
           assert "none" in ids and len(ids) > 1
-          print("Discovered starter kits:", ", ".join(ids))
+          assert len(ids) == len(set(ids)) and not any(kit.startswith("blank-") for kit in ids)
+          print("Discovered frontend technologies:", ", ".join(ids))
           fields = result["installer_options"]
           assert isinstance(fields, list)
           print("Discovered installer fields:", ", ".join(field["id"] for field in fields))
           cases = [{"kit": kit, "driver": driver, "variant": "default", "options": "{}"}
-                   for kit in ids for driver in ("sqlite", "mariadb")
-                   if not (kit.startswith("blank-") and driver == "mariadb")]
+                   for kit in ids for driver in ("sqlite", "mariadb")]
           # Add real representative installations for conditional options.
           # The shared resolver verifies that the requested option combination
           # really exists in this installed version before adding it.
           sys.path.insert(0, "framework-installers")
           from common import resolve_installer_options
+          # Exercise no-login through the same technology ID and options
+          # object the browser submits, for both supported databases.
+          for kit in ids:
+              if kit == "none":
+                  continue
+              selected = {"auth-provider": "none"}
+              try:
+                  resolve_installer_options(kit, fields, selected)
+              except ValueError:
+                  continue
+              for driver in ("sqlite", "mariadb"):
+                  cases.append({"kit": kit, "driver": driver, "variant": "no-auth",
+                                "options": json.dumps(selected, separators=(",", ":"))})
           for kit, driver, variant, selected in (
               ("livewire", "sqlite", "class", {"livewire-components": "class"}),
               ("livewire", "mariadb", "teams", {"teams": "yes"}),
@@ -158,10 +171,13 @@ jobs:
           composer check-platform-reqs
           composer show laravel/framework
           case "$KIT" in
-            livewire) composer show livewire/livewire; composer show livewire/flux ;;
-            blank-livewire) composer show livewire/livewire ;;
-            react|blank-react|vue|blank-vue|svelte|blank-svelte)
-              STACK="${KIT#blank-}" node -e 'const p=require("./package.json"); if (!({...p.dependencies,...p.devDependencies})[process.env.STACK]) process.exit(1)' ;;
+            livewire)
+              composer show livewire/livewire
+              if python3 -c 'import json,os; raise SystemExit(json.loads(os.environ["OPTIONS_JSON"]).get("auth-provider") == "none")'; then
+                composer show livewire/flux
+              fi ;;
+            react|vue|svelte)
+              STACK="$KIT" node -e 'const p=require("./package.json"); if (!({...p.dependencies,...p.devDependencies})[process.env.STACK]) process.exit(1)' ;;
           esac
           python3 - "$RUNNER_TEMP/scaffold.json" <<'PY'
           import json, pathlib, sys
@@ -178,6 +194,10 @@ jobs:
               assert "laravel/boost" in packages
           if chosen.get("auth-provider") == "workos":
               assert "laravel/workos" in packages
+          if chosen.get("auth-provider") == "none":
+              assert not {"laravel/fortify", "laravel/workos"} & packages
+              assert "teams" not in chosen and "livewire-components" not in chosen
+              assert not list(pathlib.Path("database/migrations").glob("*create_teams_table.php"))
           if chosen.get("teams") == "yes":
               assert list(pathlib.Path("database/migrations").glob("*create_teams_table.php"))
           if chosen.get("livewire-components") == "class":
