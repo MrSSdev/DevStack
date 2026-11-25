@@ -102,7 +102,13 @@ class BrowserAcceptance(unittest.TestCase):
         self.fail(f'Mailpit did not reach {count} messages')
 
     def goto(self, route):
-        self.page.goto(BASE + '/#/' + route)
+        target=BASE + '/#/' + route
+        # An in-memory project detail deliberately retains its source hash.
+        # Navigating to that same URL must reload to exercise a direct entry.
+        if self.page.url==target:
+            self.page.reload()
+        else:
+            self.page.goto(target)
         expect(self.page.locator('main')).to_be_visible()
 
     def theme(self, theme):
@@ -129,6 +135,9 @@ class BrowserAcceptance(unittest.TestCase):
     def test_01_real_project_and_all_views(self):
         response = self.post('/api/projects', dict(slug='browser-fixture', name='Browser fixture', domain='browser-fixture.test', webroot='public', database=True, https=True, local_mail=True, engine='none', starter_kit='none', installer_options={}))
         self.assertEqual(response.status, 200, response.text())
+        long_slug='long-'+'a'*35
+        response=self.post('/api/projects',dict(slug=long_slug,name='A'*70,domain=long_slug+'.test',webroot='public',database=False,https=False,local_mail=False,engine='none',starter_kit='none',installer_options={}))
+        self.assertEqual(response.status,200,response.text())
         send(HTML_SUBJECT, HTML)
         self.wait_total(1)
         for width in [640, 853, 1024, 1280, 1920]:
@@ -140,6 +149,7 @@ class BrowserAcceptance(unittest.TestCase):
                         self.goto(route)
                         prefix=f'{width}-{theme}-'
                         if route=='mail':expect(self.message_button(HTML_SUBJECT)).to_be_visible()
+                        if route=='new':self.page.get_by_role('combobox',name='Framework',exact=True).select_option('none')
                         self.shot(prefix+route)
                         if route=='dashboard':
                             self.page.locator('main button').filter(has_text='Nginx').click()
@@ -149,8 +159,12 @@ class BrowserAcceptance(unittest.TestCase):
                             self.page.locator('main button').filter(has_text='Browser fixture').click()
                             expect(self.page.get_by_role('heading',name='Browser fixture',exact=True)).to_be_visible()
                             self.shot(prefix+'project')
-                            self.page.get_by_role('button',name='Pokaż pełną konfigurację').click()
+                            config=self.page.get_by_role('button',name=re.compile('pełną konfigurację'))
+                            if config.get_attribute('aria-expanded')!='true':config.click()
                             self.shot(prefix+'project-nginx')
+                            self.goto('projects')
+                            self.page.locator('main button').filter(has_text='A'*70).click()
+                            self.shot(prefix+'project-long-name')
                         if route=='new':
                             self.page.get_by_role('combobox',name='Framework',exact=True).select_option('laravel')
                             expect(self.page.get_by_role('combobox',name='Technologia frontendowa')).to_be_enabled(timeout=60000)
@@ -169,6 +183,8 @@ class BrowserAcceptance(unittest.TestCase):
                         if route=='settings':
                             for label in ['Środowisko','Instalatory','Windows','Widżety','Bezpieczeństwo']:
                                 self.page.get_by_role('navigation',name='Kategorie ustawień').get_by_role('button',name=label,exact=True).click()
+                                if label=='Instalatory':
+                                    expect(self.page.locator('section[aria-label="Instalatory"]').get_by_text('Odczytywanie…',exact=True)).to_be_hidden(timeout=60000)
                                 self.shot(prefix+'settings-'+label)
         self.goto('dashboard');self.page.reload()
         expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
@@ -179,6 +195,13 @@ class BrowserAcceptance(unittest.TestCase):
         self.wait_total(43)
         self.goto('mail')
         expect(self.page.get_by_text('1–40 / 43',exact=True)).to_be_visible()
+        for theme in ['light','dark']:
+            self.theme(theme)
+            self.shot('853-'+theme+'-mail-populated')
+        single=self.page.get_by_role('checkbox',name='Zaznacz: '+HTML_SUBJECT,exact=True)
+        single.check()
+        self.assertTrue(self.page.get_by_role('checkbox',name='Zaznacz wszystkie wiadomości na stronie',exact=True).evaluate('e=>e.indeterminate'))
+        single.uncheck()
         self.page.get_by_role('button',name='Dalej',exact=True).click()
         expect(self.page.get_by_text('41–43 / 43',exact=True)).to_be_visible()
         self.page.get_by_role('button',name='Wstecz',exact=True).click()
@@ -331,6 +354,11 @@ class BrowserAcceptance(unittest.TestCase):
         login.get_by_role('button',name='Wyloguj',exact=True).click()
         expect(login.get_by_role('heading',name='Logowanie',exact=True)).to_be_visible()
         expect(login.get_by_label('Hasło administratora',exact=True)).to_have_value('')
+        expect(login.locator('body')).not_to_have_css('overflow','hidden')
+        login.get_by_label('Hasło administratora',exact=True).fill(os.environ['DEVSTACK_E2E_PASSWORD'])
+        login.get_by_role('button',name='Zaloguj się',exact=True).click()
+        expect(login.get_by_role('heading',name='Przegląd',exact=True)).to_be_visible()
+        self.assertTrue(login.locator('aside').evaluate('e=>e.inert'))
 
 
 if __name__=='__main__':
