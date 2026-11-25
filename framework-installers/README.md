@@ -1,8 +1,10 @@
 # Framework installers
 
-DevStack prepares environments using the official framework packages and CLI
-tools. Adapters never run database migrations or choose application-level
-configuration on the developer's behalf. There are no bundled starter templates.
+DevStack delegates project creation to each framework's official installer,
+rather than maintaining its own starter templates or reproducing installer
+hooks. Keep upstream default behavior, including any initial migrations it
+requires. DevStack never adds migrations, seeders, queue workers or development
+servers of its own.
 
 ## Structure and adding another framework
 
@@ -12,30 +14,38 @@ configuration on the developer's behalf. There are no bundled starter templates.
 - common.py: shared non-sensitive adapter error contract.
 - laravel/: Laravel implementation and its specific documentation.
 
-Add one directory per framework, document its requirements and explicit
-preparation commands, register its adapter and catalog entry, include its
-files in both install/update allowlists, and add unit/real-tool CI tests.
-Do not allow browser-supplied executables, modules, paths or package names.
+Add one directory per framework, document its requirements, supported
+database choices, official installer arguments and maintenance commands,
+register the adapter and catalog entry, include its files in both
+install/update allowlists, and add unit and real-tool CI tests.
+Never accept browser-supplied executables, paths, environment variables,
+modules or package names.
 
 ## Contract
 
 Actions: status, check, install-tool, update-tool, scaffold, configure.
-Workers run as the configured Linux developer, not as root or devstackweb.
-The root-owned coordinator reserves one operation, validates options,
-prepares hosting only after successful scaffold, and finishes after configure.
-No automatic migrations, seeders, queues or development servers. No automatic
-retry or removal of partial sources. The original no-engine workflow remains.
+Workers run as the configured Linux developer, not root or devstackweb.
+The root coordinator reserves a single job; if MariaDB is selected, it
+creates the isolated database/account before the installer starts.
+Credentials reach the worker through private stdin and the child environment,
+never in command arguments or public job state. The adapter prepares the
+private .env, verifies the result, and returns a small JSON response.
+Only then does DevStack publish the Nginx/PHP-FPM configuration and domain.
 
-Tool installation/updates require an authenticated panel. Tool output stays
-in the developer's private log; generated database credentials reach the
-configure worker over private stdin, not argv or job state. A successful
-environment preparation means code and infrastructure are ready, not that
-the application schema or business features have been configured.
+Tool installation/updates and framework creation require an authenticated
+panel. Tool output is stored in a private developer log. Do not copy
+credentials into .env.example or public logs. Partial sources are retained
+after failures; a fresh, known unregistered database reservation may be
+rolled back. An uncertain reservation is retained for administrator review.
+The original no-engine workflow remains unchanged in the form.
 
 ## Acceptance
 
-CI tests both official Laravel variants and verifies empty SQLite, a private
-.env, commented MariaDB settings, assets, and refusal of existing paths.
-Actual web/daemon integration, WSL sandbox, MariaDB, Nginx, HTTPS, Windows
-domain sync, failure recovery and update must also be verified locally.
-See [Laravel](laravel/README.md) for its specific setup.
+The installer smoke workflow covers plain Laravel and Livewire, with both
+SQLite and a real isolated MariaDB service. It checks initial migration
+status, .env, private permissions, built assets, and refusal of existing
+directories and extra migration operations. WSL-specific web/daemon
+integration, Nginx, HTTPS, Windows domain sync and interrupted jobs also
+require local verification.
+
+See [Laravel](laravel/README.md) for the precise workflow.

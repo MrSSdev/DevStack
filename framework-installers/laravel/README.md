@@ -1,54 +1,67 @@
 # Laravel
 
-## Official tools and packages
+## Official tool
 
-- Composer: prepares `laravel/laravel` (13.x stable) or the first-party
-  `laravel/livewire-starter-kit` (dev-main, the current official Laravel 13
-  / Livewire 4 kit; old stable kit tags are Laravel 12).
-- PHP CLI, Node.js 20.19+ on 20.x or 22.12+, npm 11+.
-- Laravel Installer (`laravel/installer`) is optional for manual work.
-  Settings can check/install/update it in the developer's global Composer
-  directory. It is not used for scaffold: v5.33.0 does not expose a
-  no-migrations flag and can run migrations itself and via Composer hooks.
+DevStack uses the official Laravel Installer from Composer's global package
+`laravel/installer` for the developer. Settings can check, install and update
+the tool. There is no custom fork, patched vendor file or duplicated installer
+implementation. PHP CLI, Composer, Node.js 20.19+ (20.x) or 22.12+, and npm 11+
+are required.
 
-## Preparation
+The adapter invokes the ordinary official command in the Linux projects
+directory with a fresh identifier and reviewed non-interactive options:
 
-The adapter invokes Composer create-project with --no-scripts, in an absent
-project directory. It initializes the private .env from the official
-.env.example, creates an empty SQLite file, discovers Laravel packages,
-generates APP_KEY and prepares the kit's default features with its official
-non-interactive feature command if present. It runs npm install and npm run
-build. The kit's default test framework and features are left as shipped.
-Neither Composer setup/post-create-project-cmd nor artisan migrate/seed is
-invoked. A read-only SQLite check rejects any schema unexpectedly created by
-upstream changes. Keep the user-owned tree on the Linux filesystem.
-
-After scaffold, DevStack creates Nginx/PHP-FPM, public access, optional
-MariaDB database and isolated account, SSL and domain sync. It writes APP_URL
-and, if selected, the generated MariaDB settings as comments in .env only:
-
-```dotenv
-DB_CONNECTION=sqlite
-# DB_HOST=127.0.0.1
-# DB_PORT=3306
-# DB_DATABASE=your_database
-# DB_USERNAME=your_user
-# DB_PASSWORD=your_password
+```sh
+laravel new example --no-interaction --no-ansi --database=sqlite --pest --npm --no-boost
+laravel new example --no-interaction --no-ansi --database=mariadb --pest --npm --no-boost --livewire
 ```
 
-Values are generated per project, not shared. Keep DB_DATABASE commented
-while using SQLite (otherwise Laravel interprets the MariaDB name as the
-SQLite path). To use MariaDB, uncomment the five settings and change
-DB_CONNECTION to mariadb. Run migrations only when you decide to do so.
-The starter kit's session/cache defaults may require tables before the
-application responds successfully; DevStack does not change those defaults.
-No credentials are written to .env.example or source control.
+The variants are plain Laravel and the official Livewire Starter Kit.
+The Laravel Installer v5.33.0 does not provide a no-migrations option. Its
+normal initial migrations and Composer hooks are therefore retained, on the
+database selected in the panel. DevStack does not run artisan migrate or
+seed commands separately. A read-only migration-status check verifies the
+installer result.
 
-The adapter preserves failures for inspection. Never use --force to retry an
-existing directory. Updating Laravel Installer does not update application
-packages or apply migrations.
+## Database choice
 
-Upstream: [Installer v5.33.0](https://github.com/laravel/installer/blob/v5.33.0/src/NewCommand.php),
-[Laravel skeleton](https://github.com/laravel/laravel),
-[Livewire Starter Kit](https://github.com/laravel/livewire-starter-kit),
-[Packagist](https://packagist.org/packages/laravel/livewire-starter-kit).
+- SQLite: no MariaDB database/account is provisioned. Laravel creates and
+  migrates its default local SQLite file.
+- MariaDB: DevStack generates an isolated database and user first. The
+  worker receives the credentials through private stdin and supplies the
+  DB_* process environment to the official installer and its child
+  processes, including early Composer hooks. The installer performs its
+  normal migrations on that database. The adapter persists the same
+  connection and APP_URL in the private .env before publishing hosting.
+
+Example (placeholders only):
+
+```dotenv
+DB_CONNECTION=mariadb
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=your_database
+DB_USERNAME=your_user
+DB_PASSWORD=your_password
+```
+
+Real values are generated per project and written only to .env and protected
+DevStack credential storage, never .env.example. The original installer
+configuration, dependency resolution, feature selection and asset build are
+not reimplemented. All subsequent development, migrations and application
+configuration belong to the developer.
+
+## Failure and maintenance
+
+Existing source directories are never overwritten; do not use --force.
+On failure retain partial files. A successfully created but unregistered
+database reservation can be rolled back once the worker is confirmed stopped.
+An interrupted or otherwise uncertain reservation is kept in the root-only
+`/var/lib/devstack/engine-db-reservation.json` and requires administrator
+reconciliation before another MariaDB installation. Do not print the file
+or automatically drop a database based only on its name. Registered
+projects keep their own database/account. Updating the installer does not
+update existing projects.
+
+Upstream: [Laravel Installer](https://github.com/laravel/installer),
+[official installation documentation](https://laravel.com/docs/13.x/installation).

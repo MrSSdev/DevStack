@@ -144,6 +144,7 @@ class ValidationTests(unittest.TestCase):
                  patch.object(d, 'site_link_path', return_value=link), \
                  patch.object(d, 'pool_path', return_value=pool), \
                  patch.object(d, 'ensure_project_paths', return_value=public), \
+                 patch.object(d.pwd, 'getpwnam'), \
                  patch.object(d, 'run', side_effect=fake_run):
                 with self.assertRaisesRegex(RuntimeError, 'Cannot grant public access'):
                     d.create({'slug':'demo', 'name':'Demo', 'domain':'demo.test',
