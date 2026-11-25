@@ -23,6 +23,22 @@ def build():
     card=re.sub(r'<div class="widget-menu".*?</div>','',card,flags=re.S)
     card=re.sub(r'<div class="sheet-backdrop".*?</section></div>','',card,flags=re.S)
     card=card.replace('id="restartServiceButton"','id="restartServiceButton" disabled')
+    # Inline notices below the unchanged project summary, never an overlay.
+    old_toast='<div class="widget-toast" id="widgetToast" role="status" hidden></div>'
+    if card.count(old_toast)!=1:raise RuntimeError('Approved toast missing')
+    card=card.replace(old_toast,'')
+    card,n=re.subn(r'(<div class="mode-line" id="projectCountLine">.*?</div>)',lambda m:'<div id="projectStatusBlock">'+m.group(1)+'<div class="mode-line restart-line" id="widgetToast" role="status" hidden><svg width="12" height="12" aria-hidden="true"><use id="noticeIcon" href="#i-info"/></svg><span class="mode-copy" id="widgetMessage"></span></div></div>',card,count=1,flags=re.S)
+    if n!=1:raise RuntimeError('Approved project count line missing')
+    icons=icons.replace('</svg>','<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></symbol></svg>')
+    css+='''
+#projectStatusBlock{min-width:0;flex-shrink:0}
+#projectStatusBlock.has-notice #projectCountLine{min-height:12px}
+.restart-line{margin-top:2px;min-height:12px;align-items:flex-start}
+.restart-line svg{flex:0 0 12px}
+.restart-line .mode-copy{min-width:0;overflow-wrap:anywhere}
+.restart-line[data-kind="success"]{color:var(--accent)}
+.restart-line[data-kind="error"],.restart-line[data-kind="error"] svg{color:var(--danger)}
+'''
     css+='\n/* Host boundary only. Approved DevStack card geometry is unchanged. */\n.svg-defs{position:absolute;width:0;height:0;overflow:hidden}\nhtml,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent!important}\nhtml[data-host="windows"]{border-radius:8px;overflow:hidden}\nhtml[data-host="windows"] body{border-radius:inherit;overflow:hidden;padding:0;display:block}\nhtml[data-host="windows"] .widget{position:relative;inset:auto;width:100%;height:100%;transform:none!important;box-shadow:none;border-radius:inherit;border-color:transparent}\nhtml[data-host="windows"][data-theme="dark"] .widget{background:transparent}\nhtml[data-host="windows"] #menuButton{visibility:hidden}\n'
     out=ROOT/'ServicesWeb';out.mkdir(exist_ok=True)
     css=css.replace('\r\n','\n').replace('\r','\n')

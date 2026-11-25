@@ -30,6 +30,7 @@ const rects=ids=>Object.fromEntries(ids.map(id=>{let r=document.getElementById(i
  const ref=await browser.newPage({viewport:{width:1200,height:1000}});await ref.goto(url+'/approved');await ref.evaluate(()=>document.getElementById('hostSurface').style.transform='none');const expected=await ref.evaluate(rects,ids);
  for(const theme of ['dark','light']){
   const page=await browser.newPage({viewport:{width:300,height:462},deviceScaleFactor:2,colorScheme:theme,timezoneId:'Europe/Warsaw'});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+  await page.clock.install();
   await page.addInitScript(mock,{state:base});await page.goto(url+'/index.html?session='+nonce+'&theme='+theme+'&auth=true');
   await page.locator('#projectsButton[aria-disabled="false"]').waitFor();
   const publish=extra=>page.evaluate(extra=>{window.mockState={...window.mockState,...extra};window.receive({data:JSON.stringify({...window.mockState,client:window.client,revision:++window.rev})});},extra);
@@ -43,8 +44,23 @@ const rects=ids=>Object.fromEntries(ids.map(id=>{let r=document.getElementById(i
   await page.locator('#restartServiceButton').click();assert.equal((await last()).verb,'restart-ask');assert.equal((await last()).service,'nginx');checks+=2;
   await publish({confirmService:'nginx',confirmation:'one-use',confirmUntil:Date.now()+30000});await page.locator('#cancelServiceRestart').click();assert.equal((await last()).verb,'restart-cancel');checks++;
   await publish({confirmService:'nginx',confirmation:'one-use',confirmUntil:Date.now()+30000});await page.locator('#restartServiceButton').click();assert.equal((await last()).verb,'restart-confirm');assert.equal((await last()).confirmation,'one-use');checks+=2;
-  assert.equal(await page.locator('#restartServiceButton').isDisabled(),true);checks++;
-  await publish({busy:null,confirmService:null,confirmation:null});await page.locator('#closeServiceInfo').click();
+  assert.equal(await page.locator('#servicePopover').isVisible(),false);checks++;
+  assert.match(await page.locator('#widgetMessage').innerText(),/Nginx: ponowne uruchamianie/);checks++;
+  await publish({busy:null,confirmService:null,confirmation:null,restartStatus:{service:'nginx',phase:'verifying',expiresAt:0}});
+  assert.match(await page.locator('#widgetMessage').innerText(),/Nginx: restart zakończony. Weryfikowanie/);checks++;
+  const bounds=await page.evaluate(()=>{const r=id=>document.getElementById(id).getBoundingClientRect();return {inline:r('widgetToast').top>=r('projectCountLine').bottom,above:r('widgetToast').bottom<=r('addProjectButton').top,position:getComputedStyle(document.getElementById('widgetToast')).position};});
+  assert.ok(bounds.inline&&bounds.above&&bounds.position!=='absolute');checks++;
+  await page.screenshot({path:path.join(out,'verifying-'+theme+'.png'),omitBackground:true});
+  const success={service:'nginx',phase:'success',expiresAt:await page.evaluate(()=>Date.now()+30000)};
+  await publish({restartStatus:success});
+  assert.match(await page.locator('#widgetMessage').innerText(),/Nginx: zweryfikowano/);checks++;
+  await page.screenshot({path:path.join(out,'restart-success-'+theme+'.png'),omitBackground:true});
+  await page.clock.fastForward(31000);assert.equal(await page.locator('#widgetToast').isVisible(),false);checks++;
+  await publish({restartStatus:success});assert.equal(await page.locator('#widgetToast').isVisible(),false);checks++;
+  await publish({restartStatus:{service:'php',phase:'error',expiresAt:0}});assert.match(await page.locator('#widgetMessage').innerText(),/PHP-FPM: błąd weryfikacji/);checks++;
+  await page.clock.fastForward(31000);assert.equal(await page.locator('#widgetToast').isVisible(),true);checks++;
+  await page.screenshot({path:path.join(out,'restart-error-'+theme+'.png'),omitBackground:true});
+  await publish({restartStatus:null});assert.equal(await page.locator('#widgetToast').isVisible(),false);checks++;
   await page.locator('#projectsButton').click();assert.equal((await last()).verb,'open-projects');checks++;
   await page.locator('#addProjectButton').click();assert.equal((await last()).verb,'open-new');checks++;
   for(const phase of ['offline','error','checking']){await publish({phase,canControl:false,canNavigate:false,services:[],projectCount:null});assert.equal(await page.locator('#projectSummary').innerText(),'Łącznie projektów: —');assert.equal(await page.locator('#projectsButton').getAttribute('aria-disabled'),'true');checks+=2;await page.screenshot({path:path.join(out,phase+'-'+theme+'.png'),omitBackground:true});}

@@ -13,8 +13,8 @@
  const cacheKey='devstack-services-view-1-'+session;
  // client is a correlation ID, never an authentication or confirmation token.
  const client=(()=>{try{const c=globalThis.crypto;if(typeof c?.randomUUID==='function')return c.randomUUID();if(c?.getRandomValues)return Array.from(c.getRandomValues(new Uint32Array(4))).join('-');}catch{}return 'page-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);})();
- const state={phase:'checking',active:false,canControl:false,canNavigate:false,services:[],projectCount:null,integration:'unavailable',checkedAt:null,confirmation:null,confirmService:null,confirmUntil:0,busy:null,message:'',revision:-1,cached:false};
- let seq=0,countdownTimer=null,responseTimer=null,infoService=null,infoReturnFocus=null;
+ const state={phase:'checking',active:false,canControl:false,canNavigate:false,services:[],projectCount:null,integration:'unavailable',checkedAt:null,confirmation:null,confirmService:null,confirmUntil:0,busy:null,restartStatus:null,message:'',revision:-1,cached:false};
+ let seq=0,countdownTimer=null,responseTimer=null,noticeTimer=null,infoService=null,infoReturnFocus=null;
  function bindBridge(){
    const candidate=window.chrome?.webview;
    if(!candidate||typeof candidate.postMessage!=='function'||typeof candidate.addEventListener!=='function'){
@@ -50,7 +50,7 @@
    }catch{}
  }
  function stopConnectionWork(){
-   clearTimeout(retryTimer);retryTimer=null;clearTimeout(fallbackTimer);fallbackTimer=null;
+   clearTimeout(retryTimer);retryTimer=null;clearTimeout(fallbackTimer);fallbackTimer=null;clearTimeout(noticeTimer);noticeTimer=null;
    if(requestAbort){requestAbort.abort();requestAbort=null;}
  }
  function scheduleFallback(delay=20000){
@@ -112,6 +112,22 @@
  const status=id=>state.busy===id?'busy':state.phase==='offline'?'off':data(id).reachable===true?'up':data(id).reachable===false?'down':'unknown';
  const statusName=id=>({busy:'Restartowanie',off:'Nieaktywne',up:'Dostępne',down:'Niedostępne',unknown:'Brak danych'}[status(id)]);
  const canRestart=id=>connected&&state.canControl&&state.active&&!state.cached&&!closedByHost&&!document.hidden&&!state.busy&&typeof data(id).unitActive==='boolean';
+ function validNotice(value){
+  if(!value||!defs.some(s=>s.id===value.service)||!['restarting','verifying','success','error','unconfirmed','not-run'].includes(value.phase))return null;
+  if(value.phase==='success'&&(!Number.isFinite(value.expiresAt)||value.expiresAt<=Date.now()))return null;
+  return value;
+ }
+ function renderNotice(){
+  clearTimeout(noticeTimer);noticeTimer=null;
+  const notice=validNotice(state.restartStatus);state.restartStatus=notice;
+  const names={restarting:'ponowne uruchamianie…',verifying:'restart zakończony. Weryfikowanie…',success:'zweryfikowano pomyślnie.',error:'błąd weryfikacji.',unconfirmed:'nie potwierdzono restartu.', 'not-run':'restart nie został wykonany.'};
+  const line=$('widgetToast');
+  const message=notice?defs.find(s=>s.id===notice.service).name+': '+names[notice.phase]:state.message;
+  const kind=notice?.phase==='success'?'success':notice&&['error','unconfirmed','not-run'].includes(notice.phase)?'error':'info';
+  line.hidden=!message;line.dataset.kind=kind;$('projectStatusBlock').classList.toggle('has-notice',!!message);
+  $('widgetMessage').textContent=message||'';$('noticeIcon').setAttribute('href','#i-'+(kind==='success'?'check':kind==='error'?'warning':'info'));
+  if(notice?.phase==='success'&&!document.hidden&&!closedByHost)noticeTimer=setTimeout(renderNotice,Math.max(0,notice.expiresAt-Date.now()));
+ }
  function render(){
   const good=defs.filter(s=>data(s.id).reachable===true).length;
   let title='Gotowe do pracy',sub=`Dostępne usługi: ${good} z 4.`,glyph='grid';
@@ -138,7 +154,7 @@
    $(id).setAttribute('aria-disabled',String(!enabled));$(id).tabIndex=enabled?0:-1;
    if(enabled)$(id).href=$(id).dataset.url;else $(id).removeAttribute('href');
   });
-  if(state.message){$('widgetToast').textContent=state.message;$('widgetToast').hidden=false;}else $('widgetToast').hidden=true;
+  renderNotice();
   renderInfo();
  }
  function renderInfo(){
@@ -164,9 +180,13 @@
   if(!send('action',{verb,service,confirmation})){state.canControl=false;state.message='Polecenie nie zostało ponowione. Otwórz panel ponownie.';render();return;}
   // Browser navigation is fire-and-forget; it has no service acknowledgement.
   if(verb==='open-new'||verb==='open-projects')return;
-  if(verb==='restart-confirm'){state.busy=service;state.confirmation=null;}
+  if(verb==='restart-confirm'){state.busy=service;state.confirmation=null;state.confirmService=null;state.message='';state.restartStatus={service,phase:'restarting'};closeInfo();}
   if(verb==='restart-cancel'){state.confirmation=null;state.confirmService=null;}
-  render();clearTimeout(responseTimer);responseTimer=setTimeout(()=>{state.message='Brak potwierdzenia. Sprawdź stan przed ponowieniem.';render();},18000);
+  render();clearTimeout(responseTimer);responseTimer=setTimeout(()=>{
+   if(verb==='restart-confirm'){state.busy=null;state.canControl=false;state.restartStatus={service,phase:'unconfirmed'};}
+   else state.message='Brak potwierdzenia. Sprawdź stan przed ponowieniem.';
+   render();
+  },18000);
  }
  function closeInfo(focus=true){
   if(state.confirmation&&infoService===state.confirmService)action('restart-cancel');
@@ -192,7 +212,7 @@
    services:Array.isArray(msg.services)?msg.services.filter(s=>s&&typeof s==='object'&&defs.some(d=>d.id===s.id)):[],projectCount:msg.projectCount,
    integration:msg.integration||'unavailable',cached:msg.cached===true,checkedAt:msg.checkedAt||null,busy:defs.some(s=>s.id===msg.busy)?msg.busy:null,
    confirmation:native&&typeof msg.confirmation==='string'?msg.confirmation:null,confirmService:native?msg.confirmService:null,confirmUntil:native?msg.confirmUntil:0,
-   message:typeof msg.message==='string'?msg.message:'',revision:msg.revision});
+   restartStatus:validNotice(msg.restartStatus),message:typeof msg.message==='string'?msg.message:'',revision:msg.revision});
   if(native&&!state.active){closedByHost=true;stopConnectionWork();state.confirmation=null;closeInfo(false);}
   else if(native){closedByHost=false;scheduleFallback();}
   clearTimeout(countdownTimer);
@@ -219,6 +239,7 @@
  function theme(first=true){const forced=first?query.get('theme'):null;document.documentElement.dataset.theme=forced==='light'||forced==='dark'?forced:media.matches?'light':'dark';}
  media.addEventListener('change',()=>theme(false));theme();restoreView();
  if(boot?.protocol===1&&boot.session===session){
+  state.restartStatus=validNotice(boot.restartStatus);
   if(!state.checkedAt||Date.parse(boot.checkedAt)>Date.parse(state.checkedAt))Object.assign(state,{phase:labels[boot.phase]?boot.phase:'checking',services:boot.services||[],projectCount:boot.projectCount,checkedAt:boot.checkedAt||null,integration:boot.integration||'unavailable',cached:!!boot.checkedAt});
  }
  window.addEventListener('error',()=>{state.message='Błąd interfejsu DevStack. Otwórz panel ponownie.';state.canControl=false;render();send('diagnostic');});

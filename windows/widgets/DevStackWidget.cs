@@ -24,6 +24,9 @@ internal static class DevStackWidget
     private static bool _recovered,_worker,_pending,_fresh;
     private static DevStackData.Result? _data;
     private static string? _busy;
+    private sealed record RestartNotice(string Service,string Phase,long ExpiresAt=0);
+    // Provider-owned status survives page recreation, not a full provider restart.
+    private static RestartNotice? _restartNotice;
     private static long _epoch;
     private static DateTimeOffset _last=DateTimeOffset.UtcNow;
     private static string Token()=>Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
@@ -70,6 +73,21 @@ internal static class DevStackWidget
     }
     internal static void Delete(string id){lock(Gate){Items.Remove(id);_last=DateTimeOffset.UtcNow;}Visibility();}
     private static bool Live()=>_fresh&&_data is not null&&_data.CheckedAt>DateTimeOffset.Now.AddSeconds(-30);
+    private static bool Verifying=>_restartNotice?.Phase=="verifying";
+    private static RestartNotice? CurrentNotice()
+    {
+        if(_restartNotice is { Phase:"success" } n&&n.ExpiresAt<=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())_restartNotice=null;
+        return _restartNotice;
+    }
+    private static void VerifyRestart(DevStackData.Result result)
+    {
+        if(_restartNotice is not { Phase:"verifying" } n)return;
+        var selected=result.Services.FirstOrDefault(s=>s.Id==n.Service);
+        // A command acknowledgement is not a health check. Use only the new,
+        // post-command snapshot, including both systemd state and Windows probe.
+        bool ok=result.Running==true&&result.Integration=="ok"&&selected?.UnitActive==true&&selected.Reachable==true;
+        _restartNotice=ok?new(n.Service,"success",DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds()):new(n.Service,"error");
+    }
     private static string State(string id,bool native)
     {
         lock(Gate)
@@ -77,14 +95,14 @@ internal static class DevStackWidget
             if(!Items.TryGetValue(id,out var w))return "{}";
             bool live=Live();
             if(w.Until<=DateTimeOffset.UtcNow||_data?.Running!=true){w.Confirmation=null;w.Service=null;}
-            bool controls=native&&w.Ready&&w.Visible&&w.Authenticated&&live&&_data?.Running==true&&_data.Integration=="ok";
+            bool controls=native&&w.Ready&&w.Visible&&w.Authenticated&&live&&_data?.Running==true&&_data.Integration=="ok"&&!Verifying;
             return JsonSerializer.Serialize(new{
                 protocol=1,kind="state",session=w.Nonce,server=Server,client=w.Client,revision=++w.Revision,
                 transport=native?"native":"resource",active=w.Visible,canControl=controls,cached=!live,
                 canNavigate=native&&w.Ready&&w.Visible&&w.Authenticated&&live&&_data?.Running==true&&_data.Services.Where(s=>s.Id is "nginx" or "php").All(s=>s.Reachable==true),
                 phase=_data is null?"checking":_data.Running switch{true=>"running",false=>"offline",_=>"error"},
                 integration=_data?.Integration??"unavailable",services=_data?.Services,projectCount=_data?.ProjectCount,
-                checkedAt=_data?.CheckedAt,message=w.Message,busy=_busy,
+                checkedAt=_data?.CheckedAt,message=w.Message,busy=_busy,restartStatus=CurrentNotice(),
                 confirmation=controls?w.Confirmation:null,confirmService=controls?w.Service:null,
                 confirmUntil=controls&&w.Confirmation is not null?w.Until.ToUnixTimeMilliseconds():0
             },Json);
@@ -189,7 +207,7 @@ internal static class DevStackWidget
                 try{DevStackNavigation.Open(verb);}catch(Exception e){WidgetDiagnostics.Write("services-navigation-error",id,e);}
                 return;
             }
-            if(_busy is not null||!w.Authenticated||!w.Ready||!Live()||_data?.Running!=true||_data.Integration!="ok")return;
+            if(_busy is not null||Verifying||!w.Authenticated||!w.Ready||!Live()||_data?.Running!=true||_data.Integration!="ok")return;
             if(verb=="restart-cancel"){w.Confirmation=null;w.Service=null;}
             else
             {
@@ -198,7 +216,7 @@ internal static class DevStackWidget
                 else if(verb=="restart-confirm")
                 {
                     if(w.Confirmation is null||w.Confirmation!=confirmation||w.Service!=service||w.Until<=DateTimeOffset.UtcNow)return;
-                    w.Confirmation=null;w.Service=null;w.Message="";_busy=service;epoch=++_epoch;token=_visible?.Token??new CancellationToken(true);run=true;
+                    w.Confirmation=null;w.Service=null;w.Message="";_busy=service;_restartNotice=new(service,"restarting");epoch=++_epoch;token=_visible?.Token??new CancellationToken(true);run=true;
                 }
                 else return;
             }
@@ -207,22 +225,23 @@ internal static class DevStackWidget
     }
     private static async Task Restart(string id,string service,long epoch,CancellationToken visible)
     {
-        string message="";
+        string phase="not-run";bool dispatched=false;
         try
         {
             var state=await StateProbe.CaptureWslOnlyAsync(visible);
             lock(Gate)if(visible.IsCancellationRequested||epoch!=_epoch||!Items.TryGetValue(id,out var w)||!w.Visible)return;
-            if(state.WslRunning!=true){message="Ubuntu nie jest uruchomione. Restart nie został wykonany.";return;}
+            if(state.WslRunning!=true)return;
             // Once accepted, one bounded HTTP command may finish after closing.
             // No wsl -d, no unit argument from the page, no automatic retry.
+            dispatched=true;
             bool ok=await DevStackData.RestartAsync(service,CancellationToken.None);
-            message=ok?"Restart zakończony. Weryfikowanie usług.":"Nie potwierdzono restartu. Sprawdź stan przed ponowieniem.";
+            phase=ok?"verifying":"unconfirmed";
         }
-        catch(OperationCanceledException){message="Operacja przerwana. Sprawdź stan przed ponowieniem.";}
-        catch(Exception e){WidgetDiagnostics.Write("services-restart-error",id,e);message="Brak potwierdzenia restartu. Polecenie nie zostało ponowione.";}
+        catch(OperationCanceledException){phase=dispatched?"unconfirmed":"not-run";}
+        catch(Exception e){WidgetDiagnostics.Write("services-restart-error",id,e);phase=dispatched?"unconfirmed":"not-run";}
         finally
         {
-            lock(Gate){if(Items.TryGetValue(id,out var w))w.Message=message;_busy=null;_fresh=false;++_epoch;_last=DateTimeOffset.UtcNow;}
+            lock(Gate){_restartNotice=new(service,phase);_busy=null;_fresh=false;++_epoch;_last=DateTimeOffset.UtcNow;}
             PushAll();Refresh();WidgetProvider.Wake.Set();
         }
     }
@@ -245,11 +264,18 @@ internal static class DevStackWidget
             {
                 var wsl=await StateProbe.CaptureWslOnlyAsync(token);
                 var result=await DevStackData.CaptureAsync(wsl.WslRunning,token);
-                lock(Gate){if(token.IsCancellationRequested||_visible?.Token!=token||epoch!=_epoch||_busy is not null)continue;_data=result;_fresh=true;}
+                lock(Gate){if(token.IsCancellationRequested||_visible?.Token!=token||epoch!=_epoch||_busy is not null)continue;_data=result;_fresh=true;VerifyRestart(result);}
                 PushAll();
             }
             catch(OperationCanceledException){}
-            catch(Exception e){WidgetDiagnostics.Write("services-read-error",error:e);}
+            catch(Exception e)
+            {
+                WidgetDiagnostics.Write("services-read-error",error:e);
+                bool changed=false;
+                lock(Gate)if(!token.IsCancellationRequested&&_visible?.Token==token&&epoch==_epoch&&_restartNotice is { Phase:"verifying" } n)
+                {_restartNotice=new(n.Service,"error");changed=true;}
+                if(changed)PushAll();
+            }
         }
     }
 }

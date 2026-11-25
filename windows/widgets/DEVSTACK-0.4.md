@@ -1,4 +1,4 @@
-# DevStack services widget 0.4.0
+# DevStack services widget 0.4.1
 
 Implements the user's approved **DevStack-widget-prototyp-03.html**. No redesign:
 transparent dark outer surface, original icons/type/layout, 2x2 service tiles,
@@ -13,9 +13,9 @@ Extract the complete archive into:
 `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
 
 1. Run `Install-Widgets.ps1` in an elevated PowerShell on the usual account.
-   Expected version **0.4.0.0**. It updates in place; do not unpin, remove user
+   Expected version **0.4.1.0**. It updates in place; do not unpin, remove user
    state or reinstall `Install-WslTelemetry.ps1`.
-2. Start Ubuntu deliberately using the existing WSL widget, then run
+2. Only for a new integration, start Ubuntu deliberately using the existing WSL widget, then run
    `Install-DevStackWidget.ps1` from this same bundle. This is a NEW integration
    setup, not replacement WSL telemetry. It refuses to run when Ubuntu is off.
 3. If an old host session remains after update, close WidgetBoard and
@@ -79,3 +79,28 @@ post-upgrade installation acceptance passed without corresponding evidence.
 
 The already accepted native loading spinner/background transitions remain.
 No further cosmetic experiments, no changes to public main; PR remains draft.
+
+## 0.4.1 — restart feedback (ASUS follow-up)
+
+The accepted 0.4.0 installation with the reader fix succeeded on ASUS. The
+user observed a confirmed restart and live data; the old verification popup
+covered controls and stayed visible after reopening. Confirmation is retained;
+on explicit confirmation the service details close. A compact inline message
+with a service name and icon appears directly below the project count. The
+provider transitions restarting -> verifying -> success/error only from a new
+post-command snapshot (selected systemd unit active AND Windows probe reachable,
+with valid integration). Command failure/unknown outcome is not treated as a
+successful restart, and is never retried automatically. Success has an absolute
+30-second expiry; hidden time counts. A verification error or unconfirmed
+command remains visible until another confirmed restart or provider exit.
+No read is scheduled solely to clear a notice; hidden verification waits for
+normal visible reads. State is kept in provider memory across page recreation,
+not persisted across a full provider-process restart. No credential or command
+capability is cached by the page. WSL/UI geometry, Linux reader fix, frontend,
+allowlist, credentials and project routes are otherwise unchanged.
+
+Existing 0.4.0 users who completed the reader fix only need Install-Widgets.ps1
+from the matching new signed package. Do NOT run either Linux setup again.
+The first device test is Cancel; then a single confirmed restart and verify
+popover dismissal, inline progression, expiry after closing/reopening, and
+normal project links. Automated validation does not replace device acceptance.

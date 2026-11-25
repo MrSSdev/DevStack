@@ -105,6 +105,8 @@ ServiceMessage("action","restart-confirm","nginx",proof);ServiceMessage("action"
 await Wait(()=>DevStackData.Restarts==1&&ServiceState().GetProperty("busy").ValueKind==JsonValueKind.Null,"service restart finished once");
 Assert(DevStackData.Last=="nginx","only selected service restarted");
 await Wait(()=>ServiceState().GetProperty("canControl").GetBoolean(),"service state rechecked after restart");
+var notice=ServiceState().GetProperty("restartStatus");Assert(notice.GetProperty("service").GetString()=="nginx"&&notice.GetProperty("phase").GetString()=="success","restart success requires a fresh healthy selected service");
+var expires=notice.GetProperty("expiresAt").GetInt64();Assert(expires>DateTimeOffset.UtcNow.AddSeconds(25).ToUnixTimeMilliseconds()&&expires<=DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds(),"success deadline is absolute and bounded to 30 seconds");
 ServiceMessage("action","restart-confirm","nginx",proof);Assert(DevStackData.Restarts==1,"used confirmation cannot replay");
 ServiceMessage("action","open-projects");Assert(DevStackNavigation.Opens==1,"project route is delegated to system browser");
 await ServiceResource(true,true);
@@ -116,5 +118,20 @@ await ServiceResource(true,false,WslWebContent.Origin+"/wsl/index.html?session="
 ServiceMessage("action","restart-ask","nginx",overrideSession:session);Assert(DevStackData.Restarts==1,"WSL session cannot authorize services");
 StateProbe.Running=false;ServiceMessage("action","refresh");await Wait(()=>ServiceState().GetProperty("phase").GetString()=="offline","services offline state");
 ServiceMessage("action","restart-ask","nginx");ServiceMessage("action","open-new");Assert(DevStackData.Restarts==1&&DevStackNavigation.Opens==1,"offline services neither restart nor navigate");
+// A reachable port alone cannot prove a restarted systemd unit is healthy.
+StateProbe.Running=true;ServiceMessage("action","refresh");
+await Wait(()=>ServiceState().GetProperty("canControl").GetBoolean(),"services live before verification failure test");
+ServiceMessage("action","restart-ask","redis");proof=ServiceState().GetProperty("confirmation").GetString();
+DevStackData.InactiveService="redis";
+ServiceMessage("action","restart-confirm","redis",proof);
+await Wait(()=>DevStackData.Restarts==2&&ServiceState().GetProperty("restartStatus").ValueKind==JsonValueKind.Object&&ServiceState().GetProperty("restartStatus").GetProperty("phase").GetString()=="error","inactive selected unit cannot verify even with reachable port");
+Assert(ServiceState().GetProperty("restartStatus").GetProperty("service").GetString()=="redis"&&ServiceState().GetProperty("restartStatus").GetProperty("expiresAt").GetInt64()==0,"verification error is service-specific and does not expire");
+DevStackData.InactiveService=null;provider.Deactivate(serviceContext.Id);provider.Activate(serviceContext);
+await Wait(()=>ServiceState().GetProperty("canControl").GetBoolean(),"reopen gets fresh state");
+Assert(ServiceState().GetProperty("restartStatus").GetProperty("phase").GetString()=="error","reopening does not discard or falsely convert a verification error");
+DevStackData.RestartOk=false;ServiceMessage("action","restart-ask","php");proof=ServiceState().GetProperty("confirmation").GetString();
+ServiceMessage("action","restart-confirm","php",proof);
+await Wait(()=>DevStackData.Restarts==3&&ServiceState().GetProperty("restartStatus").GetProperty("phase").GetString()=="unconfirmed","failed command is not reported as successful verification");
+Assert(ServiceState().GetProperty("restartStatus").GetProperty("expiresAt").GetInt64()==0,"unconfirmed restart remains visible");
 provider.Deactivate(serviceContext.Id);WidgetProvider.Stop();
 Console.WriteLine($"PASS: {checks} combined WSL/services policy checks (mocked WinRT and OS actions).");
