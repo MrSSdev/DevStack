@@ -131,7 +131,7 @@ try {
     if ($method === 'POST' && $path === '/api/projects') {
         $engine = $body['engine'] ?? 'none';
         if (!is_string($engine) || !preg_match('~^[a-z][a-z0-9-]{1,39}$~D', $engine)) {
-            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowy silnik projektu.']);
+            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowy framework.']);
         }
         if ($engine !== 'none' && !devstack_engine_access_allowed()) {
             devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);

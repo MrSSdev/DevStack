@@ -64,6 +64,30 @@ class EngineJobTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             d.sanitize_tool_result({"composer":True,"installed":"arbitrary output"})
 
+    def test_discovered_kit_metadata_is_sanitized(self):
+        base = {"composer": True, "installed": "5.33.0"}
+        kits = [{"id": "none", "label": "Blade"}, {"id": "new-kit", "label": "New Kit"}]
+        self.assertEqual(d.sanitize_tool_result({**base, "starter_kits": kits})["starter_kits"], kits)
+        for invalid in ([{"id": "--force", "label": "Bad"}], [kits[0], kits[0]],
+                        [{"id": "none", "label": "Bad\ntext"}], [{"id": "none", "label": "Blade", "flags": ["--force"]}], []):
+            with self.assertRaises(RuntimeError):
+                d.sanitize_tool_result({**base, "starter_kits": invalid})
+
+    def test_stale_kit_is_rejected_before_database_reservation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            with patch.object(d, "ENGINE_JOB_FILE", base / "job.json"), \
+                 patch.object(d, "STATE_FILE", base / "state.json"), \
+                 patch.object(d, "config", return_value={"projects_dir": str(base)}), \
+                 patch.object(d, "require_engine_auth"), \
+                 patch.object(d, "engine_tool_status", return_value={"installed": "5.33.0", "starter_kits": [{"id":"none","label":"Blade"}]}), \
+                 patch.object(d, "reserve_engine_database") as reserve:
+                with self.assertRaisesRegex(d.InputError, "nie jest juz dostepny"):
+                    d.create({"slug":"demo", "name":"Demo", "domain":"demo.test", "webroot":"public",
+                              "database":True, "https":True, "engine":"laravel", "starter_kit":"livewire"})
+                reserve.assert_not_called()
+                self.assertFalse((base / "job.json").exists())
+
     def test_frontend_failure_code_is_allowlisted(self):
         import json
         unit = "devstack-engine-" + "a"*32 + "-scaffold"

@@ -5,17 +5,7 @@
     "webroot": "public",
     "default_option": "none",
     "option_label": "Starter kit Laravel",
-    "option_hint": "Livewire zawiera Flux UI i uwierzytelnianie Laravel.",
-    "options": [
-      {
-        "id": "none",
-        "label": "Bez starter kitu"
-      },
-      {
-        "id": "livewire",
-        "label": "Livewire"
-      }
-    ],
+    "option_hint": "Lista jest odczytywana z aktualnie zainstalowanego Laravel Installer. Wariant bez logowania dotyczy tworzonej aplikacji.",
     "description": "Oficjalny Laravel Installer zarządzany przez Composer; wymagane PHP, Composer, Node.js 20.19+ (20.x) lub 22.12+ oraz npm 11+.",
     "database_options": [
       {

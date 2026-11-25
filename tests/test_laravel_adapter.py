@@ -1,4 +1,5 @@
 import io
+import json
 import pathlib
 import sys
 import tempfile
@@ -8,25 +9,60 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "framework-installers"))
 from laravel.adapter import (
     AdapterError, LaravelAdapter, environment_values, project_path,
-    rewrite_environment, scaffold_argv, tool_argv, require_supported_frontend,
+    rewrite_environment, scaffold_argv, tool_argv, require_supported_frontend, discover_starter_kits,
 )
 
 
+def help_fixture(kits=("react", "svelte", "vue", "livewire"), *, blank=True):
+    def option(name, description="", accepts=False):
+        return {"name": "--" + name, "description": description,
+                "accept_value": accepts, "is_multiple": False, "default": False}
+    options = {name: option(name) for name in ("database", "pest", "npm", "no-boost")}
+    options.update({name: option(name, "Install the " + name.capitalize() + " Starter Kit") for name in kits})
+    options["force"] = option("force", "Install the Dangerous Starter Kit")
+    options["using"] = option("using", "Install the Custom Starter Kit", accepts=True)
+    if blank:
+        options["no-authentication"] = option("no-authentication")
+    return json.dumps({"name": "new", "definition": {"options": options}})
+
+
 class LaravelAdapterTests(unittest.TestCase):
+    def test_discovery_tracks_installed_help_without_static_list(self):
+        choices = discover_starter_kits(help_fixture())
+        self.assertEqual(set(choices), {"none", "react", "svelte", "vue", "livewire",
+                                         "blank-react", "blank-svelte", "blank-vue", "blank-livewire"})
+        self.assertEqual(choices["blank-vue"]["flags"], ["--vue", "--no-authentication"])
+        changed = discover_starter_kits(help_fixture(("future-kit", "react"), blank=False))
+        self.assertEqual(set(changed), {"none", "future-kit", "react"})
+        self.assertIn("--future-kit", scaffold_argv("laravel", "demo", "future-kit", choices=changed))
+        with self.assertRaises(AdapterError):
+            scaffold_argv("laravel", "demo", "livewire", choices=changed)
+        for invalid in ("not json", "{}", help_fixture((), blank=False)):
+            with self.assertRaises(AdapterError):
+                discover_starter_kits(invalid)
+
+    def test_help_failure_keeps_installer_version_and_maintenance_visible(self):
+        adapter = LaravelAdapter(pathlib.Path("/home/dev"), io.StringIO())
+        with patch("laravel.adapter.shutil.which", return_value="/usr/bin/composer"), \
+             patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
+             patch.object(adapter, "command", side_effect=["Laravel Installer 5.33.0", "not-json"]):
+            self.assertEqual(adapter.status(), {"composer": True, "installed": "5.33.0", "starter_kits": None})
+
     def test_official_installer_never_forces_overwrite(self):
-        argv = scaffold_argv("/home/dev/.config/composer/vendor/bin/laravel", "demo-app", "livewire")
+        choices = discover_starter_kits(help_fixture())
+        argv = scaffold_argv("/home/dev/.config/composer/vendor/bin/laravel", "demo-app", "livewire", choices=choices)
         self.assertEqual(argv[:3], ["/home/dev/.config/composer/vendor/bin/laravel", "new", "demo-app"])
         self.assertIn("--livewire", argv)
         self.assertIn("--no-interaction", argv)
         self.assertIn("--database=sqlite", argv)
-        self.assertIn("--database=mariadb", scaffold_argv("laravel", "demo", "livewire", "mariadb"))
+        self.assertIn("--database=mariadb", scaffold_argv("laravel", "demo", "livewire", "mariadb", choices=choices))
         with self.assertRaises(AdapterError):
-            scaffold_argv("laravel", "demo", "livewire", "other")
+            scaffold_argv("laravel", "demo", "livewire", "other", choices=choices)
         self.assertNotIn("--force", argv)
-        self.assertNotIn("--livewire", scaffold_argv("laravel", "demo", "none"))
+        self.assertNotIn("--livewire", scaffold_argv("laravel", "demo", "none", choices=choices))
         for slug, kit in (("../demo", "none"), ("--force", "none"), ("demo", "--force")):
             with self.assertRaises(AdapterError):
-                scaffold_argv("laravel", slug, kit)
+                scaffold_argv("laravel", slug, kit, choices=choices)
 
     def test_existing_directory_and_symlink_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,6 +171,7 @@ class LaravelAdapterTests(unittest.TestCase):
                 return "0001_create_users ... [1] Ran" if "migrate:status" in argv else ""
             with patch.object(adapter, "require_frontend_tools"), \
                  patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
+                 patch.object(adapter, "starter_kits", return_value=discover_starter_kits(help_fixture())), \
                  patch("laravel.adapter.shutil.which", return_value="/usr/bin/php"), \
                  patch.object(adapter, "command", side_effect=fake_command):
                 self.assertEqual(adapter.scaffold("demo", "livewire", "mariadb", settings),
@@ -160,6 +197,7 @@ class LaravelAdapterTests(unittest.TestCase):
                 raise AdapterError("failed")
             with patch.object(adapter, "require_frontend_tools"), \
                  patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
+                 patch.object(adapter, "starter_kits", return_value=discover_starter_kits(help_fixture())), \
                  patch.object(adapter, "command", side_effect=fail):
                 with self.assertRaises(AdapterError):
                     adapter.scaffold("demo", "livewire", "sqlite", {"url": "https://demo.test"})

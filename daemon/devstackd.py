@@ -593,7 +593,9 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
             'overrides': '', 'extra_locations': '',
         }
         if data.get('engine', 'none') != 'none':
-            state[slug].update(engine=data['engine'], starter_kit=data['starter_kit'], engine_status='configuring')
+            state[slug].update(engine=data['engine'], starter_kit=data['starter_kit'],
+                               starter_kit_label=data.get('starter_kit_label', data['starter_kit']),
+                               engine_status='configuring')
         if db_info:
             secrets_state[slug] = {'password': db_info[2]}
         write_json_atomic(SECRET_FILE, secrets_state)
@@ -860,10 +862,10 @@ def engine_catalog() -> dict[str, Any]:
 
 def engine_definition(engine: Any) -> dict[str, Any]:
     if not isinstance(engine, str) or not SLUG.fullmatch(engine):
-        raise InputError('Nieobslugiwany silnik projektu.')
+        raise InputError('Nieobslugiwany framework.')
     definition = engine_catalog().get(engine)
     if not isinstance(definition, dict):
-        raise InputError('Nieobslugiwany silnik projektu.')
+        raise InputError('Nieobslugiwany framework.')
     return definition
 
 
@@ -954,10 +956,29 @@ def sanitize_tool_result(value: Any) -> dict[str, Any]:
         if item is not None and (not isinstance(item, str) or not ENGINE_VERSION.fullmatch(item)):
             raise RuntimeError('Nieprawidlowa wersja instalatora.')
         result[key] = item
+    if 'starter_kits' in value:
+        kits = value['starter_kits']
+        if kits is not None:
+            if not isinstance(kits, list) or len(kits) > 33:
+                raise RuntimeError('Nieprawidlowa lista starter kitow.')
+            seen = set()
+            for item in kits:
+                if (not isinstance(item, dict) or set(item) != {'id', 'label'}
+                        or not isinstance(item['id'], str) or not SLUG.fullmatch(item['id'])
+                        or item['id'] in seen or not isinstance(item['label'], str)
+                        or not 1 <= len(item['label']) <= 80 or not item['label'].isprintable()):
+                    raise RuntimeError('Nieprawidlowy starter kit.')
+                seen.add(item['id'])
+            if (result['installed'] is not None and 'none' not in seen
+                    or result['installed'] is None and kits):
+                raise RuntimeError('Niespojna lista starter kitow.')
+        result['starter_kits'] = kits
     return result
 
 
 ENGINE_FAILURE_MESSAGES = {
+    'starter_kits': 'Nie mozna odczytac starter kitow z aktualnego instalatora. Sprawdz jego wersje.',
+    'starter_kit_unavailable': 'Wybrany starter kit nie jest juz dostepny. Odswiez formularz i wybierz ponownie.',
     'frontend_node': 'Laravel wymaga Node.js 20.19+ (20.x) lub 22.12+. Sprawdz Node.js w Ubuntu.',
     'frontend_npm': 'Laravel w DevStack wymaga npm 11+. Zaktualizuj npm w Ubuntu przed utworzeniem projektu.',
 }
@@ -1125,9 +1146,8 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
     slug = check_slug(data.get('slug'))
     name = check_name(data.get('name'))
     domain = check_domain(data.get('domain'))
-    options = {item['id'] for item in definition['options']}
     kit = data.get('starter_kit')
-    if data.get('webroot') != definition['webroot'] or not isinstance(kit, str) or kit not in options:
+    if data.get('webroot') != definition['webroot'] or not isinstance(kit, str) or not SLUG.fullmatch(kit):
         raise InputError('Nieprawidlowy katalog publiczny lub wariant instalacji.')
     if not isinstance(data.get('database'), bool) or not isinstance(data.get('https'), bool):
         raise InputError('Nieprawidlowe ustawienia projektu.')
@@ -1140,10 +1160,21 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
         raise InputError('Katalog juz istnieje. Instalator nie nadpisuje plikow.')
     if any(p.exists() or p.is_symlink() for p in (site_path(slug), site_link_path(slug), pool_path(slug))):
         raise InputError('Istnieje konfiguracja serwera dla tego projektu.')
+    # Discover through the same developer-identity worker as the form.
+    # Validate again before creating any database or job. The scaffold worker
+    # independently resolves the selected ID against its current CLI help.
+    tool = engine_tool_status({'engine': engine})
+    if not tool.get('installed'):
+        raise InputError('Zainstaluj oficjalny instalator w ustawieniach.')
+    if not tool.get('starter_kits'):
+        raise InputError('Nie mozna odczytac listy starter kitow z instalatora.')
+    choices = {item['id']: item['label'] for item in tool['starter_kits']}
+    if kit not in choices:
+        raise InputError('Wybrany starter kit nie jest juz dostepny. Odswiez liste.')
     # Root-owned reservation (one operation at a time) precedes any install.
     request = {'slug': slug, 'name': name, 'domain': domain, 'webroot': definition['webroot'],
                'database': data['database'], 'https': data['https'],
-               'engine': engine, 'starter_kit': kit}
+               'engine': engine, 'starter_kit': kit, 'starter_kit_label': choices[kit]}
     job = {'id': secrets.token_hex(16), 'action': 'create', 'engine': engine,
            'slug': slug, 'request': request}
     if request['database'] and ENGINE_DB_FILE.exists():
