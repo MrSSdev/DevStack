@@ -77,6 +77,22 @@ class EngineJobTests(unittest.TestCase):
                 result = d.adapter_call(unit, "scaffold", ["demo", "livewire"])
             self.assertEqual(result, {"ok": False, "code": expected, "log": "laravel-test.log"})
 
+    def test_configure_finishes_without_a_migration_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            job = {"id": "b"*32, "action": "create", "engine": "laravel", "slug": "demo",
+                   "state": "configuring", "unit": "devstack-engine-" + "b"*32 + "-configure"}
+            with patch.object(d, "ENGINE_JOB_FILE", base / "job.json"), \
+                 patch.object(d, "STATE_FILE", base / "state.json"), \
+                 patch.object(d, "start_engine_phase") as start:
+                d.write_json_atomic(d.ENGINE_JOB_FILE, job)
+                d.write_json_atomic(d.STATE_FILE, {"demo": {"engine": "laravel", "engine_status": "configuring"}})
+                d.ENGINE_RESULTS.put((job["id"], job["unit"], "configure", {"ok": True, "result": {"configured": True}}))
+                d.poll_engine_results()
+                self.assertEqual(d.engine_job()["state"], "succeeded")
+                self.assertEqual(d.read_json(d.STATE_FILE)["demo"]["engine_status"], "ready")
+                start.assert_not_called()
+
     def test_restart_does_not_retry_running_job(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "job.json"

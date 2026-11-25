@@ -29,8 +29,8 @@ PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
 CA_PUBLIC_FILE = pathlib.Path('/var/lib/devstack/ca/rootCA.pem')  # Public cert ONLY; never expose rootCA-key.pem.
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
 ENGINE_JOB_FILE = pathlib.Path('/var/lib/devstack/engine-job.json')
-ENGINE_RUNNER = '/opt/devstack/engines/runner.py'
-ENGINE_CATALOG_FILE = pathlib.Path(__file__).resolve().parents[1] / 'engines/catalog.json'
+ENGINE_RUNNER = '/opt/devstack/framework-installers/runner.py'
+ENGINE_CATALOG_FILE = pathlib.Path(__file__).resolve().parents[1] / 'framework-installers/catalog.json'
 ENGINE_RESULTS = queue.SimpleQueue()
 ENGINE_ACTIVE = {'scaffolding', 'configuring', 'migrating', 'checking', 'installing', 'updating'}
 ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
@@ -1024,7 +1024,7 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
     job = {'id': secrets.token_hex(16), 'action': 'create', 'engine': engine,
            'slug': slug, 'request': request}
     start_engine_phase(job, 'scaffolding', 'scaffold', [slug, request['starter_kit']],
-                       'Instalowanie ' + definition['label'] + ' i budowanie zasobow...')
+                       'Przygotowywanie ' + definition['label'] + ' i budowanie zasobow...')
     return {'message': job['message'], 'job_id': job['id']}
 
 
@@ -1095,16 +1095,11 @@ def poll_engine_results() -> None:
                     settings.update(db_name=project['db_name'], db_user=project['db_user'],
                                     db_password=read_json(SECRET_FILE)[slug]['password'])
                 start_engine_phase(job, 'configuring', 'configure', [slug],
-                                   'Konfigurowanie aplikacji...', settings)
+                                   'Przygotowywanie pliku .env...', settings)
             elif action == 'configure':
                 if result.get('configured') is not True:
                     raise RuntimeError('Invalid configuration result')
-                start_engine_phase(job, 'migrating', 'migrate', [job['slug']],
-                                   'Uruchamianie migracji...')
-            elif action == 'migrate':
-                if result.get('migrated') is not True:
-                    raise RuntimeError('Invalid migration result')
-                finish_engine_job(job, success=True, message=engine_definition(job['engine'])['label'] + ' zainstalowany i skonfigurowany.')
+                finish_engine_job(job, success=True, message=engine_definition(job['engine'])['label'] + ' przygotowany. Migracje uruchom samodzielnie.')
             elif action in ('check', 'install-tool', 'update-tool'):
                 job['tool'] = sanitize_tool_result(result)
                 if action != 'check' and job['tool']['installed'] is None:

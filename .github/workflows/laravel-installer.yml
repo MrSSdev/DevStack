@@ -1,10 +1,11 @@
-name: Official Laravel Installer smoke test
+name: Official Laravel framework preparation smoke test
 
 on:
   pull_request:
     branches: [main]
     paths:
-      - 'engines/**'
+      - 'framework-installers/**'
+      - 'daemon/devstackd.py'
       - '.github/workflows/laravel-installer.yml'
   workflow_dispatch:
 
@@ -12,9 +13,13 @@ permissions:
   contents: read
 
 jobs:
-  livewire:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        kit: [none, livewire]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,38 +33,63 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Official installer as unprivileged developer
+      - name: Prepare official Laravel package without migrations
         shell: bash
+        env:
+          KIT: ${{ matrix.kit }}
         run: |
           set -Eeuo pipefail
           test "$(id -u)" -ne 0
           git config --global user.name "DevStack CI"
           git config --global user.email "ci@example.invalid"
           mkdir -p "$HOME/projects"
-          test ! -e "$HOME/projects/devstack-ci-livewire"
-          python3 -I engines/runner.py laravel status > "$RUNNER_TEMP/engine-status.json"
+          slug="devstack-ci-$KIT"
+          test ! -e "$HOME/projects/$slug"
+          runner="$PWD/framework-installers/runner.py"
+          python3 -I "$runner" laravel status > "$RUNNER_TEMP/engine-status.json"
           if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["result"]["installed"] is None else 1)' "$RUNNER_TEMP/engine-status.json"; then
-            python3 -I engines/runner.py laravel install-tool
+            python3 -I "$runner" laravel install-tool
           fi
-          python3 -I engines/runner.py laravel status
-          python3 -I engines/runner.py laravel check
-          python3 -I engines/runner.py laravel scaffold devstack-ci-livewire livewire
-          printf '%s' '{"url":"https://devstack-ci-livewire.test"}' | python3 -I engines/runner.py laravel configure devstack-ci-livewire
-          python3 -I engines/runner.py laravel migrate devstack-ci-livewire
-          cd "$HOME/projects/devstack-ci-livewire"
+          python3 -I "$runner" laravel status
+          python3 -I "$runner" laravel check
+          python3 -I "$runner" laravel scaffold "$slug" "$KIT"
+          printf '%s' "{\"url\":\"https://$slug.test\",\"db_name\":\"fixture_db\",\"db_user\":\"fixture_user\",\"db_password\":\"fixture_password\"}" | python3 -I "$runner" laravel configure "$slug"
+          cd "$HOME/projects/$slug"
           composer check-platform-reqs
           composer show laravel/framework
-          composer show livewire/livewire
-          composer show livewire/flux
+          if [[ "$KIT" = livewire ]]; then
+            composer show livewire/livewire
+            composer show livewire/flux
+          fi
           test -s public/build/manifest.json
-          grep -Fxq 'APP_URL=https://devstack-ci-livewire.test' .env
+          grep -Fxq "APP_URL=https://$slug.test" .env
+          grep -Fxq 'DB_CONNECTION=sqlite' .env
+          grep -Fxq '# DB_DATABASE=fixture_db' .env
+          grep -Fxq '# DB_USERNAME=fixture_user' .env
+          grep -Fxq '# DB_PASSWORD=fixture_password' .env
+          ! grep -qE '^DB_(DATABASE|USERNAME|PASSWORD)=' .env
+          ! grep -q 'fixture_password' .env.example
+          grep -qE '^APP_KEY=base64:.+' .env
           test "$(stat -c '%a' .env)" = 600
-          php artisan migrate:status --no-interaction
-      - name: Check existing directory is refused
+          python3 - <<'PY'
+          import pathlib, sqlite3
+          db = pathlib.Path("database/database.sqlite").resolve()
+          assert db.is_file()
+          with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True) as conn:
+              assert conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
+          print("SQLite schema is empty; no migration ran.")
+          PY
+      - name: Check existing directory is refused and migrate is unsupported
         shell: bash
+        env:
+          KIT: ${{ matrix.kit }}
         run: |
-          if python3 -I engines/runner.py laravel scaffold devstack-ci-livewire livewire; then
+          if python3 -I framework-installers/runner.py laravel scaffold "devstack-ci-$KIT" "$KIT"; then
             echo 'Adapter unexpectedly accepted an existing project' >&2
             exit 1
           fi
-          test -s "$HOME/projects/devstack-ci-livewire/artisan"
+          if python3 -I framework-installers/runner.py laravel migrate "devstack-ci-$KIT"; then
+            echo 'Adapter unexpectedly accepted a migration operation' >&2
+            exit 1
+          fi
+          test -s "$HOME/projects/devstack-ci-$KIT/artisan"

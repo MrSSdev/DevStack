@@ -51,8 +51,6 @@ def main() -> int:
                 if len(raw) > 8192:
                     raise AdapterError("Configuration exceeds the allowed size.")
                 result = adapter.configure(args[0], json.loads(raw))
-            elif action == "migrate" and len(args) == 1:
-                result = adapter.migrate(args[0])
             else:
                 raise AdapterError("Unsupported adapter operation.")
         # Successful local status reads do not accumulate diagnostic logs.

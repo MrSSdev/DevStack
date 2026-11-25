@@ -16,6 +16,8 @@
         "label": "Livewire"
       }
     ],
-    "description": "Oficjalny instalator Composer; wymagane PHP, Composer, Node.js 20.19+ (20.x) lub 22.12+ oraz npm 11+."
+    "description": "Laravel Installer jest narzędziem opcjonalnym do ręcznej pracy. DevStack przygotowuje oficjalne pakiety Composer bez automatycznych migracji. Wymagane PHP, Composer, Node.js 20.19+ (20.x) lub 22.12+ i npm 11+.",
+    "scaffold_tool": "Composer",
+    "database_hint": "Dane nowej MariaDB trafią do zakomentowanych wpisów .env. SQLite pozostanie aktywne. DevStack nie uruchamia migracji."
   }
 }

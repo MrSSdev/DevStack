@@ -65,7 +65,7 @@ Composer, PHP, Node.js 20.19+ on 20.x or 22.12+, npm 11+ for Laravel, and enable
 installer creates a fresh directory before DevStack configures hosting; existing
 source directories are never overwritten. Long operations continue independently
 of the web request, and interrupted jobs retain files for review. See the
-[adapter contract](engines/README.md) for the draft workflow and acceptance tests.
+[adapter contract](framework-installers/README.md) for the draft workflow and acceptance tests.
 
 ## Documentation
 
