@@ -24,7 +24,7 @@ if [[ ! -f "$SRC/backend/public/index.html" ]] || [[ ! -d "$SRC/backend/public/a
   echo 'Frontend is not built. First run bash scripts/build-frontend.sh as normal user.' >&2
   exit 1
 fi
-if [[ ! -f "$SRC/backend/public/index.php" || ! -f "$SRC/daemon/devstackd.py" ]]; then
+if [[ ! -f "$SRC/backend/public/index.php" || ! -f "$SRC/daemon/devstackd.py" || ! -f "$SRC/daemon/project_frameworks.py" ]]; then
   echo 'Source tree is incomplete.' >&2
   exit 1
 fi
