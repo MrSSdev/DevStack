@@ -14,10 +14,57 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
 import zipfile
 
 FILES=('bridge.py','setup.py','devstack-widget-services.socket','devstack-widget-services@.service',
        'devstack-widget-control.socket','devstack-widget-control@.service')
+
+READER_USER = 'devstack-widget-reader'
+READER_DESCRIPTION = 'DevStack widget read-only'
+SETUP_STAGE = 'validation'
+
+
+def reader_identity(etc=Path('/etc')):
+    """Require a dedicated LOCAL, non-login identity; never adopt another account.
+
+    dbus-daemon can deliberately exclude dynamic NSS users. A local passwd
+    record avoids this without changing the bus or running the reader as root.
+    Only the matching record is examined; no account/credential is printed.
+    """
+    def records(name):
+        return [line.split(':') for line in (etc/name).read_text().splitlines()
+                if line.split(':', 1)[0] == READER_USER]
+    users, groups, shadows = records('passwd'), records('group'), records('shadow')
+    if not users and not groups and not shadows:
+        return None
+    if len(users) != 1 or len(groups) != 1 or len(shadows) != 1:
+        raise ValueError('Dedicated reader account is incomplete or conflicts')
+    user, group, shadow = users[0], groups[0], shadows[0]
+    if len(user) != 7 or len(group) != 4 or len(shadow) != 9:
+        raise ValueError('Dedicated reader record is invalid')
+    uid, gid = int(user[2]), int(user[3])
+    if (not 0 < uid < 61184 or not 0 < gid < 61184 or int(group[2]) != gid or
+            user[4] != READER_DESCRIPTION or user[5] != '/nonexistent' or
+            user[6] not in ('/usr/sbin/nologin', '/sbin/nologin') or
+            not shadow[1].startswith(('!', '*')) or group[3] not in ('', READER_USER)):
+        raise ValueError('Refusing unsafe or unrelated reader identity')
+    for line in (etc/'group').read_text().splitlines():
+        fields = line.split(':')
+        if len(fields) == 4 and fields[0] != READER_USER and READER_USER in fields[3].split(','):
+            raise ValueError('Reader must not have supplementary groups')
+    return uid, gid
+
+
+def ensure_reader_identity():
+    if reader_identity() is None:
+        line = 'u ' + READER_USER + ' - "' + READER_DESCRIPTION + '" /nonexistent /usr/sbin/nologin'
+        subprocess.run(['/usr/bin/systemd-sysusers', '--inline', line],
+                       check=True, timeout=20, capture_output=True)
+    if reader_identity() is None:
+        raise ValueError('Dedicated reader account was not created')
+    print('Reader identity: dedicated local non-login account; no root or supplementary groups.')
+
 
 def run(*args):
     subprocess.run(['/usr/bin/systemctl',*args],check=True,timeout=20,capture_output=True)
@@ -83,6 +130,7 @@ def install_frontend(raw):
     print('Static dashboard updated. Previous index saved in '+str(backup))
 
 def main():
+    global SETUP_STAGE
     if os.geteuid()!=0:raise ValueError('Root setup required')
     raw=sys.stdin.buffer.read(30_000_001)
     if len(raw)>30_000_000:raise ValueError('Payload too large')
@@ -97,23 +145,32 @@ def main():
     projects=Path('/var/lib/devstack/projects.json')
     if not projects.is_file() or projects.is_symlink() or projects.stat().st_size>4_000_000:raise ValueError('DevStack project registry unavailable')
     if not isinstance(json.loads(projects.read_text()),dict):raise ValueError('Unexpected project registry format')
+    SETUP_STAGE = 'reader-account'
+    ensure_reader_identity()
+    SETUP_STAGE = 'install-files'
     lib=directory('/usr/local/lib/devstack-widgets',0o755);etc=directory('/etc/devstack-widgets',0o700)
     atomic(lib/'services-bridge.py',decoded['bridge.py'])
     for mode in ('read','control'):atomic(etc/('services-'+mode+'.token'),(cfg[mode+'Token']+'\n').encode(),0o600)
     for name in FILES:
         if name.endswith(('.socket','.service')):atomic(Path('/etc/systemd/system')/name,decoded[name])
+    SETUP_STAGE = 'socket-activation'
     run('daemon-reload')
     for name in ('devstack-widget-services.socket','devstack-widget-control.socket'):
         run('enable','--now',name);run('is-active','--quiet',name)
+    SETUP_STAGE = 'read-health-43872'
     result=health(43872,'/v1/services',cfg['readToken'])
     if result.get('schema')!=1 or result.get('source')!='systemd-cgroup':raise ValueError('Invalid service readings')
+    SETUP_STAGE = 'control-health-43873'
     if health(43873,'/v1/health',cfg['controlToken']).get('ready') is not True:raise ValueError('Control health check failed')
     print('Service read/control listeners: active. No service restart was executed.')
+    SETUP_STAGE = 'static-frontend'
     if cfg.get('frontend'):install_frontend(decoded['frontend.zip'])
     return 0
 
 if __name__=='__main__':
     try:raise SystemExit(main())
     except (OSError,ValueError,KeyError,subprocess.SubprocessError,zipfile.BadZipFile) as e:
-        print('DevStack integration setup failed ('+type(e).__name__+'). No tokens printed.',file=sys.stderr)
+        detail = ' HTTP='+str(e.code) if isinstance(e, urllib.error.HTTPError) else ''
+        if isinstance(e, subprocess.CalledProcessError): detail += ' exit='+str(e.returncode)
+        print('DevStack integration setup failed at '+SETUP_STAGE+' ('+type(e).__name__+')'+detail+'. No tokens printed.',file=sys.stderr)
         raise SystemExit(1)
