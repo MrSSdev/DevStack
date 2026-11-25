@@ -1,0 +1,52 @@
+[
+  {
+    "id": "nginx",
+    "unit": "nginx.service",
+    "name": "Nginx",
+    "description": "Serwer WWW i HTTPS",
+    "probe": "https",
+    "port": 443,
+    "widget_default": true,
+    "panel_dependency": true
+  },
+  {
+    "id": "php",
+    "unit": "php8.5-fpm.service",
+    "name": "PHP-FPM 8.5",
+    "description": "Interpreter aplikacji PHP",
+    "probe": "https",
+    "port": 443,
+    "widget_default": true,
+    "panel_dependency": true
+  },
+  {
+    "id": "mariadb",
+    "unit": "mariadb.service",
+    "name": "MariaDB",
+    "description": "Relacyjna baza danych",
+    "probe": "tcp",
+    "port": 3306,
+    "widget_default": true,
+    "panel_dependency": false
+  },
+  {
+    "id": "redis",
+    "unit": "redis-server.service",
+    "name": "Redis",
+    "description": "Pamięć podręczna i kolejki",
+    "probe": "tcp",
+    "port": 6379,
+    "widget_default": true,
+    "panel_dependency": false
+  },
+  {
+    "id": "mailpit",
+    "unit": "devstack-mailpit.service",
+    "name": "Mailpit",
+    "description": "Lokalna skrzynka poczty testowej",
+    "probe": "tcp",
+    "port": 1025,
+    "widget_default": false,
+    "panel_dependency": false
+  }
+]

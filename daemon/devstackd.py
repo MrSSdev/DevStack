@@ -42,6 +42,9 @@ _options_spec = importlib.util.spec_from_file_location('devstack_installer_commo
 _installer_common = importlib.util.module_from_spec(_options_spec)
 _options_spec.loader.exec_module(_installer_common)
 resolve_installer_options = _installer_common.resolve_installer_options
+_services_spec = importlib.util.spec_from_file_location('devstack_managed_services', pathlib.Path(__file__).resolve().with_name('managed_services.py'))
+managed_services = importlib.util.module_from_spec(_services_spec)
+_services_spec.loader.exec_module(managed_services)
 ENGINE_RESULTS = queue.SimpleQueue()
 ENGINE_ACTIVE = {'preparing', 'scaffolding', 'configuring', 'migrating', 'checking', 'installing', 'updating'}
 ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
@@ -333,8 +336,28 @@ def require_local_mail(data: dict[str, Any]) -> bool:
     return value
 
 
+def service_control(data: dict[str, Any]) -> dict[str, Any]:
+    if set(data) != {'service', 'action', 'confirmed'} or data['confirmed'] is not True:
+        raise InputError('Potwierdz operacje uslugi.')
+    if engine_busy():
+        raise InputError('Najpierw poczekaj na zakonczenie instalacji frameworka.')
+    return managed_services.schedule(data['service'], data['action'])
+
+
+def set_widget_services(data: dict[str, Any]) -> dict[str, Any]:
+    if set(data) != {'services'}:
+        raise InputError('Nieprawidlowe ustawienia widzetu.')
+    rows = managed_services.catalog()
+    installed = managed_services.installed_rows(rows, managed_services.units_snapshot(rows))
+    return {'services': managed_services.save_selection(data['services'], installed)}
+
+
 def status(_: dict[str, Any]) -> dict[str, Any]:
-    return {'services': service_status(), 'mailpit': mailpit_status(), 'projects': public_projects(),
+    rows = managed_services.public_rows()
+    return {'services': {r['unit'].removesuffix('.service'): r['state'] for r in rows},
+            'managed_services': rows, 'service_action_pending': managed_services.action_pending(),
+            'mailpit': next((r['state'] for r in rows if r['id'] == 'mailpit'), 'not-installed'),
+            'projects': public_projects(),
             'preferences': get_ui_preferences(), 'engine_job': public_engine_job(),
             'engines': engine_catalog(), 'engine_access_allowed': engine_access_allowed()}
 
@@ -1384,6 +1407,7 @@ OPS = {'status': status, 'create': create, 'reveal': reveal,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,
        'set_preferences': set_ui_preferences, 'get_preferences': preferences,
+       'service_control': service_control, 'set_widget_services': set_widget_services,
        'public_ca_certificate': public_ca_certificate}
 
 
@@ -1397,6 +1421,8 @@ def handle(raw: bytes) -> bytes:
         operation = request.get('op')
         if operation not in OPS:
             raise InputError('Nieobslugiwana operacja.')
+        if operation in {'create', 'delete_project', 'update_config', 'update_full_config', 'engine_tool_action'} and managed_services.action_pending():
+            raise InputError('Poczekaj na zakonczenie operacji uslugi.')
         response = {'ok': True, 'result': OPS[operation](request['data'])}
     except (InputError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         response = {'ok': False, 'error': str(exc)[:1200]}
