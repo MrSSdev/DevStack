@@ -4,8 +4,8 @@
     "tool": "Laravel Installer",
     "webroot": "public",
     "default_option": "none",
-    "option_label": "Starter kit Laravel",
-    "option_hint": "Lista jest odczytywana z aktualnie zainstalowanego Laravel Installer. Wariant bez logowania dotyczy tworzonej aplikacji.",
+    "option_label": "Technologia frontendowa",
+    "option_hint": "Lista technologii z aktualnego Laravel Installer. Logowanie i pozostałe funkcje wybierzesz w opcjach poniżej. Blade nie dodaje starter kitu ani gotowego logowania.",
     "description": "Oficjalny Laravel Installer zarządzany przez Composer; wymagane PHP, Composer, Node.js 20.19+ (20.x) lub 22.12+ oraz npm 11+.",
     "database_options": [
       {

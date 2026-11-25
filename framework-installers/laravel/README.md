@@ -27,11 +27,12 @@ laravel help new --format=json --no-interaction --no-ansi
 
 Symfony Console supplies the command definition. The adapter recognizes
 value-less switches described by the installer as "Install the ... Starter Kit"
-and offers Blade (no kit), the recognized first-party kits and their blank
-variants when the official `--no-authentication` switch is available. In
-Installer 5.33.0 this yields React, Svelte, Vue and Livewire, plus the four
-without application authentication. These are different from the dashboard's
-authentication setting. Status is read when opening/selecting the framework
+and offers only frontend technologies: Blade (no additional scaffolding)
+and each recognized first-party stack. In Installer 5.33.0 this yields Blade,
+React, Svelte, Vue and Livewire, without duplicate authenticated/blank entries.
+Application authentication is a separate conditional option. Existing
+projects retain their saved starter-kit IDs and labels, including historical
+`blank-*` IDs; no existing project is migrated or recreated. Status is read when opening/selecting the framework
 form, manually refreshing it, and after an installer job; the server and
 worker validate the choice again before installation. There is no periodic
 background discovery or network lookup for this list.
@@ -50,9 +51,12 @@ the corresponding switches. Symfony's help does not describe interactive
 dependencies, so the Laravel adapter mirrors the reviewed upstream rules
 (v5.33.0); it never parses terminal screens or patches vendor code.
 
-- Authenticated React/Svelte/Vue/Livewire: built-in Laravel authentication
-  (default) or WorkOS (`--workos`, requires a separate WorkOS account and
-  configuration for functional sign-in).
+- React/Svelte/Vue/Livewire: built-in Laravel authentication (default),
+  no authentication (`--no-authentication`, selects the official blank kit)
+  or WorkOS (`--workos`, requires a separate account and configuration for
+  functional sign-in), according to available switches. Blade does not add
+  authentication scaffolding and has no authentication selector. These
+  choices do not change the DevStack dashboard's login policy.
 - Livewire with built-in authentication: single-file components (default)
   or stand-alone classes (`--livewire-class-components`).
 - Built-in authenticated kits with single-file components when applicable:
