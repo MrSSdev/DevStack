@@ -46,16 +46,18 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     private static long _epoch;
     public static AutoResetEvent Wake { get; } = new(false);
     private static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-    private static bool Known(string id) => id is WidgetCards.WslId or WidgetCards.ServicesId;
+    private static bool Known(string id) => id == WidgetCards.WslId;
 
-    public WidgetProvider() => Recover();
+    public WidgetProvider() { Recover(); DevStackWidget.Recover(); }
     public static void Start()
     {
+        DevStackWidget.Start();
         lock (Gate) _timer ??= new Timer(_ => RequestRefresh(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         Visibility(); RequestRefresh();
     }
     public static void Stop()
     {
+        DevStackWidget.Stop();
         Timer? timer; CancellationTokenSource? visible, wsl;
         lock (Gate)
         {
@@ -71,6 +73,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     public static bool ShouldExit()
     {
+        if (!DevStackWidget.CanExit()) return false;
         lock (Gate) return _operation is null && !Widgets.Values.Any(w => w.Interested) &&
             DateTimeOffset.UtcNow - _lastUse > TimeSpan.FromSeconds(90);
     }
@@ -122,6 +125,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     public void CreateWidget(WidgetContext c)
     {
+        if (c.DefinitionId == WidgetCards.ServicesId) { DevStackWidget.Activate(c); return; }
         if (!Known(c.DefinitionId)) return;
         lock (Gate)
         {
@@ -136,6 +140,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     public void Activate(WidgetContext c)
     {
+        if (c.DefinitionId == WidgetCards.ServicesId) { DevStackWidget.Activate(c); return; }
         if (!Known(c.DefinitionId)) return;
         lock (Gate)
         {
@@ -150,6 +155,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     public void Deactivate(string widgetId)
     {
+        if (DevStackWidget.Contains(widgetId)) { DevStackWidget.Deactivate(widgetId); return; }
         lock (Gate)
         {
             if (Widgets.TryGetValue(widgetId, out var widget))
@@ -163,12 +169,14 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     public void DeleteWidget(string widgetId, string customState)
     {
+        if (DevStackWidget.Contains(widgetId)) { DevStackWidget.Delete(widgetId); return; }
         lock (Gate) { Widgets.Remove(widgetId); _lastUse = DateTimeOffset.UtcNow; }
         Visibility();
     }
     public void OnWidgetContextChanged(WidgetContextChangedArgs args)
     {
         var c = args.WidgetContext;
+        if (c.DefinitionId == WidgetCards.ServicesId) return;
         lock (Gate)
         {
             if (!Widgets.TryGetValue(c.Id, out var widget)) return;
@@ -252,6 +260,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     public async void OnResourceRequested(WidgetResourceRequestedArgs args)
     {
+        if (args.WidgetContext.DefinitionId == WidgetCards.ServicesId) { DevStackWidget.Resource(args); return; }
         var deferral = args.GetDeferral();
         Uri? uri = null; bool allowed = false, read = false; string state = "{}";
         var id = args.WidgetContext.Id;
@@ -307,6 +316,7 @@ public sealed class WidgetProvider : IWidgetProvider, IWidgetResourceProvider, I
     }
     public void OnMessageReceived(WidgetMessageReceivedArgs args)
     {
+        if (args.WidgetContext.DefinitionId == WidgetCards.ServicesId) { DevStackWidget.Message(args); return; }
         var id = args.WidgetContext.Id;
         if (args.WidgetContext.DefinitionId != WidgetCards.WslId || args.Message.Length > 4096) return;
         string kind, verb = "", confirmation = "";

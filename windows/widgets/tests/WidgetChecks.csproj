@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="Bridge/**/*.cs" />
+    <Compile Include="../DevStackData.cs" Link="DevStackData.cs" />
     <Compile Include="../StateProbe.cs" Link="StateProbe.cs" />
     <Compile Include="../WidgetCards.cs" Link="WidgetCards.cs" />
     <Compile Include="../WidgetDesign.cs" Link="WidgetDesign.cs" />

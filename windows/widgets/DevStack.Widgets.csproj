@@ -31,5 +31,6 @@
     <Content Include="ProviderAssets\*.png" />
     <Content Include="Templates\*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Web\*.*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="ServicesWeb\*.*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

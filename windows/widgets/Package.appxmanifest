@@ -5,7 +5,7 @@
          xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
          IgnorableNamespaces="uap uap3 rescap">
-  <Identity Name="MrSSdev.DevStack.Widgets" Publisher="CN=DevStack Widgets Development" Version="0.3.5.0" />
+  <Identity Name="MrSSdev.DevStack.Widgets" Publisher="CN=DevStack Widgets Development" Version="0.4.0.0" />
   <Properties>
     <DisplayName>DevStack Widgets</DisplayName>
     <PublisherDisplayName>DevStack</PublisherDisplayName>
@@ -55,7 +55,8 @@
                     </ThemeResources>
                   </Definition>
                   <Definition Id="DevStack_Services" DisplayName="DevStack"
-                              Description="Dostępność usług i skróty do projektów">
+                              Description="Dostępność usług i skróty do projektów"
+                              WebRequestFilter="https://devstack-services.invalid/*">
                     <Capabilities>
                       <Capability><Size Name="large" /></Capability>
                     </Capabilities>

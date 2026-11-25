@@ -1,0 +1,29 @@
+[Unit]
+Description=One bounded DevStack widget control request
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -I /usr/local/lib/devstack-widgets/services-bridge.py control
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+User=root
+RuntimeDirectory=devstack-widget-control
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+LoadCredential=auth:/etc/devstack-widgets/services-control.token
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=96M
+TasksMax=12
+RuntimeMaxSec=20
+TimeoutStopSec=1

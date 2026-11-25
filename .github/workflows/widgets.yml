@@ -23,7 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Authorization and procfs tests
-        run: python3 -m unittest discover -s windows/widgets/telemetry -p 'test_*.py' -v
+        run: |
+          python3 -m unittest discover -s windows/widgets/telemetry -p 'test_*.py' -v
+          python3 -m unittest discover -s windows/widgets/services -p 'test_*.py' -v
 
   widgets-x64:
     name: Windows widgets x64 MSIX
@@ -44,12 +46,14 @@ jobs:
         run: |
           python windows/widgets/scripts/Build-WslWeb.py
           if ($LASTEXITCODE -ne 0) { throw 'Approved prototype extraction failed' }
+          python windows/widgets/scripts/Build-DevStackWeb.py
+          if ($LASTEXITCODE -ne 0) { throw 'Approved DevStack extraction failed' }
           ./windows/widgets/scripts/New-WidgetAssets.ps1
           ./windows/widgets/scripts/Test-WidgetManifest.ps1
           [xml]$manifest = Get-Content windows/widgets/Package.appxmanifest -Raw
           $wsl = $manifest.SelectSingleNode("//*[local-name()='Definition' and @Id='DevStack_WSL']")
           $dev = $manifest.SelectSingleNode("//*[local-name()='Definition' and @Id='DevStack_Services']")
-          if ($wsl.WebRequestFilter -ne 'https://devstack-widgets.invalid/*' -or $dev.HasAttribute('WebRequestFilter')) { throw 'Only WSL may use web content' }
+          if ($wsl.WebRequestFilter -ne 'https://devstack-widgets.invalid/*' -or $dev.WebRequestFilter -ne 'https://devstack-services.invalid/*') { throw 'Both web widget origins must be isolated' }
 
       - name: Logic and actual provider bridge tests without starting WSL
         shell: pwsh
@@ -72,6 +76,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Existing card bounds tests failed' }
           node windows/widgets/scripts/Test-WslWeb.cjs wsl-approved-previews
           if ($LASTEXITCODE -ne 0) { throw 'Approved WSL visual/interaction tests failed' }
+          node windows/widgets/scripts/Test-DevStackWeb.cjs services-approved-previews
+          if ($LASTEXITCODE -ne 0) { throw 'Approved DevStack visual/interaction tests failed' }
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -88,6 +94,23 @@ jobs:
           path: widgets-previews/
           retention-days: 14
           if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: DevStack-Services-Approved-Preview
+          path: services-approved-previews/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Build dashboard static deep-link update
+        shell: pwsh
+        run: |
+          npm --prefix frontend install --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency install failed' }
+          npm --prefix frontend run build
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+          Compress-Archive -Path backend/public/index.html, backend/public/assets -DestinationPath DevStack-Frontend.zip
 
       - name: Restore NuGet packages
         shell: pwsh
@@ -133,7 +156,14 @@ jobs:
           Copy-Item '${{ steps.package.outputs.path }}' 'widgets-packages\install\DevStack-Widgets-x64.msix'
           Copy-Item windows/widgets/scripts/Install-Widgets.ps1, windows/widgets/scripts/Install-WslTelemetry.ps1 'widgets-packages/install/'
           Copy-Item windows/widgets/telemetry/collector.py, windows/widgets/telemetry/devstack-widget-metrics.socket, windows/widgets/telemetry/devstack-widget-metrics@.service 'widgets-packages/install/telemetry/'
-          Copy-Item windows/widgets/WSL-0.3.md 'widgets-packages/install/READ-ME-FIRST.md'
+          New-Item -ItemType Directory -Force -Path 'widgets-packages/install/services' | Out-Null
+          Copy-Item windows/widgets/services/bridge.py, windows/widgets/services/setup.py, windows/widgets/services/*.socket, windows/widgets/services/*.service 'widgets-packages/install/services/'
+          Copy-Item windows/widgets/scripts/Install-DevStackWidget.ps1 'widgets-packages/install/'
+          Copy-Item DevStack-Frontend.zip 'widgets-packages/install/'
+          Copy-Item windows/widgets/DEVSTACK-0.4.md 'widgets-packages/install/READ-ME-FIRST.md'
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path windows/widgets/scripts/Install-DevStackWidget.ps1), [ref]$null, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { throw 'DevStack installer syntax failed' }
           $sig = Get-AuthenticodeSignature 'widgets-packages/install/DevStack-Widgets-x64.msix'
           $public = Get-PfxCertificate 'widgets-packages/install/DevStack-Widgets-Dev.cer'
           if (!$sig.SignerCertificate -or $sig.SignerCertificate.Thumbprint -ne $public.Thumbprint) { throw 'Published signer pair mismatch' }

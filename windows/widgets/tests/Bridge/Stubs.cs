@@ -66,3 +66,18 @@ namespace DevStack.Widgets
   internal static async Task<(int ExitCode,string Output)> StopAsync(){Interlocked.Increment(ref Stops);await Task.Delay(40);Running=false;return(0,"");}
  }
 }
+
+namespace DevStack.Widgets
+{
+ internal static class DevStackNavigation { internal static int Opens; internal static void Open(string route){Opens++;} }
+ internal static class DevStackData
+ {
+  internal static readonly string[] Ids={"nginx","php","mariadb","redis"};
+  internal sealed record Service(string Id,bool? Reachable,double? LatencyMs,long? MemoryBytes,double? CpuPercent,bool? UnitActive);
+  internal sealed record Result(bool? Running,string Integration,Service[] Services,int? ProjectCount,DateTimeOffset CheckedAt);
+  internal static int Restarts,Reads;internal static string Last="";
+  internal static Task<Result> CaptureAsync(bool? running,CancellationToken ct)
+  { ct.ThrowIfCancellationRequested();Reads++;return Task.FromResult(new Result(running,running==true?"ok":"offline",Ids.Select(id=>new Service(id,running,4,1000000,0.5,running)).ToArray(),running==true?3:null,DateTimeOffset.Now)); }
+  internal static async Task<bool> RestartAsync(string id,CancellationToken ct){Restarts++;Last=id;await Task.Delay(60);return true;}
+ }
+}

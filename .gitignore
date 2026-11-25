@@ -24,3 +24,10 @@ backend/public/assets/
 # Private planning documents belong in DevStackDoc, not public DevStack.
 /ROADMAP.md
 /ASUS/
+
+# Generated from the exact approved DevStack source and production script.
+windows/widgets/ServicesWeb/index.html
+windows/widgets/ServicesWeb/services.css
+windows/widgets/ServicesWeb/csp.txt
+windows/widgets/ServicesWeb/unavailable.html
+windows/widgets/design/approved-devstack-03.html.gz
