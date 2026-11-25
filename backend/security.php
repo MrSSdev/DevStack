@@ -165,7 +165,7 @@ function devstack_body(): array
 /** Rate limit independent of browser cookies; local panel, one workstation. */
 function devstack_login_limit(bool $failure = false, bool $reset = false): bool
 {
-    $file = '/var/lib/devstack/web-sessions/login-attempts.json';
+    $file = '/var/lib/devstack-web/sessions/login-attempts.json';
     $fp = @fopen($file, 'c+');
     if ($fp === false) {
         // Fail closed if throttling data is inaccessible.
