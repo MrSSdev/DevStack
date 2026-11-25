@@ -1,9 +1,10 @@
 import { createElement, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Copy, Download, ExternalLink, Mail, Paperclip, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Copy, Download, ExternalLink, Paperclip, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { PageHeader } from '@/components/page-header'
 import { parseMailPreview, type PreviewNode } from '@/lib/safe-mail-preview'
 
 type Address={Name?:string; Address?:string}
@@ -12,7 +13,7 @@ type Summary={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null
 type Message={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null; Cc?:Address[]|null; Bcc?:Address[]|null; Date?:string; Text?:string; HTML?:string; Attachments?:Attachment[]|null; Inline?:Attachment[]|null}
 type Page={total:number; unread:number; messages_count:number; start:number; messages:Summary[]|null}
 type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown)=>Promise<T>
-type Props={status?:string; csrf:string; request:Request; refreshStatus:()=>void}
+type Props={status?:string; csrf:string; request:Request; refreshStatus:()=>void; notices?:ReactNode}
 
 const idPattern=/^[A-Za-z0-9]{22}$/
 const partPattern=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -26,7 +27,7 @@ function renderPreview(nodes:PreviewNode[]):ReactNode[]{
   return nodes.map((node,index)=>typeof node==='string'?node:createElement(node.tag,{key:index},...renderPreview(node.children)))
 }
 
-export function MailInbox({status,csrf,request,refreshStatus}:Props){
+export function MailInbox({status,csrf,request,refreshStatus,notices}:Props){
   const [query,setQuery]=useState('')
   const [appliedQuery,setAppliedQuery]=useState('')
   const [start,setStart]=useState(0)
@@ -115,21 +116,19 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
   }
 
   return <div className="min-w-0 space-y-3">
-    <Card className="min-w-0">
-      <CardContent className="space-y-3 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            {selected?<Button size="sm" variant="outline" disabled={deleting} onClick={back}><ArrowLeft/>Odebrane</Button>:<><Mail className="size-4 text-muted-foreground"/><h2 className="text-sm font-semibold">Odebrane</h2>{page&&<Badge>{page.total} · {page.unread} nieprzeczytanych</Badge>}</>}
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {!selected&&<Button size="sm" variant="outline" onClick={refresh} disabled={loading||deleting||!!confirmDelete}><RefreshCw className={loading?'animate-spin':''}/>Odśwież</Button>}
+    <PageHeader title="E-mail" actions={<>
+      {selected&&<Button size="sm" variant="outline" disabled={deleting} onClick={back}><ArrowLeft/>Odebrane</Button>}
+      {!selected&&<Button size="sm" variant="outline" onClick={refresh} disabled={loading||deleting||!!confirmDelete}><RefreshCw className={loading?'animate-spin':''}/>Odśwież</Button>}
             {active&&selected&&<Button size="sm" variant="outline" disabled={opening||deleting||!message||!!confirmDelete} onClick={()=>setConfirmDelete('one')}><Trash2/>Usuń</Button>}
             {active&&!selected&&checked.length>0&&<Button size="sm" variant="outline" disabled={loading||deleting||!!confirmDelete} onClick={()=>setConfirmDelete('many')}><Trash2/>Usuń ({checked.length})</Button>}
             {active&&!selected&&<Button size="sm" variant="outline" disabled={loading||deleting||!!confirmDelete||!page||page.total===0} onClick={()=>setConfirmDelete('all')}><Trash2/>Opróżnij</Button>}
             {active&&<Button size="icon" variant="outline" title="Otwórz Mailpit" aria-label="Otwórz Mailpit" onClick={()=>window.open('http://127.0.0.1:8025/','_blank','noopener,noreferrer')}><ExternalLink/></Button>}
             <Button size="icon" variant="outline" aria-label="Konfiguracja poczty" title="Konfiguracja poczty" disabled={deleting||!!confirmDelete} onClick={()=>settingsDialog.current?.showModal()}><Settings/></Button>
-          </div>
-        </div>
+    </>}/>
+    {notices}
+    <Card className="min-w-0">
+      {!selected&&<CardHeader><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold tracking-tight">Odebrane</h2>{page&&<Badge>Wiadomości: {page.total} · Nieprzeczytane: {page.unread}</Badge>}</div></CardHeader>}
+      <CardContent className={selected?'space-y-3 p-3':'space-y-3'}>
         {actionNotice&&<p role="status" className="text-xs text-muted-foreground">{actionNotice}</p>}
         {actionError&&<p role="alert" className="text-sm text-destructive">{actionError}</p>}
         {confirmDelete&&<div className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-2 text-sm" role="alert">
@@ -154,7 +153,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
           </div>}
           {page&&count>pageSize&&<div className="flex items-center justify-between gap-2"><Button size="sm" variant="outline" disabled={start===0||loading||deleting||!!confirmDelete} onClick={()=>changePage(Math.max(0,start-pageSize))}><ArrowLeft/>Wstecz</Button><span className="text-xs text-muted-foreground">{start+1}–{start+messages.length} / {count}</span><Button size="sm" variant="outline" disabled={start+pageSize>=count||loading||deleting||!!confirmDelete} onClick={()=>changePage(start+pageSize)}>Dalej<ArrowRight/></Button></div>}
         </>}
-        {active&&selected&&<article className="min-w-0 space-y-3 border-t pt-3">
+        {active&&selected&&<article className="min-w-0 space-y-3">
           <h2 ref={readerHeading} tabIndex={-1} className="break-words text-xl font-semibold outline-none">{message?.Subject|| (opening?'Otwieranie wiadomości…':'Wiadomość')}</h2>
           {detailError&&<p role="alert" className="text-sm text-destructive">{detailError}</p>}
           {opening&&<p className="py-6 text-center text-sm text-muted-foreground">Wczytywanie…</p>}

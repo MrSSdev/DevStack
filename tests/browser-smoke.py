@@ -144,6 +144,7 @@ class BrowserAcceptance(unittest.TestCase):
             self.page.set_viewport_size({'width':width, 'height':950})
             for theme in ['light','dark']:
                 self.goto('dashboard');self.theme(theme)
+                header_origin = None
                 for route in ['dashboard','projects','new','mail','settings']:
                     with self.subTest(width=width, theme=theme, route=route):
                         self.goto(route)
@@ -151,6 +152,23 @@ class BrowserAcceptance(unittest.TestCase):
                         if route=='mail':expect(self.message_button(HTML_SUBJECT)).to_be_visible()
                         if route=='new':self.page.get_by_role('combobox',name='Framework',exact=True).select_option('none')
                         self.shot(prefix+route)
+                        # All primary views use the same title origin and
+                        # page width, including on platforms with classic scrollbars.
+                        header = self.page.locator('[data-slot="page-header"]')
+                        expect(header).to_have_count(1)
+                        expect(self.page.locator('main h1')).to_have_count(1)
+                        origin = header.evaluate('e=>{const r=e.getBoundingClientRect();return [r.x,r.y+scrollY,r.width]}')
+                        if header_origin is None:
+                            header_origin = origin
+                        else:
+                            for expected, actual in zip(header_origin, origin):
+                                self.assertAlmostEqual(expected, actual, delta=1, msg=prefix+route)
+                        self.assertTrue(self.page.locator('main footer').evaluate("""e=>{const padding=parseFloat(getComputedStyle(e.closest('main')).paddingBottom);return e.getBoundingClientRect().bottom+scrollY+padding>=innerHeight-2}"""), prefix+route+' footer')
+                        if route=='mail':
+                            expect(header.get_by_role('button',name='Konfiguracja poczty')).to_be_visible()
+                            expect(header.get_by_role('button',name='Opróżnij',exact=True)).to_be_visible()
+                        if route=='settings':
+                            expect(header.get_by_role('navigation',name='Kategorie ustawień')).to_be_visible()
                         if route=='dashboard':
                             self.page.locator('main button').filter(has_text='Nginx').click()
                             self.shot(prefix+'service-dialog')
