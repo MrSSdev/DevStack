@@ -135,6 +135,26 @@ class BrowserAcceptance(unittest.TestCase):
     def test_01_real_project_and_all_views(self):
         response = self.post('/api/projects', dict(slug='browser-fixture', name='Browser fixture', domain='browser-fixture.test', webroot='public', database=True, https=True, local_mail=True, engine='none', starter_kit='none', installer_options={}))
         self.assertEqual(response.status, 200, response.text())
+        # Simulate an existing manually provisioned project with actual Composer
+        # installed-metadata format. The installed daemon reads it as this user.
+        metadata = pathlib.Path.home() / 'projects/browser-fixture/vendor/composer/installed.json'
+        metadata.parent.mkdir(parents=True, exist_ok=True)
+        metadata.write_text(json.dumps({'packages':[{'name':'laravel/framework','version':'v13.42.0'}]}))
+        self.goto('projects')
+        search = self.page.get_by_role('searchbox',name='Szukaj projektów',exact=True)
+        search.fill('laravel 13.42')
+        row = self.page.locator('main button').filter(has_text='Browser fixture')
+        expect(row.get_by_text('Laravel 13.42.0',exact=True)).to_be_visible()
+        search.fill('does-not-exist.test')
+        expect(self.page.get_by_text('Brak projektów pasujących do wyszukiwania.',exact=True)).to_be_visible()
+        self.page.get_by_role('button',name='Wyczyść wyszukiwanie projektów',exact=True).click()
+        expect(search).to_have_value('')
+        search.fill('browser-fixture.test')
+        expect(row).to_be_visible()
+        search.fill('')
+        metadata.write_text(json.dumps({'packages':[{'name':'laravel/framework','version':'v13.43.0'}]}))
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(row.get_by_text('Laravel 13.43.0',exact=True)).to_be_visible()
         # Seed a project using the former two-field API, then open and save it
         # using the single editor. The real helper must retain both rule types.
         flux = (r'location ~* ^/flux/flux\.js$ {'
@@ -350,6 +370,13 @@ class BrowserAcceptance(unittest.TestCase):
 
     def test_04_navigation_forms_widgets_and_service_confirmation(self):
         self.goto('dashboard')
+        expect(self.page.get_by_role('button',name='Nowy projekt',exact=True)).to_have_count(0)
+        icon = self.page.locator('link[rel="icon"]').get_attribute('href')
+        self.assertTrue(icon.startswith('/assets/') and icon.endswith('.svg'), icon)
+        icon_response = self.context.request.get(BASE + icon)
+        self.assertEqual(icon_response.status,200)
+        self.assertIn('image/svg+xml',icon_response.headers['content-type'])
+        self.assertIn('M10 22V7',icon_response.text())
         opener=self.page.get_by_role('button',name='Otwórz menu')
         opener.click()
         expect(self.page.get_by_role('dialog',name='Menu główne')).to_be_visible()
@@ -361,6 +388,10 @@ class BrowserAcceptance(unittest.TestCase):
         opener.click()
         self.page.get_by_role('navigation',name='Nawigacja główna').get_by_role('button',name='Projekty',exact=False).click()
         expect(self.page.get_by_role('heading',name='Projekty',exact=True)).to_be_visible()
+        self.page.get_by_role('link',name='DevStack',exact=True).click()
+        expect(self.page.get_by_role('heading',name='Przegląd',exact=True)).to_be_visible()
+        expect(self.page.get_by_role('button',name='Nowy projekt',exact=True)).to_have_count(0)
+        self.goto('projects')
         self.page.get_by_role('button',name='Nowy projekt',exact=True).click()
         self.page.get_by_role('textbox',name='Nazwa projektu',exact=True).fill('New browser fixture')
         expect(self.page.get_by_role('textbox',name='Identyfikator katalogu')).to_have_value('new-browser-fixture')
