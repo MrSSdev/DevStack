@@ -18,8 +18,12 @@ Extract the complete archive into:
 2. Only for a new integration, start Ubuntu deliberately using the existing WSL widget, then run
    `Install-DevStackWidget.ps1` from this same bundle. This is a NEW integration
    setup, not replacement WSL telemetry. It refuses to run when Ubuntu is off.
-3. If an old host session remains after update, close WidgetBoard and
-   DevStack.Widgets once. Never reset Ubuntu or make this a per-open step.
+3. The installer stops WidgetBoard and DevStack.Widgets before deployment,
+   then always attempts the same reset after successful deployment and
+   verification of the installed version and Status Ok. Reopen Win+W.
+   No separate manual reset is normally needed. A failed deployment skips
+   the post-update reset; a process-stop error produces a warning. Never
+   reset Ubuntu or make this a per-open step.
 
 The new setup installs two separate authenticated loopback socket listeners:
 43872 provides service statistics, 43873 accepts one explicitly confirmed
@@ -131,3 +135,12 @@ Regression tests cover WSL inside/outside/Escape/close in both themes and the
 DevStack transition from unresolved errors to recovered/availability-only,
 including invalid integration, inactive unit, unreachable port, expiry and
 no extra restart. Actual Windows host acceptance remains a separate gate.
+
+## Installer maintenance — automatic post-update reset
+
+The post-deployment reset is now part of Install-Widgets.ps1 for all future
+bundles. This is an installer-only change; existing 0.4.2.0 binaries and
+telemetry need no reinstall for this maintenance. The Windows manifest test
+checks ordering and exercises the installer deployment tail with mocked
+commands (success, failed deployment, wrong version, bad status, missing
+package). Actual Windows process termination remains a device test.

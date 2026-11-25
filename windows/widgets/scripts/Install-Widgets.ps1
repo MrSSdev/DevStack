@@ -37,7 +37,27 @@ Get-Process WidgetBoard, 'DevStack.Widgets' -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
 # Update in place. Do not remove the working version before deployment succeeds.
 Add-AppxPackage -Path $msix -ErrorAction Stop
-Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' | Select-Object Name, Version, Status
+$packages = @(Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' -ErrorAction Stop)
+if ($packages.Count -ne 1 -or
+    [string]$packages[0].Version -ne [string]$manifest.Package.Identity.Version -or
+    [string]$packages[0].Status -ne 'Ok') {
+    throw 'Deployment verification failed. Expected the installed package version and Status Ok.'
+}
+
+# Always clear the host/provider session after successful deployment.
+# A process may have restarted while Add-AppxPackage was running.
+# Never terminate Ubuntu or restart the Linux integration.
+$resetErrors = @()
+Get-Process -Name "WidgetBoard", "DevStack.Widgets" `
+    -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue -ErrorVariable resetErrors
+if ($resetErrors.Count -gt 0) {
+    Write-Warning 'Package updated, but the post-update widget process reset reported an error.'
+} else {
+    Write-Host 'Post-update widget process reset completed. Reopen Win+W.'
+}
+
+$packages | Select-Object Name, Version, Status
 Write-Host 'Widgets updated to 0.4.2.0. Approved WSL appearance and controls are preserved.'
 Write-Host 'Existing Ubuntu telemetry setup is retained. Do not reinstall WSL telemetry.'
 Write-Host 'Existing DevStack integration is retained. Run Install-DevStackWidget.ps1 only if not already configured.'
