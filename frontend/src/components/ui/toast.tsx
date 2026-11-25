@@ -65,7 +65,11 @@ function ToastList(){
           {item.description&&<ToastPrimitive.Description className="whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground"/>}
           {item.actionProps?.children&&<ToastPrimitive.Action render={<Button variant="outline" size="sm"/>} className="mt-1 max-w-full"/>}
         </div>
-        {item.type!=='loading'&&<ToastPrimitive.Close render={<Button variant="ghost" size="icon"/>} aria-label="Zamknij powiadomienie" className="-mr-1 -mt-1 size-7 shrink-0"><X aria-hidden="true"/></ToastPrimitive.Close>}
+        {/* Base UI's default Close hides from assistive technology until the
+            collapsed stack is expanded or the control receives focus. Our
+            viewport always displays the full cards, so its visible close
+            controls must also be accessible without hover. */}
+        {item.type!=='loading'&&<ToastPrimitive.Close render={<Button variant="ghost" size="icon"/>} aria-label="Zamknij powiadomienie" aria-hidden={false} className="-mr-1 -mt-1 size-7 shrink-0"><X aria-hidden="true"/></ToastPrimitive.Close>}
       </ToastPrimitive.Content>
     </ToastPrimitive.Root>)}
   </ToastPrimitive.Viewport>

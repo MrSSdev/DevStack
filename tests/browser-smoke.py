@@ -521,7 +521,18 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(installer.get_by_text('Nowszy błąd instalacji.',exact=False)).to_be_visible()
         expect(installer).to_have_count(1)
-        installer.get_by_role('button',name='Zamknij powiadomienie').click()
+        # Full cards remain expanded visually even when the pointer and focus
+        # are elsewhere. Close must be discoverable by its accessible role
+        # without hovering, forcing the click, or including hidden elements.
+        self.page.mouse.move(1,1)
+        close = installer.get_by_role('button',name='Zamknij powiadomienie',exact=True)
+        expect(close).to_be_visible()
+        expect(close).to_have_attribute('aria-hidden','false')
+        close.focus()
+        expect(close).to_be_focused()
+        self.page.keyboard.press('Enter')
+        expect(installer).to_have_count(0)
+        self.assertEqual(self.page.evaluate("localStorage.getItem('devstack.engine-job-notice.v1')"), 'failed:'+'c'*32)
         self.page.reload()
         expect(self.page.locator('main')).to_be_visible()
         expect(installer).to_have_count(0)
