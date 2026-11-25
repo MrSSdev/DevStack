@@ -89,13 +89,21 @@ class ValidationTests(unittest.TestCase):
             result = d.project_frameworks(['demo','other','unknown'])
             self.assertEqual(result, {'demo': {'name': 'Laravel', 'version': '13.42.0'}})
             args, kwargs = run.call_args
-            self.assertEqual(args[0][:2], ['/usr/bin/python3','-I'])
+            self.assertEqual(args[0][0], '/usr/bin/systemd-run')
+            self.assertEqual(args[0][-3:-1], ['/usr/bin/python3','-I'])
             self.assertTrue(args[0][-1].endswith('/daemon/project_frameworks.py'))
-            self.assertEqual(kwargs['user'], 1001)
-            self.assertEqual(kwargs['group'], 1001)
-            self.assertEqual(kwargs['extra_groups'], [])
+            self.assertIn('--uid=developer', args[0])
+            self.assertIn('--gid=1001', args[0])
+            self.assertIn('--working-directory=/', args[0])
+            self.assertIn('--property=NoNewPrivileges=yes', args[0])
+            self.assertIn('--property=ProtectHome=read-only', args[0])
+            self.assertIn('--property=ProtectSystem=strict', args[0])
+            self.assertIn('--property=RuntimeMaxSec=5s', args[0])
+            self.assertIn('--property=InaccessiblePaths=-/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack -/mnt/c', args[0])
+            self.assertNotIn('user', kwargs)
+            self.assertNotIn('group', kwargs)
             self.assertEqual(json.loads(kwargs['input']), ['demo','other','unknown'])
-            self.assertEqual(kwargs['cwd'], '/')
+            self.assertEqual(kwargs['timeout'], 10)
         with patch.object(d, 'engine_identity', return_value=('developer','/home/developer')), \
              patch.object(d.pwd,'getpwnam',return_value=account), \
              patch.object(d.subprocess,'run',side_effect=OSError('unavailable')):

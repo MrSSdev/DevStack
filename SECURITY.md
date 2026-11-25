@@ -47,8 +47,10 @@ Revocation blocks new framework operations, not an already-running installer.
 ### Project framework badges
 
 Project versions are best-effort labels from installed Composer metadata, read
-by a fixed isolated Python process running with the configured developer UID/GID
-and no supplementary groups. The daemon passes only registered project slugs.
+by a fixed isolated Python process launched by systemd with the configured
+developer identity, read-only home and system directories, no new privileges,
+and inaccessible protected DevStack state. The daemon passes only registered
+project slugs.
 The reader rejects symlinks and non-regular or oversized metadata files, executes
 no project code and returns only recognized package names and bounded versions.
 Missing, unreadable or malformed metadata does not block the dashboard. Labels

@@ -140,6 +140,12 @@ class BrowserAcceptance(unittest.TestCase):
         metadata = pathlib.Path.home() / 'projects/browser-fixture/vendor/composer/installed.json'
         metadata.parent.mkdir(parents=True, exist_ok=True)
         metadata.write_text(json.dumps({'packages':[{'name':'laravel/framework','version':'v13.42.0'}]}))
+        # Verify the actual daemon RPC before exercising client-side search.
+        state = self.context.request.get(BASE + '/api/state')
+        self.assertEqual(state.status, 200, state.text())
+        project = next(p for p in state.json()['result']['projects'] if p['slug']=='browser-fixture')
+        self.assertEqual(project.get('detected_framework'), {'name':'Laravel','version':'13.42.0'},
+                         'Installed daemon did not return the Composer version')
         self.goto('projects')
         search = self.page.get_by_role('searchbox',name='Szukaj projektów',exact=True)
         search.fill('laravel 13.42')
@@ -153,6 +159,10 @@ class BrowserAcceptance(unittest.TestCase):
         expect(row).to_be_visible()
         search.fill('')
         metadata.write_text(json.dumps({'packages':[{'name':'laravel/framework','version':'v13.43.0'}]}))
+        state = self.context.request.get(BASE + '/api/state')
+        self.assertEqual(state.status, 200, state.text())
+        project = next(p for p in state.json()['result']['projects'] if p['slug']=='browser-fixture')
+        self.assertEqual(project.get('detected_framework'), {'name':'Laravel','version':'13.43.0'})
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(row.get_by_text('Laravel 13.43.0',exact=True)).to_be_visible()
         # Seed a project using the former two-field API, then open and save it
