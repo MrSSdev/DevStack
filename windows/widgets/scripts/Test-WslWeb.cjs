@@ -83,7 +83,11 @@ function mockBridge({state,delay=0,throws=0,drop=0}){
   await publish({phase:'error',metrics:null});await page.locator('#mainAction').click();assert.equal((await lastAction()).verb,'refresh');checks++;
   await publish({phase:'running',metrics:null,metricsStatus:'not-installed'});assert.equal(await page.locator('#ramValue').innerText(),'—');checks++;
   await page.locator('#metricRAM').click();assert.equal(await page.locator('#metricPopover').isVisible(),true);checks++;
+  await page.locator('#detailTitle').click();assert.equal(await page.locator('#metricPopover').isVisible(),true);checks++;
+  await page.locator('#statusTitle').click();assert.equal(await page.locator('#metricPopover').isVisible(),false);checks++;
+  await page.locator('#metricCPU').click();assert.equal(await page.locator('#metricPopover').isVisible(),true);checks++;
   await page.keyboard.press('Escape');assert.equal(await page.locator('#metricPopover').isVisible(),false);checks++;
+  await page.locator('#metricRAM').click();await page.locator('#closeDetail').click();assert.equal(await page.locator('#metricPopover').isVisible(),false);checks++;
   await publish({phase:'running',canControl:false});assert.equal(await page.locator('#mainAction').isDisabled(),true);checks++;
   await publish({phase:'running',active:false});assert.equal(await page.locator('#mainAction').isDisabled(),true);assert.equal(await page.locator('#syncButton').isDisabled(),true);checks+=2;
   const beforeReads=resourceReads;await page.waitForTimeout(1800);assert.equal(resourceReads,beforeReads);checks++;

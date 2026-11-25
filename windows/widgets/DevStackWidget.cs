@@ -76,17 +76,32 @@ internal static class DevStackWidget
     private static bool Verifying=>_restartNotice?.Phase=="verifying";
     private static RestartNotice? CurrentNotice()
     {
-        if(_restartNotice is { Phase:"success" } n&&n.ExpiresAt<=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())_restartNotice=null;
+        if(_restartNotice is { ExpiresAt: > 0 } n&&n.ExpiresAt<=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())_restartNotice=null;
         return _restartNotice;
     }
     private static void VerifyRestart(DevStackData.Result result)
     {
-        if(_restartNotice is not { Phase:"verifying" } n)return;
+        if(CurrentNotice() is not { Phase:"verifying" or "error" or "unconfirmed" or "not-run" } n)return;
         var selected=result.Services.FirstOrDefault(s=>s.Id==n.Service);
-        // A command acknowledgement is not a health check. Use only the new,
-        // post-command snapshot, including both systemd state and Windows probe.
+        // Only a new, post-command snapshot accepted by Drain can resolve a
+        // notice. Healthy means both systemd active and the Windows probe
+        // reachable, for the same selected service and a valid integration.
         bool ok=result.Running==true&&result.Integration=="ok"&&selected?.UnitActive==true&&selected.Reachable==true;
-        _restartNotice=ok?new(n.Service,"success",DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds()):new(n.Service,"error");
+        if(!ok)
+        {
+            if(n.Phase=="verifying")_restartNotice=new(n.Service,"error");
+            return;
+        }
+        // Later recovery does not retroactively prove that a command ran.
+        // Keep the truthful distinction between verification and availability.
+        string phase=n.Phase switch
+        {
+            "verifying"=>"success",
+            "error"=>"recovered",
+            "unconfirmed"=>"available-unconfirmed",
+            _=>"available-not-run"
+        };
+        _restartNotice=new(n.Service,phase,DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds());
     }
     private static string State(string id,bool native)
     {

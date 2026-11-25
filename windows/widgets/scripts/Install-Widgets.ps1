@@ -22,7 +22,7 @@ try {
 } finally { $zip.Dispose() }
 if ($manifest.Package.Identity.Name -ne 'MrSSdev.DevStack.Widgets' -or
     $manifest.Package.Identity.Publisher -ne 'CN=DevStack Widgets Development' -or
-    $manifest.Package.Identity.Version -ne '0.4.1.0') { throw 'Expected DevStack Widgets 0.4.1.0.' }
+    $manifest.Package.Identity.Version -ne '0.4.2.0') { throw 'Expected DevStack Widgets 0.4.2.0.' }
 $cert = Get-PfxCertificate -FilePath $cer
 if ($cert.Subject -ne 'CN=DevStack Widgets Development') { throw 'Unexpected signer.' }
 $before = Get-AuthenticodeSignature -FilePath $msix
@@ -38,6 +38,6 @@ Get-Process WidgetBoard, 'DevStack.Widgets' -ErrorAction SilentlyContinue |
 # Update in place. Do not remove the working version before deployment succeeds.
 Add-AppxPackage -Path $msix -ErrorAction Stop
 Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' | Select-Object Name, Version, Status
-Write-Host 'Widgets updated to 0.4.1.0. Approved WSL appearance and controls are preserved.'
+Write-Host 'Widgets updated to 0.4.2.0. Approved WSL appearance and controls are preserved.'
 Write-Host 'Existing Ubuntu telemetry setup is retained. Do not reinstall WSL telemetry.'
 Write-Host 'Existing DevStack integration is retained. Run Install-DevStackWidget.ps1 only if not already configured.'

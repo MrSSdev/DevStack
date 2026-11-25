@@ -201,16 +201,22 @@
  $('syncButton').addEventListener('click',()=>action('refresh'));
  $('menuRefresh').addEventListener('click',()=>{action('refresh');$('widgetMenu').hidden=true;});
  $('menuButton').addEventListener('click',e=>{e.stopPropagation();$('widgetMenu').hidden=!$('widgetMenu').hidden;$('menuButton').setAttribute('aria-expanded',String(!$('widgetMenu').hidden));});
- function closeDetails(){if(!$('metricPopover').hidden){$('metricPopover').hidden=true;if(lastMetric)lastMetric.focus();}}
+ function closeDetails(focus=true){if(!$('metricPopover').hidden){$('metricPopover').hidden=true;if(focus&&lastMetric)lastMetric.focus();}}
  $('menuReset').addEventListener('click',()=>{closeDetails();$('widgetMenu').hidden=true;});
  document.querySelectorAll('[data-metric]').forEach(button=>button.addEventListener('click',()=>{
+   if(lastMetric===button&&!$('metricPopover').hidden){closeDetails();return;}
    const [title,body]=details[button.dataset.metric];lastMetric=button;$('detailTitle').textContent=title;
    const missing=state.metricsStatus==='not-installed'?' Moduł pomiarów Ubuntu nie jest skonfigurowany. Uruchom dołączony Install-WslTelemetry.ps1.':state.metricsStatus==='error'?' Ostatni odczyt zasobów nie powiódł się.':' ';
    $('detailBody').textContent=body+missing;$('metricPopover').hidden=false;$('closeDetail').focus();
  }));
- $('closeDetail').addEventListener('click',closeDetails);
+ $('closeDetail').addEventListener('click',()=>closeDetails());
  document.addEventListener('keydown',event=>{if(event.key==='Escape'){if(!$('metricPopover').hidden)closeDetails();else if(state.phase==='confirm')action('stop-cancel');$('widgetMenu').hidden=true;}});
- document.addEventListener('click',event=>{if(!$('widgetMenu').contains(event.target)&&!$('menuButton').contains(event.target))$('widgetMenu').hidden=true;});
+ document.addEventListener('click',event=>{
+   // Same outside-dismiss policy as the services card. A different metric
+   // opens its own details, and clicks inside the popover leave it open.
+   if(!$('metricPopover').hidden&&!$('metricPopover').contains(event.target)&&!event.target.closest('[data-metric]'))closeDetails(false);
+   if(!$('widgetMenu').contains(event.target)&&!$('menuButton').contains(event.target))$('widgetMenu').hidden=true;
+ });
  document.addEventListener('visibilitychange',()=>{
    if(document.hidden){cacheView();stopConnectionWork();stopCountdown();clearTimeout(responseTimer);closeDetails();send('hidden');state.active=false;state.canControl=false;state.confirmToken=null;connected=false;if(state.phase==='confirm')state.phase='running';render();}
    else connect();

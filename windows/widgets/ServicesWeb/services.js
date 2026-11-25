@@ -112,21 +112,22 @@
  const status=id=>state.busy===id?'busy':state.phase==='offline'?'off':data(id).reachable===true?'up':data(id).reachable===false?'down':'unknown';
  const statusName=id=>({busy:'Restartowanie',off:'Nieaktywne',up:'Dostępne',down:'Niedostępne',unknown:'Brak danych'}[status(id)]);
  const canRestart=id=>connected&&state.canControl&&state.active&&!state.cached&&!closedByHost&&!document.hidden&&!state.busy&&typeof data(id).unitActive==='boolean';
+ const expiringNotice=phase=>['success','recovered','available-unconfirmed','available-not-run'].includes(phase);
  function validNotice(value){
-  if(!value||!defs.some(s=>s.id===value.service)||!['restarting','verifying','success','error','unconfirmed','not-run'].includes(value.phase))return null;
-  if(value.phase==='success'&&(!Number.isFinite(value.expiresAt)||value.expiresAt<=Date.now()))return null;
+  if(!value||!defs.some(s=>s.id===value.service)||!['restarting','verifying','success','error','unconfirmed','not-run','recovered','available-unconfirmed','available-not-run'].includes(value.phase))return null;
+  if(expiringNotice(value.phase)&&(!Number.isFinite(value.expiresAt)||value.expiresAt<=Date.now()))return null;
   return value;
  }
  function renderNotice(){
   clearTimeout(noticeTimer);noticeTimer=null;
   const notice=validNotice(state.restartStatus);state.restartStatus=notice;
-  const names={restarting:'ponowne uruchamianie…',verifying:'restart zakończony. Weryfikowanie…',success:'zweryfikowano pomyślnie.',error:'błąd weryfikacji.',unconfirmed:'nie potwierdzono restartu.', 'not-run':'restart nie został wykonany.'};
+  const names={restarting:'ponowne uruchamianie…',verifying:'restart zakończony. Weryfikowanie…',success:'zweryfikowano pomyślnie.',error:'błąd weryfikacji.',unconfirmed:'nie potwierdzono restartu.', 'not-run':'restart nie został wykonany.',recovered:'usługa ponownie dostępna.','available-unconfirmed':'usługa działa; restart niepotwierdzony.','available-not-run':'usługa działa; restart niewykonany.'};
   const line=$('widgetToast');
   const message=notice?defs.find(s=>s.id===notice.service).name+': '+names[notice.phase]:state.message;
-  const kind=notice?.phase==='success'?'success':notice&&['error','unconfirmed','not-run'].includes(notice.phase)?'error':'info';
+  const kind=['success','recovered'].includes(notice?.phase)?'success':notice&&['error','unconfirmed','not-run'].includes(notice.phase)?'error':'info';
   line.hidden=!message;line.dataset.kind=kind;$('projectStatusBlock').classList.toggle('has-notice',!!message);
   $('widgetMessage').textContent=message||'';$('noticeIcon').setAttribute('href','#i-'+(kind==='success'?'check':kind==='error'?'warning':'info'));
-  if(notice?.phase==='success'&&!document.hidden&&!closedByHost)noticeTimer=setTimeout(renderNotice,Math.max(0,notice.expiresAt-Date.now()));
+  if(notice&&expiringNotice(notice.phase)&&!document.hidden&&!closedByHost)noticeTimer=setTimeout(renderNotice,Math.max(0,notice.expiresAt-Date.now()));
  }
  function render(){
   const good=defs.filter(s=>data(s.id).reachable===true).length;

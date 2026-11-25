@@ -60,6 +60,18 @@ const rects=ids=>Object.fromEntries(ids.map(id=>{let r=document.getElementById(i
   await publish({restartStatus:{service:'php',phase:'error',expiresAt:0}});assert.match(await page.locator('#widgetMessage').innerText(),/PHP-FPM: błąd weryfikacji/);checks++;
   await page.clock.fastForward(31000);assert.equal(await page.locator('#widgetToast').isVisible(),true);checks++;
   await page.screenshot({path:path.join(out,'restart-error-'+theme+'.png'),omitBackground:true});
+  const recovered={service:'php',phase:'recovered',expiresAt:await page.evaluate(()=>Date.now()+30000)};
+  await publish({restartStatus:recovered});assert.match(await page.locator('#widgetMessage').innerText(),/PHP-FPM: usługa ponownie dostępna/);checks++;
+  assert.equal(await page.locator('#widgetToast').getAttribute('data-kind'),'success');checks++;
+  await page.screenshot({path:path.join(out,'restart-recovered-'+theme+'.png'),omitBackground:true});
+  await page.clock.fastForward(31000);assert.equal(await page.locator('#widgetToast').isVisible(),false);checks++;
+  await publish({restartStatus:recovered});assert.equal(await page.locator('#widgetToast').isVisible(),false);checks++;
+  for(const phase of ['available-unconfirmed','available-not-run']){
+   await publish({restartStatus:{service:'redis',phase,expiresAt:await page.evaluate(()=>Date.now()+30000)}});
+   assert.match(await page.locator('#widgetMessage').innerText(),/Redis: usługa działa; restart nie/);checks++;
+   assert.equal(await page.locator('#widgetToast').getAttribute('data-kind'),'info');checks++;
+   await page.clock.fastForward(31000);assert.equal(await page.locator('#widgetToast').isVisible(),false);checks++;
+  }
   await publish({restartStatus:null});assert.equal(await page.locator('#widgetToast').isVisible(),false);checks++;
   await page.locator('#projectsButton').click();assert.equal((await last()).verb,'open-projects');checks++;
   await page.locator('#addProjectButton').click();assert.equal((await last()).verb,'open-new');checks++;

@@ -75,9 +75,9 @@ namespace DevStack.Widgets
   internal static readonly string[] Ids={"nginx","php","mariadb","redis"};
   internal sealed record Service(string Id,bool? Reachable,double? LatencyMs,long? MemoryBytes,double? CpuPercent,bool? UnitActive);
   internal sealed record Result(bool? Running,string Integration,Service[] Services,int? ProjectCount,DateTimeOffset CheckedAt);
-  internal static int Restarts,Reads;internal static string Last="";internal static string? InactiveService;internal static bool RestartOk=true;
+  internal static int Restarts,Reads;internal static string Last="";internal static string? InactiveService,UnreachableService;internal static bool RestartOk=true,IntegrationOk=true;
   internal static Task<Result> CaptureAsync(bool? running,CancellationToken ct)
-  { ct.ThrowIfCancellationRequested();Reads++;return Task.FromResult(new Result(running,running==true?"ok":"offline",Ids.Select(id=>new Service(id,running,4,1000000,0.5,running==true?id!=InactiveService:running)).ToArray(),running==true?3:null,DateTimeOffset.Now)); }
+  { ct.ThrowIfCancellationRequested();Reads++;return Task.FromResult(new Result(running,running==true?(IntegrationOk?"ok":"error"):"offline",Ids.Select(id=>new Service(id,running==true?id!=UnreachableService:running,4,1000000,0.5,running==true?id!=InactiveService:running)).ToArray(),running==true?3:null,DateTimeOffset.Now)); }
   internal static async Task<bool> RestartAsync(string id,CancellationToken ct){Restarts++;Last=id;await Task.Delay(60);return RestartOk;}
  }
 }

@@ -1,4 +1,4 @@
-# DevStack services widget 0.4.1
+# DevStack services widget 0.4.2
 
 Implements the user's approved **DevStack-widget-prototyp-03.html**. No redesign:
 transparent dark outer surface, original icons/type/layout, 2x2 service tiles,
@@ -13,7 +13,7 @@ Extract the complete archive into:
 `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
 
 1. Run `Install-Widgets.ps1` in an elevated PowerShell on the usual account.
-   Expected version **0.4.1.0**. It updates in place; do not unpin, remove user
+   Expected version **0.4.2.0**. It updates in place; do not unpin, remove user
    state or reinstall `Install-WslTelemetry.ps1`.
 2. Only for a new integration, start Ubuntu deliberately using the existing WSL widget, then run
    `Install-DevStackWidget.ps1` from this same bundle. This is a NEW integration
@@ -49,7 +49,7 @@ only the count leaves Ubuntu, not names, paths or credentials.
 Linux uses one short process per request, no resident collector loop. Windows
 probes only when this widget is active, cancels reads on hide and never runs
 `wsl -d` to collect status. WSL offline means no service requests or control.
-WSL UI, JS, collector and its resource/command implementation are unchanged;
+WSL layout, collector and its resource/command implementation are unchanged;
 only the top-level provider dispatches DevStack events to a separate handler.
 
 ## Restart security and limits
@@ -104,3 +104,30 @@ from the matching new signed package. Do NOT run either Linux setup again.
 The first device test is Cancel; then a single confirmed restart and verify
 popover dismissal, inline progression, expiry after closing/reopening, and
 normal project links. Automated validation does not replace device acceptance.
+
+## 0.4.2 — consistent popover dismissal and recovered service notices
+
+WSL resource details now close on a click elsewhere inside the widget; clicks
+inside details keep them open, another resource opens its own details, and
+Escape/close still work. No change to WSL Stop confirmation, layout, metrics,
+Ubuntu lifecycle or reader. Both document versions are bumped to avoid stale
+cached JS after upgrading. The package version is 0.4.2.0.
+
+The 0.4.1 error lifetime above is superseded: unresolved error, unconfirmed
+command or not-run notices remain visible while the affected service is not
+verified healthy. A new accepted read must show the same service's systemd
+unit active AND its Windows HTTPS/TCP probe reachable, valid integration and
+running Ubuntu. Another healthy service, a stale snapshot, just one of those
+checks, missing data or an offline/hidden panel cannot resolve the error.
+When health returns, replace the error with a service-specific recovery notice
+for 30 seconds (absolute expiry including hidden time). If the command itself
+was not confirmed or did not run, show availability with that qualification,
+never "restart succeeded". This is passive verification only: no automatic
+restart, extra polling, Linux setup, privilege or project route change. Like
+0.4.1, notices are kept within the provider lifetime, not across process exit.
+Existing configured 0.4.x users run only the matching Install-Widgets.ps1.
+
+Regression tests cover WSL inside/outside/Escape/close in both themes and the
+DevStack transition from unresolved errors to recovered/availability-only,
+including invalid integration, inactive unit, unreachable port, expiry and
+no extra restart. Actual Windows host acceptance remains a separate gate.
