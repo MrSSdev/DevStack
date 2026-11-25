@@ -55,7 +55,7 @@ Readings refresh while the panel is open. Start Ubuntu explicitly when you want 
 
 ## Daily use
 
-Create a project in the dashboard, choose its local domain, source directory, document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Save your work before stopping Ubuntu or restarting services.
+Create a project in the dashboard. The folder identifier follows the project name as you type, and the local .test domain follows the identifier. Either field can be edited independently and restored to automatic generation. Choose the document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Save your work before stopping Ubuntu or restarting services.
 
 ## Framework installers
 
