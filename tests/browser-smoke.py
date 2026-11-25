@@ -135,6 +135,38 @@ class BrowserAcceptance(unittest.TestCase):
     def test_01_real_project_and_all_views(self):
         response = self.post('/api/projects', dict(slug='browser-fixture', name='Browser fixture', domain='browser-fixture.test', webroot='public', database=True, https=True, local_mail=True, engine='none', starter_kit='none', installer_options={}))
         self.assertEqual(response.status, 200, response.text())
+        # Seed a project using the former two-field API, then open and save it
+        # using the single editor. The real helper must retain both rule types.
+        flux = (r'location ~* ^/flux/flux\.js$ {'
+                ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        legacy = self.post('/api/config', {'slug':'browser-fixture','overrides':'client_max_body_size 64m;','extra_locations':flux})
+        self.assertEqual(legacy.status, 200, legacy.text())
+        self.goto('projects')
+        self.page.locator('main button').filter(has_text='Browser fixture').click()
+        editor = self.page.get_by_role('textbox',name='Dodatkowe reguły Nginx',exact=True)
+        expect(editor).to_have_count(1)
+        legacy_rules = legacy.json()['result']
+        expect(editor).to_have_value(legacy_rules['overrides'] + '\n\n' + legacy_rules['extra_locations'])
+        expect(self.page.get_by_text('Dodatkowe reguły — location /',exact=True)).to_have_count(0)
+        expect(self.page.get_by_text('Dodatkowe lokalizacje zasobów JS/CSS',exact=True)).to_have_count(0)
+        editor.fill('client_max_body_size 128m;\n\n' + flux)
+        self.page.get_by_role('button',name='Sprawdź i zastosuj',exact=True).click()
+        expect(self.page.get_by_role('status').filter(has_text='Konfiguracja przetestowana')).to_be_visible()
+        expected_rules = 'client_max_body_size 128m;\n\n' + legacy_rules['extra_locations']
+        expect(editor).to_have_value(expected_rules)
+        invalid = self.post('/api/config', {'slug':'browser-fixture','rules':'include /etc/shadow;'})
+        self.assertEqual(invalid.status,422)
+        # Verify actual persisted state and the generated vhost, independent
+        # of the React draft. An invalid edit must not change either region.
+        persisted = self.context.request.get(BASE + '/api/state').json()['result']
+        saved = next(p for p in persisted['projects'] if p['slug']=='browser-fixture')
+        self.assertEqual(saved['overrides'], 'client_max_body_size 128m;')
+        self.assertEqual(saved['extra_locations'], legacy_rules['extra_locations'])
+        self.assertIn('client_max_body_size 128m;', saved['nginx_config'])
+        self.assertIn('location ~* ^/flux/', saved['nginx_config'])
+        self.goto('projects')
+        self.page.locator('main button').filter(has_text='Browser fixture').click()
+        expect(editor).to_have_value(expected_rules)
         long_slug='long-'+'a'*35
         response=self.post('/api/projects',dict(slug=long_slug,name='A'*70,domain=long_slug+'.test',webroot='public',database=False,https=False,local_mail=False,engine='none',starter_kit='none',installer_options={}))
         self.assertEqual(response.status,200,response.text())
@@ -144,6 +176,7 @@ class BrowserAcceptance(unittest.TestCase):
             self.page.set_viewport_size({'width':width, 'height':950})
             for theme in ['light','dark']:
                 self.goto('dashboard');self.theme(theme)
+                header_origin = None
                 for route in ['dashboard','projects','new','mail','settings']:
                     with self.subTest(width=width, theme=theme, route=route):
                         self.goto(route)
@@ -151,6 +184,23 @@ class BrowserAcceptance(unittest.TestCase):
                         if route=='mail':expect(self.message_button(HTML_SUBJECT)).to_be_visible()
                         if route=='new':self.page.get_by_role('combobox',name='Framework',exact=True).select_option('none')
                         self.shot(prefix+route)
+                        # All primary views use the same title origin and
+                        # page width, including on platforms with classic scrollbars.
+                        header = self.page.locator('[data-slot="page-header"]')
+                        expect(header).to_have_count(1)
+                        expect(self.page.locator('main h1')).to_have_count(1)
+                        origin = header.evaluate('e=>{const r=e.getBoundingClientRect();return [r.x,r.y+scrollY,r.width]}')
+                        if header_origin is None:
+                            header_origin = origin
+                        else:
+                            for expected, actual in zip(header_origin, origin):
+                                self.assertAlmostEqual(expected, actual, delta=1, msg=prefix+route)
+                        self.assertTrue(self.page.locator('main footer').evaluate("""e=>{const padding=parseFloat(getComputedStyle(e.closest('main')).paddingBottom);return e.getBoundingClientRect().bottom+scrollY+padding>=innerHeight-2}"""), prefix+route+' footer')
+                        if route=='mail':
+                            expect(header.get_by_role('button',name='Konfiguracja poczty')).to_be_visible()
+                            expect(header.get_by_role('button',name='Opróżnij',exact=True)).to_be_visible()
+                        if route=='settings':
+                            expect(header.get_by_role('navigation',name='Kategorie ustawień')).to_be_visible()
                         if route=='dashboard':
                             self.page.locator('main button').filter(has_text='Nginx').click()
                             self.shot(prefix+'service-dialog')

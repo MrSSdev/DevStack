@@ -70,6 +70,6 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 * { border-color: var(--border); }
-html { @apply bg-background text-foreground; }
+html { scrollbar-gutter: stable; @apply bg-background text-foreground; }
 body { @apply bg-background text-foreground antialiased; }
 ::selection { @apply bg-foreground/15; }

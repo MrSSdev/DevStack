@@ -177,6 +177,38 @@ def check_extra_locations(value: Any) -> str:
     return '\n\n'.join(normalized)
 
 
+def check_nginx_rules(value: Any) -> dict[str, str]:
+    """One editor, the same two strictly validated managed Nginx regions.
+
+    Bare tuning directives go inside location /; the existing asset location
+    blocks go at server level. No raw user text is ever used in the vhost.
+    """
+    if not isinstance(value, str) or len(value) > 5802 or '\x00' in value:
+        raise InputError('Dodatkowa konfiguracja Nginx: wymagany tekst do 5802 znakow.')
+    position = 0
+    tuning = []
+    locations = []
+    while position < len(value):
+        while position < len(value) and value[position].isspace():
+            position += 1
+        if position == len(value):
+            break
+        match = ASSET_BLOCK.match(value, position)
+        if match:
+            locations.append(match.group(0))
+            position = match.end()
+            continue
+        end = value.find('\n', position)
+        if end < 0:
+            end = len(value)
+        tuning.append(value[position:end])
+        position = end + 1
+    return {
+        'overrides': check_overrides('\n'.join(tuning)),
+        'extra_locations': check_extra_locations('\n'.join(locations)),
+    }
+
+
 def read_json(path: pathlib.Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -857,15 +889,27 @@ def reveal(data: dict[str, Any]) -> dict[str, str]:
 
 def update_config(data: dict[str, Any]) -> dict[str, str]:
     """Validate both editable regions, test Nginx, reload, or roll back."""
-    if not {'slug', 'overrides'}.issubset(data) or set(data) - {'slug', 'overrides', 'extra_locations'}:
-        raise InputError('Nieprawidlowe pola konfiguracji Nginx.')
+    if 'rules' in data:
+        if set(data) != {'slug', 'rules'}:
+            raise InputError('Nieprawidlowe pola konfiguracji Nginx.')
+        validated = check_nginx_rules(data['rules'])
+    else:
+        # Preserve the existing API and full-file editor for older clients.
+        if not {'slug', 'overrides'}.issubset(data) or set(data) - {'slug', 'overrides', 'extra_locations'}:
+            raise InputError('Nieprawidlowe pola konfiguracji Nginx.')
+        validated = None
     slug = check_slug(data.get('slug'))
-    overrides = check_overrides(data.get('overrides'))
     state = read_json(STATE_FILE)
     if slug not in state:
         raise InputError('Nie ma takiego projektu.')
     p = state[slug]
-    assets = check_extra_locations(data.get('extra_locations', p.get('extra_locations', '')))
+    if validated is None:
+        validated = {
+            'overrides': check_overrides(data.get('overrides')),
+            'extra_locations': check_extra_locations(data.get('extra_locations', p.get('extra_locations', ''))),
+        }
+    overrides = validated['overrides']
+    assets = validated['extra_locations']
     target = site_path(slug)
     if not target.is_file() or target.is_symlink():
         raise InputError('Plik Nginx nie jest dostepny.')
@@ -874,7 +918,7 @@ def update_config(data: dict[str, Any]) -> dict[str, str]:
     pub = root / p['webroot']
     after = nginx_conf(slug, p['domain'], pub, p['https'], overrides, assets)
     if after == before:
-        return {'message': 'Brak zmian w konfiguracji.'}
+        return {'message': 'Brak zmian w konfiguracji.', **validated}
     backup = pathlib.Path('/var/lib/devstack') / f'vhost-{slug}-previous.conf'
     backup.write_text(before, encoding='utf-8')
     target.write_text(after, encoding='utf-8')
@@ -892,7 +936,7 @@ def update_config(data: dict[str, Any]) -> dict[str, str]:
         except Exception:
             print('Critical: nginx rollback may require manual intervention', file=sys.stderr)
         raise
-    return {'message': 'Konfiguracja przetestowana i zastosowana. Kopia poprzedniej wersji zostala zachowana.'}
+    return {'message': 'Konfiguracja przetestowana i zastosowana. Kopia poprzedniej wersji zostala zachowana.', **validated}
 
 
 def update_full_config(data: dict[str, Any]) -> dict[str, str]:
