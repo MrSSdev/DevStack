@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  Activity, ArrowLeft, ArrowRight, Blocks, Check, ChevronRight, CircleAlert, Code2,
-  Copy, Database, ExternalLink, FileCode2, FolderCode, Globe2, HardDrive, Pencil, ChevronDown, ChevronUp,
+  Activity, ArrowLeft, ArrowRight, Blocks, Check, ChevronRight, CircleAlert,
+  Copy, Database, ExternalLink, FileCode2, FolderCode, Pencil, ChevronDown, ChevronUp,
   LayoutDashboard, LockKeyhole, LogOut, Mail, Menu, Moon, Plus, RefreshCw,
   Settings2, ShieldCheck, Sun, Trash2, X,
 } from 'lucide-react'

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace DevStack.Widgets;
 
@@ -10,10 +11,12 @@ namespace DevStack.Widgets;
 internal static class DevStackData
 {
     internal static readonly string[] Ids = { "nginx", "php", "mariadb", "redis" };
-    internal sealed record Service(string Id, bool? Reachable, double? LatencyMs, long? MemoryBytes, double? CpuPercent, bool? UnitActive);
-    internal sealed record Result(bool? Running, string Integration, Service[] Services, int? ProjectCount, DateTimeOffset CheckedAt);
+    internal sealed record Service(string Id, bool? Reachable, double? LatencyMs, long? MemoryBytes, double? CpuPercent, bool? UnitActive,
+        string? Name=null, string? Description=null, string? Probe=null, int Port=0, bool Selected=true);
+    internal sealed record Result(bool? Running, string Integration, Service[] Services, int? ProjectCount, DateTimeOffset CheckedAt, bool SelectionKnown=false);
     private sealed record Settings(int Schema, string Distro, int ReadPort, int ControlPort, string ReadToken, string ControlToken);
-    private sealed record Unit(string Id, bool? Active, long? MemoryBytes, double? CpuPercent);
+    private sealed record Unit(string Id, bool? Active, long? MemoryBytes, double? CpuPercent,
+        string? Name=null, string? Description=null, string? Probe=null, int Port=0, bool Selected=true);
     private sealed record Response(int Schema, string Distro, string Source, int? ProjectCount, Unit[]? Services);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly HttpClient Client = new(new HttpClientHandler { AllowAutoRedirect=false, UseCookies=false, UseProxy=false })
@@ -27,46 +30,78 @@ internal static class DevStackData
         var settings=JsonSerializer.Deserialize<Settings>(await File.ReadAllTextAsync(path,ct),Json);
         return settings is not null && settings.Schema==1 && settings.Distro==StateProbe.Distro && settings.ReadPort==43872 && settings.ControlPort==43873 && Token(settings.ReadToken)&&Token(settings.ControlToken)?settings:null;
     }
-    internal static bool ValidService(Service s) => Ids.Contains(s.Id) &&
+    internal static bool ValidId(string? id) => id is not null && Regex.IsMatch(id, @"\A[a-z][a-z0-9-]{0,31}\z", RegexOptions.CultureInvariant);
+    internal static bool ValidService(Service s) => ValidId(s.Id) &&
         (s.LatencyMs is null || double.IsFinite(s.LatencyMs.Value)&&s.LatencyMs>=0&&s.LatencyMs<=60000) &&
         (s.MemoryBytes is null || s.MemoryBytes>=0&&s.MemoryBytes<=(1L<<50)) &&
         (s.CpuPercent is null || double.IsFinite(s.CpuPercent.Value)&&s.CpuPercent>=0&&s.CpuPercent<=100000);
+    private static bool ValidResponse(Response? response)
+    {
+        if(response is null||response.Distro!=StateProbe.Distro||response.Source!="systemd-cgroup"||
+            response.Services is null||response.Services.Length>24||
+            response.Services.Select(s=>s.Id).Distinct().Count()!=response.Services.Length||
+            !(response.ProjectCount is null||response.ProjectCount>=0&&response.ProjectCount<=100000)||
+            !response.Services.All(s=>ValidService(new(s.Id,null,null,s.MemoryBytes,s.CpuPercent,s.Active))))return false;
+        if(response.Schema==1)return response.Services.Length==4&&response.Services.Select(s=>s.Id).Order().SequenceEqual(Ids.Order());
+        return response.Schema==2&&response.Services.All(s=>s.Name is {Length:>0 and <=40}&&s.Description is {Length:>0 and <=150}
+            &&s.Probe is "https" or "tcp" or "unit"&&s.Port>=0&&s.Port<=65535&&(s.Probe!="tcp"||s.Port>0));
+    }
+    private static async Task<Response?> ReadMetrics(Settings settings,CancellationToken ct)
+    {
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(6));
+        foreach(var route in new[]{"/v2/services","/v1/services"})
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Get,"http://127.0.0.1:43872"+route);
+            request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",settings.ReadToken);
+            using var reply=await Client.SendAsync(request,timeout.Token);
+            if(reply.StatusCode==System.Net.HttpStatusCode.NotFound&&route=="/v2/services")continue;
+            if(!reply.IsSuccessStatusCode||reply.Content.Headers.ContentType?.MediaType!="application/json")return null;
+            var result=JsonSerializer.Deserialize<Response>(await reply.Content.ReadAsStringAsync(timeout.Token),Json);
+            return ValidResponse(result)?result:null;
+        }
+        return null;
+    }
     internal static async Task<Result> CaptureAsync(bool? running,CancellationToken ct)
     {
         if(running!=true)return Empty(running,running==false?"offline":"unavailable");
         ct.ThrowIfCancellationRequested();
-        var http=Dashboard(ct); var db=Tcp(3306,ct); var redis=Tcp(6379,ct);
         Response? measured=null;string status="not-installed";
         try
         {
             var cfg=await Config(ct);
             if(cfg is not null)
             {
-                using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(6));
-                using var request=new HttpRequestMessage(HttpMethod.Get,"http://127.0.0.1:43872/v1/services");
-                request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",cfg.ReadToken);
-                using var reply=await Client.SendAsync(request,timeout.Token);
-                status="error";
-                if(reply.IsSuccessStatusCode && reply.Content.Headers.ContentType?.MediaType=="application/json")
-                {
-                    measured=JsonSerializer.Deserialize<Response>(await reply.Content.ReadAsStringAsync(timeout.Token),Json);
-                    if(measured is not null && measured.Schema==1 && measured.Distro==StateProbe.Distro && measured.Source=="systemd-cgroup" &&
-                        measured.Services?.Length==4 && measured.Services.Select(s=>s.Id).Distinct().Order().SequenceEqual(Ids.Order()) &&
-                        (measured.ProjectCount is null||measured.ProjectCount>=0&&measured.ProjectCount<=100000) &&
-                        measured.Services.All(s=>ValidService(new(s.Id,null,null,s.MemoryBytes,s.CpuPercent,s.Active))))status="ok";
-                    else measured=null;
-                }
+                status="error";measured=await ReadMetrics(cfg,ct);
+                if(measured is not null)status="ok";
             }
         }
         catch(OperationCanceledException)when(ct.IsCancellationRequested){throw;}
         catch(Exception e)when(e is IOException or UnauthorizedAccessException or JsonException or HttpRequestException or OperationCanceledException){status="error";}
+        // Never accept an upstream URL or hostname. Only the fixed dashboard
+        // HTTPS endpoint, a bounded loopback TCP port, or systemd state.
+        var http=Dashboard(ct);
+        if(measured?.Schema==2)
+        {
+            var tasks=measured.Services!.Select(async s=>{
+                Probe probe;
+                if(s.Id=="nginx"||s.Id=="php") {var web=await http;probe=s.Id=="nginx"?web.Nginx:web.Php;}
+                else if(s.Selected&&s.Probe=="tcp")probe=await Tcp(s.Port,ct);
+                else if(s.Selected&&s.Probe=="https")probe=(await http).Php;
+                else if(s.Selected&&s.Probe=="unit")return new Service(s.Id,s.Active,null,s.MemoryBytes,s.CpuPercent,s.Active,s.Name,s.Description,s.Probe,s.Port,s.Selected);
+                else return new Service(s.Id,null,null,s.MemoryBytes,s.CpuPercent,s.Active,s.Name,s.Description,s.Probe,s.Port,s.Selected);
+                return new Service(s.Id,probe.Ok,probe.Ms,s.MemoryBytes,s.CpuPercent,s.Active,s.Name,s.Description,s.Probe,s.Port,s.Selected);
+            }).ToArray();
+            var services=await Task.WhenAll(tasks);await http;ct.ThrowIfCancellationRequested();
+            return new(running,status,services,measured.ProjectCount,DateTimeOffset.Now,true);
+        }
+        var db=Tcp(3306,ct);var redis=Tcp(6379,ct);
         await Task.WhenAll(http,db,redis);ct.ThrowIfCancellationRequested();
-        var web=await http;var database=await db;var cache=await redis;
-        var results=new[]{web.Nginx,web.Php,database,cache};
-        return new(running,status,Ids.Select((id,i)=>
+        var oldWeb=await http;var database=await db;var cache=await redis;
+        var results=new[]{oldWeb.Nginx,oldWeb.Php,database,cache};
+        return new(running,status,Ids.Select((id,index)=>
         {
             var metric=measured?.Services?.FirstOrDefault(s=>s.Id==id);
-            return new Service(id,results[i].Ok,results[i].Ms,metric?.MemoryBytes,metric?.CpuPercent,metric?.Active);
+            return new Service(id,results[index].Ok,results[index].Ms,metric?.MemoryBytes,metric?.CpuPercent,metric?.Active);
         }).ToArray(),measured?.ProjectCount,DateTimeOffset.Now);
     }
     private sealed record Probe(bool Ok,double? Ms);
@@ -98,7 +133,7 @@ internal static class DevStackData
     }
     internal static async Task<bool> RestartAsync(string id,CancellationToken ct)
     {
-        if(!Ids.Contains(id))throw new InvalidOperationException("Unknown service");
+        if(!ValidId(id))throw new InvalidOperationException("Unknown service");
         var cfg=await Config(ct)??throw new InvalidOperationException("Integration unavailable");
         using var request=new HttpRequestMessage(HttpMethod.Post,"http://127.0.0.1:43873/v1/restart");
         request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",cfg.ControlToken);

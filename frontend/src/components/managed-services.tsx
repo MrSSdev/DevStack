@@ -31,6 +31,7 @@ export function ManagedServices({services,csrf,request,refresh,blocked}:Props&{b
       setNotice('Polecenie przyjęte: '+current.name+' — '+actionLabels[confirm]+'. Wynik sprawdź po odświeżeniu stanu.')
       setConfirm(null)
       // Do not retry a command. Only refresh status after the one-shot has begun.
+      await refresh()
       window.setTimeout(()=>{void refresh()},3500)
     }catch(e){setError((e instanceof Error?e.message:'Brak potwierdzenia.')+' Sprawdź stan przed ponowieniem.')}
     finally{setBusy(false)}
