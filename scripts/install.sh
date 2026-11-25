@@ -49,7 +49,9 @@ install -d -m 0710 -o root -g devstackweb /etc/devstack
 install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web /var/lib/devstack-web/sessions
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
-cp -a "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
+install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
+install -m 0644 -o root -g root "$SRC/daemon/managed_services.py" /opt/devstack/daemon/managed_services.py
+install -m 0644 -o root -g root "$SRC/daemon/service-catalog.json" /opt/devstack/daemon/service-catalog.json
 if [[ -L "$SRC/framework-installers" || -L "$SRC/framework-installers/laravel" ]]; then
   echo 'Unsafe adapter source directory.' >&2
   exit 1

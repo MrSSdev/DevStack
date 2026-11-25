@@ -69,7 +69,8 @@ class ValidationTests(unittest.TestCase):
                     d.get_ui_preferences()
 
     def test_status_includes_server_theme(self):
-        with patch.object(d,'service_status',return_value={'nginx':'active'}), \
+        with patch.object(d.managed_services,'public_rows',return_value=[{'id':'nginx','unit':'nginx.service','state':'active'}]), \
+             patch.object(d.managed_services,'action_pending',return_value=False), \
              patch.object(d,'public_projects',return_value=[]), \
              patch.object(d,'get_ui_preferences',return_value={'theme':'dark'}):
             self.assertEqual(d.status({})['preferences'], {'theme': 'dark'})

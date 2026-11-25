@@ -74,6 +74,8 @@ internal static class DevStackWidget
     internal static void Delete(string id){lock(Gate){Items.Remove(id);_last=DateTimeOffset.UtcNow;}Visibility();}
     private static bool Live()=>_fresh&&_data is not null&&_data.CheckedAt>DateTimeOffset.Now.AddSeconds(-30);
     private static bool Verifying=>_restartNotice?.Phase=="verifying";
+    private static bool DashboardAvailable()=>_data?.Services.Any(s=>s.Id=="nginx"&&s.Reachable==true)==true
+        &&_data.Services.Any(s=>s.Id=="php"&&s.Reachable==true);
     private static RestartNotice? CurrentNotice()
     {
         if(_restartNotice is { ExpiresAt: > 0 } n&&n.ExpiresAt<=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())_restartNotice=null;
@@ -114,9 +116,10 @@ internal static class DevStackWidget
             return JsonSerializer.Serialize(new{
                 protocol=1,kind="state",session=w.Nonce,server=Server,client=w.Client,revision=++w.Revision,
                 transport=native?"native":"resource",active=w.Visible,canControl=controls,cached=!live,
-                canNavigate=native&&w.Ready&&w.Visible&&w.Authenticated&&live&&_data?.Running==true&&_data.Services.Where(s=>s.Id is "nginx" or "php").All(s=>s.Reachable==true),
+                canNavigate=native&&w.Ready&&w.Visible&&w.Authenticated&&live&&_data?.Running==true&&DashboardAvailable(),
                 phase=_data is null?"checking":_data.Running switch{true=>"running",false=>"offline",_=>"error"},
                 integration=_data?.Integration??"unavailable",services=_data?.Services,projectCount=_data?.ProjectCount,
+                selectionKnown=_data?.SelectionKnown??false,
                 checkedAt=_data?.CheckedAt,message=w.Message,busy=_busy,restartStatus=CurrentNotice(),
                 confirmation=controls?w.Confirmation:null,confirmService=controls?w.Service:null,
                 confirmUntil=controls&&w.Confirmation is not null?w.Until.ToUnixTimeMilliseconds():0
@@ -218,7 +221,7 @@ internal static class DevStackWidget
             if(verb=="refresh"){w.Message="";Refresh();return;}
             if(verb is "open-new" or "open-projects")
             {
-                if(!w.Ready||!w.Authenticated||!Live()||_data?.Running!=true||!_data.Services.Where(s=>s.Id is "nginx" or "php").All(s=>s.Reachable==true))return;
+                if(!w.Ready||!w.Authenticated||!Live()||_data?.Running!=true||!DashboardAvailable())return;
                 try{DevStackNavigation.Open(verb);}catch(Exception e){WidgetDiagnostics.Write("services-navigation-error",id,e);}
                 return;
             }
@@ -226,7 +229,8 @@ internal static class DevStackWidget
             if(verb=="restart-cancel"){w.Confirmation=null;w.Service=null;}
             else
             {
-                if(!DevStackData.Ids.Contains(service)||_data.Services.FirstOrDefault(s=>s.Id==service)?.UnitActive is null)return;
+                var target=_data.Services.FirstOrDefault(s=>s.Id==service&&s.Selected);
+                if(target?.UnitActive is null)return;
                 if(verb=="restart-ask"){w.Confirmation=Token();w.Service=service;w.Until=DateTimeOffset.UtcNow.AddSeconds(30);w.Message="";}
                 else if(verb=="restart-confirm")
                 {

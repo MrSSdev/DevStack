@@ -43,7 +43,7 @@ if [[ -L "$src/framework-installers" || -L "$src/framework-installers/laravel" ]
 fi
 
 for file in backend/public/index.php backend/public/index.html backend/security.php \
-    daemon/devstackd.py framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
+    daemon/devstackd.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
     scripts/set-password.php scripts/configure-auth.php; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
     echo "Missing or unsafe source file: $file" >&2
@@ -103,6 +103,8 @@ install -m 0644 -o root -g root "$src/backend/security.php" "$stage_dir/security
 install -m 0644 -o root -g root "$src/backend/public/index.php" "$stage_dir/public/index.php"
 install -m 0644 -o root -g root "$src/backend/public/index.html" "$stage_dir/public/index.html"
 install -m 0644 -o root -g root "$src/daemon/devstackd.py" "$stage_dir/daemon/devstackd.py"
+install -m 0644 -o root -g root "$src/daemon/managed_services.py" "$stage_dir/daemon/managed_services.py"
+install -m 0644 -o root -g root "$src/daemon/service-catalog.json" "$stage_dir/daemon/service-catalog.json"
 install -d -m 0755 -o root -g root "$stage_dir/framework-installers" "$stage_dir/framework-installers/laravel"
 for item in README.md catalog.json common.py registry.py runner.py laravel/README.md laravel/__init__.py laravel/adapter.py; do
   install -m 0644 -o root -g root "$src/framework-installers/$item" "$stage_dir/framework-installers/$item"
@@ -131,7 +133,7 @@ python3 - "$stage_dir" <<'PY'
 import pathlib
 import sys
 root = pathlib.Path(sys.argv[1])
-for rel in ('daemon/devstackd.py', 'framework-installers/common.py', 'framework-installers/registry.py', 'framework-installers/runner.py', 'framework-installers/laravel/adapter.py', 'scripts/list-domains.py', 'scripts/watch-domains.py'):
+for rel in ('daemon/devstackd.py', 'daemon/managed_services.py', 'framework-installers/common.py', 'framework-installers/registry.py', 'framework-installers/runner.py', 'framework-installers/laravel/adapter.py', 'scripts/list-domains.py', 'scripts/watch-domains.py'):
     path = root / rel
     compile(path.read_bytes(), str(path), 'exec')
 print('Staged Python syntax OK')

@@ -148,5 +148,14 @@ Assert(ServiceState().GetProperty("restartStatus").GetProperty("expiresAt").GetI
 DevStackData.InactiveService=null;ServiceMessage("action","refresh");
 await Wait(()=>NoticePhase()=="available-unconfirmed","healthy service after failed command does not claim restart succeeded");
 Assert(ServiceState().GetProperty("restartStatus").GetProperty("expiresAt").GetInt64()>DateTimeOffset.UtcNow.AddSeconds(25).ToUnixTimeMilliseconds()&&DevStackData.Restarts==3,"availability-only notice expires and no extra restart");
+DevStackData.CustomSelection=true;DevStackData.RestartOk=true;ServiceMessage("action","refresh");
+await Wait(()=>ServiceState().GetProperty("selectionKnown").GetBoolean(),"server selection is forwarded");
+Assert(!Row("redis").GetProperty("selected").GetBoolean()&&Row("mailpit").GetProperty("selected").GetBoolean(),"hidden and new services retain selection");
+ServiceMessage("action","restart-ask","redis");Assert(ServiceState().GetProperty("confirmation").ValueKind==JsonValueKind.Null,"hidden service cannot get confirmation");
+ServiceMessage("action","restart-ask","mailpit");proof=ServiceState().GetProperty("confirmation").GetString();
+Assert(!string.IsNullOrEmpty(proof),"new registered service can use existing restart confirmation");
+ServiceMessage("action","restart-confirm","mailpit",proof);
+await Wait(()=>DevStackData.Restarts==4&&NoticePhase()=="success","new service restart verified");
+Assert(DevStackData.Last=="mailpit","new service ID forwarded only after confirmation");
 provider.Deactivate(serviceContext.Id);WidgetProvider.Stop();
 Console.WriteLine($"PASS: {checks} combined WSL/services policy checks (mocked WinRT and OS actions).");

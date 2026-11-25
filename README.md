@@ -91,3 +91,9 @@ of the web request, and interrupted jobs retain files for review. See the
 Use DevStack for trusted local development. Keep credentials, certificate keys and backups private.
 
 MIT — [LICENSE](LICENSE).
+
+## Managed services and Windows widget selection
+
+The dashboard lists every installed service in the root-owned `daemon/service-catalog.json` registry (including optional Mailpit). Click a service to start, stop or restart it after confirmation. Stopping Nginx/PHP-FPM also stops the dashboard; recover in Ubuntu with `sudo systemctl start nginx php8.5-fpm` or use the widget's existing restart action when available. The panel queues one delayed systemd action; an accepted request is not proof of success. Do not run updates or create projects while changing core services.
+
+Settings → Widżet DevStack w Windows saves the selected services independently of the dashboard. Widget 0.5.0.0 reads the selection through the existing authenticated read bridge and retains the original default four tiles; extra tiles scroll. New managed services are added to the registry, not arbitrary systemd services. The Windows bundle requires both the MSIX update and its `Install-DevStackWidget.ps1 -SkipFrontend` integration update, after the normal Linux updater. Never replace a newer dashboard with a static frontend from an older Windows bundle. WSL telemetry and lifecycle are unchanged.

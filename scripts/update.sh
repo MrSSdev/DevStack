@@ -49,7 +49,7 @@ php -l backend/public/index.php
 php -l backend/security.php
 php -l scripts/set-password.php
 php -l scripts/configure-auth.php
-python3 -m py_compile daemon/devstackd.py scripts/list-domains.py scripts/watch-domains.py
+python3 -m py_compile daemon/devstackd.py daemon/managed_services.py scripts/list-domains.py scripts/watch-domains.py
 
 echo '[4/5] Building frontend as non-root...'
 bash scripts/build-frontend.sh

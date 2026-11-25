@@ -1,6 +1,6 @@
 # One-time, deliberate setup. Does not modify the existing WSL telemetry collector.
 [CmdletBinding()]
-param([switch]$SkipFrontend)
+param([switch]$SkipFrontend = $true)
 $ErrorActionPreference = 'Stop'
 $Distro = 'Ubuntu-26.04'
 $ConfigDir = Join-Path $env:LOCALAPPDATA 'DevStack\Widgets'
@@ -117,5 +117,5 @@ foreach ($principal in @($sid, [System.Security.Principal.SecurityIdentifier]::n
 Set-Acl -LiteralPath $ConfigPath -AclObject $fileAcl
 
 Write-Host 'DevStack integration installed. WSL telemetry and Ubuntu lifecycle settings were not changed.'
-Write-Host 'Restart is restricted to Nginx, PHP 8.5 FPM, MariaDB and Redis, after widget confirmation.'
+Write-Host 'Restart remains restricted to registered DevStack services, after widget confirmation.'
 Write-Host 'Only static dashboard files were updated for project deep links (unless -SkipFrontend was supplied).'

@@ -6,6 +6,9 @@ on:
       - 'windows/widgets/services/**'
       - 'windows/widgets/scripts/Test-DevStackReaderSystemd.py'
       - '.github/workflows/widget-reader.yml'
+      - 'daemon/managed_services.py'
+      - 'daemon/service-catalog.json'
+      - 'tests/managed-services-systemd-smoke.py'
   workflow_dispatch:
 
 permissions:
@@ -22,3 +25,5 @@ jobs:
         run: python3 -m unittest discover -s windows/widgets/services -p 'test_*.py' -v
       - name: Real system bus with the exact reader sandbox
         run: sudo --preserve-env=GITHUB_ACTIONS python3 windows/widgets/scripts/Test-DevStackReaderSystemd.py
+      - name: Real service discovery and queued start stop restart on isolated fixture
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 tests/managed-services-systemd-smoke.py

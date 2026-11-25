@@ -1,3 +1,9 @@
+## 0.5.0.0 — managed service selection
+
+- Dashboard lists all installed registered services; Start / Stop / Restart are web controls.
+- Widget reads saved service visibility and renders selected tiles dynamically. Legacy four-tile layout, restart confirmation and WSL controls retained. More than four selected tiles scroll. No new background WSL wake/poll behavior.
+- Update Linux first, then MSIX and service integration with `-SkipFrontend`. Old v1 read clients remain supported.
+
 # Widget release notes
 
 For setup and updates, see the [widget guide](README.md).

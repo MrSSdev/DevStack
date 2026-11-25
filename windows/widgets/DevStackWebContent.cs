@@ -11,7 +11,7 @@ internal static class DevStackWebContent
 {
     internal const string Origin = "https://devstack-services.invalid";
     internal const string Filter = Origin + "/*";
-    internal const string Version = "0.4.2";
+    internal const string Version = "0.5.0";
     private static readonly Dictionary<string, (string File, string Type)> Resources = new()
     {
         ["/services/index.html"] = ("index.html", "text/html; charset=utf-8"),
