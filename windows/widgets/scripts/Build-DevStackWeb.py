@@ -38,6 +38,10 @@ def build():
 .restart-line .mode-copy{min-width:0;overflow-wrap:anywhere}
 .restart-line[data-kind="success"]{color:var(--accent)}
 .restart-line[data-kind="error"],.restart-line[data-kind="error"] svg{color:var(--danger)}
+.service-tile[hidden]{display:none!important}
+.services-grid.has-overflow{max-height:166px;overflow-y:auto;scrollbar-width:thin}
+.service-top svg{width:20px;height:20px;display:block;flex-shrink:0}
+.service-top span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 '''
     css+='\n/* Host boundary only. Approved DevStack card geometry is unchanged. */\n.svg-defs{position:absolute;width:0;height:0;overflow:hidden}\nhtml,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent!important}\nhtml[data-host="windows"]{border-radius:8px;overflow:hidden}\nhtml[data-host="windows"] body{border-radius:inherit;overflow:hidden;padding:0;display:block}\nhtml[data-host="windows"] .widget{position:relative;inset:auto;width:100%;height:100%;transform:none!important;box-shadow:none;border-radius:inherit;border-color:transparent}\nhtml[data-host="windows"][data-theme="dark"] .widget{background:transparent}\nhtml[data-host="windows"] #menuButton{visibility:hidden}\n'
     out=ROOT/'ServicesWeb';out.mkdir(exist_ok=True)

@@ -56,6 +56,23 @@ class Tests(unittest.TestCase):
             (Path(d)/'projects').write_text('{"secret-name":{"password":"secret"}}')
             value=bridge.snapshot(d)
             self.assertEqual(value['projectCount'],1);self.assertNotIn('secret',json.dumps(value));self.assertEqual(len(value['services']),4)
+    def test_v2_registry_and_preferences_without_exposing_state(self):
+        import importlib.util
+        root=Path(__file__).resolve().parents[3]
+        spec=importlib.util.spec_from_file_location('managed_services_test',root/'daemon/managed_services.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        rows=module.catalog()
+        values={r['unit']:{'Id':r['unit'],'LoadState':'loaded','ActiveState':'active','MemoryCurrent':'1234','CPUUsageNSec':'5'} for r in rows}
+        with tempfile.TemporaryDirectory() as tmp,patch.object(bridge,'registry',return_value=module),patch.object(module,'units_snapshot',return_value=values),patch.object(module,'selection',return_value=['php','mailpit']),patch.object(bridge.time,'sleep'):
+            (Path(tmp)/'projects').write_text('{"private-name":{"password":"fixture"}}')
+            value=bridge.snapshot_v2(tmp)
+            self.assertEqual(value['schema'],2);self.assertEqual(value['projectCount'],1)
+            self.assertEqual([r['id'] for r in value['services'] if r['selected']],['php','mailpit'])
+            self.assertNotIn('private-name',json.dumps(value))
+            self.assertEqual(bridge.parse_request(request('GET /v2/services HTTP/1.1'),TOKEN,'read'),(200,{'health':True,'version':2}))
+            self.assertEqual(bridge.parse_request(request('POST /v1/restart HTTP/1.1',43873,body={'service':'mailpit','requestId':'a'*32}),TOKEN,'control')[0],200)
+            values['devstack-mailpit.service']['LoadState']='not-found'
+            self.assertNotIn('mailpit',[r['id'] for r in bridge.snapshot_v2(tmp)['services']])
     def test_control_health_never_restart(self):
         result=bridge.parse_request(request('GET /v1/health HTTP/1.1',43873),TOKEN,'control')
         self.assertEqual(result,(200,{'health':True}))

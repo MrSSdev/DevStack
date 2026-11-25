@@ -13,7 +13,7 @@
  const cacheKey='devstack-services-view-1-'+session;
  // client is a correlation ID, never an authentication or confirmation token.
  const client=(()=>{try{const c=globalThis.crypto;if(typeof c?.randomUUID==='function')return c.randomUUID();if(c?.getRandomValues)return Array.from(c.getRandomValues(new Uint32Array(4))).join('-');}catch{}return 'page-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);})();
- const state={phase:'checking',active:false,canControl:false,canNavigate:false,services:[],projectCount:null,integration:'unavailable',checkedAt:null,confirmation:null,confirmService:null,confirmUntil:0,busy:null,restartStatus:null,message:'',revision:-1,cached:false};
+ const state={phase:'checking',active:false,canControl:false,canNavigate:false,services:[],projectCount:null,integration:'unavailable',checkedAt:null,confirmation:null,confirmService:null,confirmUntil:0,busy:null,restartStatus:null,message:'',revision:-1,cached:false,layout:null};
  let seq=0,countdownTimer=null,responseTimer=null,noticeTimer=null,infoService=null,infoReturnFocus=null;
  function bindBridge(){
    const candidate=window.chrome?.webview;
@@ -39,13 +39,14 @@
  }
  function cacheView(){
    if(!session||!state.checkedAt||!['running','offline'].includes(state.phase))return;
-   try{localStorage.setItem(cacheKey,JSON.stringify({schema:1,phase:state.phase,checkedAt:state.checkedAt,services:state.phase==='running'?state.services:[],projectCount:state.projectCount,integration:state.integration}));}catch{}
+   try{localStorage.setItem(cacheKey,JSON.stringify({schema:1,phase:state.phase,checkedAt:state.checkedAt,services:state.phase==='running'?state.services:[],projectCount:state.projectCount,integration:state.integration,layout:state.layout}));}catch{}
  }
  function restoreView(){
    try{
-     const text=localStorage.getItem(cacheKey)||'null';if(text.length>8192)return;
+     const text=localStorage.getItem(cacheKey)||'null';if(text.length>32768)return;
      const saved=JSON.parse(text),age=Date.now()-Date.parse(saved?.checkedAt);
      if(saved?.schema!==1||!['running','offline'].includes(saved.phase)||!Number.isFinite(age)||age< -60000||age>86400000)return;
+     if(validLayout(saved.layout))state.layout=saved.layout;
      Object.assign(state,{phase:saved.phase,checkedAt:saved.checkedAt,services:Array.isArray(saved.services)?saved.services:[],projectCount:saved.projectCount,integration:saved.integration,cached:true});
    }catch{}
  }
@@ -103,6 +104,54 @@
   {id:'mariadb',name:'MariaDB',description:'Baza danych lokalnych projektów.',probe:'TCP (połączenie)',endpoint:'127.0.0.1:3306'},
   {id:'redis',name:'Redis',description:'Pamięć podręczna i kolejki aplikacji.',probe:'TCP (połączenie)',endpoint:'127.0.0.1:6379'}
  ];
+ const grid=document.querySelector('.services-grid');
+ const template=$('service-nginx').cloneNode(true);
+ const validId=id=>typeof id==='string'&&/^[a-z][a-z0-9-]{0,31}$/.test(id);
+ const validText=(s,max)=>typeof s==='string'&&s.length>0&&s.length<=max&&!/[\u0000-\u001f\u007f]/.test(s);
+ function validLayout(rows){
+  return Array.isArray(rows)&&rows.length<=24&&new Set(rows.map(s=>s?.id)).size===rows.length&&rows.every(s=>s&&validId(s.id)&&validText(s.name,40)&&validText(s.description,150)&&validText(s.probe,50)&&validText(s.endpoint,100)&&typeof s.selected==='boolean');
+ }
+ function acceptLayout(rows){
+  if(!Array.isArray(rows)||rows.length>24||!rows.every(s=>s&&validId(s.id)&&validText(s.name,40)&&validText(s.description,150)&&['https','tcp','unit'].includes(s.probe)&&Number.isInteger(s.port)&&s.port>=0&&s.port<=65535&&typeof s.selected==='boolean'))return;
+  const next=rows.map(s=>{
+   const old=defs.find(d=>d.id===s.id);
+   return {id:s.id,name:old?.name??s.name,description:s.description,selected:s.selected,
+    probe:s.probe==='https'?'HTTPS (całe żądanie)':s.probe==='tcp'?'TCP (połączenie)':'Stan systemd',
+    endpoint:s.probe==='https'?'devstack.test/api/session':s.probe==='tcp'?'127.0.0.1:'+s.port:'systemd'};
+  });
+  if(validLayout(next))state.layout=next;
+ }
+ const definitions=()=>state.layout??defs;
+ const visibleDefs=()=>definitions().filter(s=>s.selected!==false);
+ function syncTiles(){
+  const visible=visibleDefs(),wanted=new Set(visible.map(s=>s.id));
+  for(const tile of grid.querySelectorAll('[data-service]')){
+   if(tile.dataset.dynamic==='true'&&!definitions().some(s=>s.id===tile.dataset.service)){tile.remove();continue;}
+   tile.hidden=!wanted.has(tile.dataset.service);
+  }
+  for(const def of visible){
+   if(!$('service-'+def.id)){
+    const tile=template.cloneNode(true);
+    tile.id='service-'+def.id;tile.dataset.service=def.id;tile.dataset.dynamic='true';
+    tile.setAttribute('aria-expanded','false');
+    for(const node of tile.querySelectorAll('[id]'))node.id=node.id.replace(/-nginx$/,'-'+def.id);
+    const top=tile.querySelector('.service-top');
+    top.querySelector('span').textContent=def.name;
+    const glyph=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    glyph.setAttribute('width','20');glyph.setAttribute('height','20');glyph.setAttribute('viewBox','0 0 24 24');glyph.setAttribute('aria-hidden','true');
+    glyph.setAttribute('fill','none');glyph.setAttribute('stroke','currentColor');glyph.setAttribute('stroke-width','1.6');
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d',def.id==='mailpit'?'M3 5h18v14H3z M3 6l9 7 9-7':'M4 4h16v16H4z M4 10h16 M10 10v10');
+    glyph.append(path);top.querySelector('img').replaceWith(glyph);
+    tile.addEventListener('click',()=>openInfo(def.id));grid.append(tile);
+   }
+   const tile=$('service-'+def.id);
+   if(tile.dataset.dynamic==='true')tile.querySelector('.service-top span').textContent=def.name;
+   tile.hidden=false;
+  }
+  grid.classList.toggle('has-overflow',visible.length>4);
+  if(infoService&&!wanted.has(infoService)){state.confirmation=null;state.confirmService=null;closeInfo(false);}
+ }
  const labels={checking:1,running:1,offline:1,error:1};
  const esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const finite=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0;
@@ -111,10 +160,10 @@
  const data=id=>state.services.find(s=>s.id===id)||{};
  const status=id=>state.busy===id?'busy':state.phase==='offline'?'off':data(id).reachable===true?'up':data(id).reachable===false?'down':'unknown';
  const statusName=id=>({busy:'Restartowanie',off:'Nieaktywne',up:'Dostępne',down:'Niedostępne',unknown:'Brak danych'}[status(id)]);
- const canRestart=id=>connected&&state.canControl&&state.active&&!state.cached&&!closedByHost&&!document.hidden&&!state.busy&&typeof data(id).unitActive==='boolean';
+ const canRestart=id=>visibleDefs().some(s=>s.id===id)&&connected&&state.canControl&&state.active&&!state.cached&&!closedByHost&&!document.hidden&&!state.busy&&typeof data(id).unitActive==='boolean';
  const expiringNotice=phase=>['success','recovered','available-unconfirmed','available-not-run'].includes(phase);
  function validNotice(value){
-  if(!value||!defs.some(s=>s.id===value.service)||!['restarting','verifying','success','error','unconfirmed','not-run','recovered','available-unconfirmed','available-not-run'].includes(value.phase))return null;
+  if(!value||!definitions().some(s=>s.id===value.service)||!['restarting','verifying','success','error','unconfirmed','not-run','recovered','available-unconfirmed','available-not-run'].includes(value.phase))return null;
   if(expiringNotice(value.phase)&&(!Number.isFinite(value.expiresAt)||value.expiresAt<=Date.now()))return null;
   return value;
  }
@@ -123,25 +172,27 @@
   const notice=validNotice(state.restartStatus);state.restartStatus=notice;
   const names={restarting:'ponowne uruchamianie…',verifying:'restart zakończony. Weryfikowanie…',success:'zweryfikowano pomyślnie.',error:'błąd weryfikacji.',unconfirmed:'nie potwierdzono restartu.', 'not-run':'restart nie został wykonany.',recovered:'usługa ponownie dostępna.','available-unconfirmed':'usługa działa; restart niepotwierdzony.','available-not-run':'usługa działa; restart niewykonany.'};
   const line=$('widgetToast');
-  const message=notice?defs.find(s=>s.id===notice.service).name+': '+names[notice.phase]:state.message;
+  const message=notice?definitions().find(s=>s.id===notice.service).name+': '+names[notice.phase]:state.message;
   const kind=['success','recovered'].includes(notice?.phase)?'success':notice&&['error','unconfirmed','not-run'].includes(notice.phase)?'error':'info';
   line.hidden=!message;line.dataset.kind=kind;$('projectStatusBlock').classList.toggle('has-notice',!!message);
   $('widgetMessage').textContent=message||'';$('noticeIcon').setAttribute('href','#i-'+(kind==='success'?'check':kind==='error'?'warning':'info'));
   if(notice&&expiringNotice(notice.phase)&&!document.hidden&&!closedByHost)noticeTimer=setTimeout(renderNotice,Math.max(0,notice.expiresAt-Date.now()));
  }
  function render(){
-  const good=defs.filter(s=>data(s.id).reachable===true).length;
-  let title='Gotowe do pracy',sub=`Dostępne usługi: ${good} z 4.`,glyph='grid';
+  syncTiles();
+  const visible=visibleDefs(),total=visible.length,good=visible.filter(s=>data(s.id).reachable===true).length;
+  let title='Gotowe do pracy',sub=`Dostępne usługi: ${good} z ${total}.`,glyph='grid';
   if(state.phase==='checking'){title='Sprawdzanie…';sub='Odczytywanie stanu usług.';}
   else if(state.phase==='offline'){title='Ubuntu wyłączone';sub='Uruchom je w widżecie WSL.';glyph='power';}
   else if(state.phase==='error'){title='Brak odczytu';sub='Sprawdź ponownie. Stan jest nieznany.';glyph='warning';}
   else if(state.busy){title='Restart usługi';sub='Pozostałe usługi bez zmian.';glyph='refresh';}
-  else if(good<4){title='Sprawdź usługi';sub=`Dostępne usługi: ${good} z 4.`;glyph='warning';}
+  else if(!total){title='DevStack';sub='Wybierz usługi w ustawieniach panelu.';}
+  else if(good<total){title='Sprawdź usługi';sub=`Dostępne usługi: ${good} z ${total}.`;glyph='warning';}
   $('statusTitle').textContent=title;$('statusSub').textContent=sub;$('heroUse').setAttribute('href','#i-'+glyph);
   $('widget').classList.toggle('offline',state.phase==='offline');$('widget').classList.toggle('error',state.phase==='error');
-  $('widget').classList.toggle('partial',state.phase==='running'&&good<4);$('widget').classList.toggle('busy',!!state.busy);
+  $('widget').classList.toggle('partial',state.phase==='running'&&good<total);$('widget').classList.toggle('busy',!!state.busy);
   $('dataLabel').textContent=state.cached?'OSTATNI ODCZYT':state.phase==='offline'?'WSL OFF':state.phase==='running'?'ODCZYT LIVE':'BRAK DANYCH';
-  defs.forEach(s=>{
+  visible.forEach(s=>{
    const m=data(s.id);$('service-'+s.id).dataset.status=status(s.id);$('service-'+s.id).setAttribute('aria-label',s.name+': '+statusName(s.id)+'. Otwórz szczegóły.');
    $('state-'+s.id).textContent=statusName(s.id);
    $('latency-'+s.id).textContent=finite(m.latencyMs)&&state.phase==='running'?number(m.latencyMs,1)+' ms':'— ms';
@@ -160,7 +211,8 @@
  }
  function renderInfo(){
   if(!infoService||$('servicePopover').hidden)return;
-  const def=defs.find(s=>s.id===infoService),m=data(infoService),allowed=canRestart(infoService);
+  const def=definitions().find(s=>s.id===infoService),m=data(infoService),allowed=canRestart(infoService);
+  if(!def){closeInfo(false);return;}
   const confirming=allowed&&state.confirmService===infoService&&state.confirmation&&Date.now()<state.confirmUntil;
   $('serviceInfoTitle').textContent=def.name;$('serviceInfoDescription').textContent=def.description;
   $('serviceInfoBody').innerHTML=`<dl class="detail-table"><dt>Stan</dt><dd>${esc(statusName(infoService))}</dd><dt>Sprawdzane połączenie</dt><dd>${esc(def.probe)}</dd><dt>Cel pomiaru</dt><dd>${esc(def.endpoint)}</dd><dt>Czas odpowiedzi</dt><dd>${finite(m.latencyMs)?number(m.latencyMs,1)+' ms':'—'}</dd><dt>CPU usługi</dt><dd title="100% oznacza jeden procesor logiczny">${finite(m.cpuPercent)?number(m.cpuPercent,1)+'%':'—'}</dd><dt>Pamięć usługi</dt><dd title="MemoryCurrent grupy procesów systemd; obejmuje również pamięć podręczną">${finite(m.memoryBytes)?number(m.memoryBytes/1e6,1)+' MB':'—'}</dd></dl>`;
@@ -196,6 +248,7 @@
   if(focus&&infoReturnFocus)infoReturnFocus.focus();
  }
  function openInfo(id){
+  if(!visibleDefs().some(s=>s.id===id))return;
   if(infoService===id&&!$('servicePopover').hidden){closeInfo();return;}
   closeInfo(false);infoService=id;infoReturnFocus=$('service-'+id);$('servicePopover').hidden=false;
   $('service-'+id).setAttribute('aria-expanded','true');renderInfo();$('closeServiceInfo').focus();
@@ -209,9 +262,10 @@
   if(msg.revision<=state.revision||!native&&connected&&Date.now()-lastNativeAt<25000)return;
   clearTimeout(responseTimer);
   if(native){connected=true;lastNativeAt=Date.now();bridgeHealth='connected';clearTimeout(retryTimer);}
+  if(msg.selectionKnown===true)acceptLayout(msg.services);
   Object.assign(state,{phase:msg.phase,active:msg.active===true,canControl:native&&msg.canControl===true,canNavigate:native&&msg.canNavigate===true,
-   services:Array.isArray(msg.services)?msg.services.filter(s=>s&&typeof s==='object'&&defs.some(d=>d.id===s.id)):[],projectCount:msg.projectCount,
-   integration:msg.integration||'unavailable',cached:msg.cached===true,checkedAt:msg.checkedAt||null,busy:defs.some(s=>s.id===msg.busy)?msg.busy:null,
+   services:Array.isArray(msg.services)?msg.services.filter(s=>s&&typeof s==='object'&&definitions().some(d=>d.id===s.id)):[],projectCount:msg.projectCount,
+   integration:msg.integration||'unavailable',cached:msg.cached===true,checkedAt:msg.checkedAt||null,busy:definitions().some(s=>s.id===msg.busy)?msg.busy:null,
    confirmation:native&&typeof msg.confirmation==='string'?msg.confirmation:null,confirmService:native?msg.confirmService:null,confirmUntil:native?msg.confirmUntil:0,
    restartStatus:validNotice(msg.restartStatus),message:typeof msg.message==='string'?msg.message:'',revision:msg.revision});
   if(native&&!state.active){closedByHost=true;stopConnectionWork();state.confirmation=null;closeInfo(false);}
@@ -240,6 +294,7 @@
  function theme(first=true){const forced=first?query.get('theme'):null;document.documentElement.dataset.theme=forced==='light'||forced==='dark'?forced:media.matches?'light':'dark';}
  media.addEventListener('change',()=>theme(false));theme();restoreView();
  if(boot?.protocol===1&&boot.session===session){
+  if(boot.selectionKnown===true)acceptLayout(boot.services);
   state.restartStatus=validNotice(boot.restartStatus);
   if(!state.checkedAt||Date.parse(boot.checkedAt)>Date.parse(state.checkedAt))Object.assign(state,{phase:labels[boot.phase]?boot.phase:'checking',services:boot.services||[],projectCount:boot.projectCount,checkedAt:boot.checkedAt||null,integration:boot.integration||'unavailable',cached:!!boot.checkedAt});
  }

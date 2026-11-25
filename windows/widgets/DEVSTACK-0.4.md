@@ -1,3 +1,7 @@
+## Version 0.5.0.0 update
+
+Update DevStack in Ubuntu first (`bash scripts/update.sh`), then install the matching MSIX/certificate with `Install-Widgets.ps1`. While Ubuntu is already running, update the service integration using `Install-DevStackWidget.ps1 -SkipFrontend`. Do not overwrite the current dashboard with an older static frontend ZIP. Existing read/control credentials are preserved. Select services in the dashboard settings; changes arrive on the next visible widget refresh. The original WSL widget is unchanged. The following historical 0.4 instructions describe the previous release.
+
 # DevStack Widgets — setup and architecture
 
 ## Install the bundle
