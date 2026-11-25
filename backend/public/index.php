@@ -122,6 +122,12 @@ try {
         if (count($body) !== 1) throw new InvalidArgumentException('Wybierz jedną wiadomość do usunięcia.');
         devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('delete', $body)]);
     }
+    if ($method === 'POST' && $path === '/api/mail/delete-many') {
+        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('delete-many', $body)]);
+    }
+    if ($method === 'POST' && $path === '/api/mail/clear') {
+        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('clear', $body)]);
+    }
     if ($method === 'POST' && $path === '/api/services/control') {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('service_control', $body)]);
     }

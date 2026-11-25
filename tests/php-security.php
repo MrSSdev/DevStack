@@ -86,7 +86,14 @@ check(devstack_mailpit_target('attachment', ['id' => $mailId, 'part' => '1.2'])
     === ['GET', '/message/' . $mailId . '/part/1.2', null], 'Attachment target');
 $delete = devstack_mailpit_target('delete', ['id' => $mailId]);
 check($delete[0] === 'DELETE' && json_decode($delete[2], true)['IDs'] === [$mailId], 'Delete exactly one message');
+$otherMailId = str_repeat('B', 22);
+$many = devstack_mailpit_target('delete-many', ['ids' => [$mailId, $otherMailId, $mailId]]);
+check($many[0] === 'DELETE' && $many[1] === '/messages' && json_decode($many[2], true)['IDs'] === [$mailId, $otherMailId], 'Delete selected messages only');
+check(devstack_mailpit_target('clear', ['confirmation' => 'delete-all']) === ['DELETE', '/messages', '{"IDs":[]}'], 'Explicit clear target');
 foreach ([
+    ['clear', []], ['clear', ['confirmation' => true]], ['clear', ['confirmation' => 'delete-all', 'id' => $mailId]],
+    ['delete-many', []], ['delete-many', ['ids' => []]], ['delete-many', ['ids' => ['latest']]],
+    ['delete-many', ['ids' => array_fill(0, 41, $mailId)]], ['delete-many', ['ids' => [$mailId], 'confirmation' => 'delete-all']],
     ['delete', []], ['delete', ['id' => 'latest']], ['delete', ['id' => [$mailId]]],
     ['message', ['id' => '../messages']], ['message', ['id' => 'http://evil.test']],
     ['attachment', ['id' => $mailId, 'part' => '../raw']],

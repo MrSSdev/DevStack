@@ -1,8 +1,8 @@
-import { createElement, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Copy, Download, ExternalLink, Mail, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { createElement, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { ArrowLeft, ArrowRight, Copy, Download, ExternalLink, Mail, Paperclip, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { parseMailPreview, type PreviewNode } from '@/lib/safe-mail-preview'
 
@@ -38,7 +38,12 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
   const [loading,setLoading]=useState(false)
   const [opening,setOpening]=useState(false)
   const [deleting,setDeleting]=useState(false)
-  const [confirmDelete,setConfirmDelete]=useState(false)
+  const [confirmDelete,setConfirmDelete]=useState<'one'|'many'|'all'|null>(null)
+  const [checked,setChecked]=useState<string[]>([])
+  const settingsDialog=useRef<HTMLDialogElement>(null)
+  const readerHeading=useRef<HTMLHeadingElement>(null)
+  const [actionError,setActionError]=useState('')
+  const [actionNotice,setActionNotice]=useState('')
   const [listError,setListError]=useState('')
   const [detailError,setDetailError]=useState('')
   const [copied,setCopied]=useState('')
@@ -51,7 +56,10 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
     const params=new URLSearchParams({start:String(start),query:appliedQuery})
     void request<Page>('GET','/api/mail/messages?'+params.toString()).then(result=>{
       if(disposed)return
-      setPage({...result,messages:Array.isArray(result.messages)?result.messages.filter(m=>typeof m.ID==='string'&&idPattern.test(m.ID)):[]})
+      const valid=Array.isArray(result.messages)?result.messages.filter(m=>typeof m.ID==='string'&&idPattern.test(m.ID)):[]
+      setPage({...result,messages:valid})
+      setChecked(ids=>ids.filter(id=>valid.some(m=>m.ID===id)))
+      if(!valid.length&&start>0)setStart(s=>Math.max(0,s-pageSize))
     }).catch(e=>{if(!disposed){setListError(e instanceof Error?e.message:'Nie można pobrać wiadomości.');setPage(null)}}).finally(()=>{if(!disposed)setLoading(false)})
     return ()=>{disposed=true}
   },[active,appliedQuery,start,revision,request])
@@ -59,31 +67,46 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
   useEffect(()=>{
     if(!active||!selected){setMessage(null);setOpening(false);setDetailError('');return}
     let disposed=false
-    setMessage(null);setConfirmDelete(false);setOpening(true);setDetailError('')
+    setMessage(null);setConfirmDelete(null);setOpening(true);setDetailError('')
     void request<Message>('GET','/api/mail/message/'+encodeURIComponent(selected)).then(result=>{
       if(disposed)return
       if(result.ID!==selected)throw new Error('Nieprawidłowa odpowiedź skrzynki.')
       setMessage(result);setFormat(result.HTML?'html':'text')
-      setPage(p=>p?{...p,messages:(p.messages??[]).map(m=>m.ID===selected?{...m,Read:true}:m)}:p)
+      setPage(p=>p?{...p,unread:Math.max(0,p.unread-((p.messages??[]).some(m=>m.ID===selected&&!m.Read)?1:0)),messages:(p.messages??[]).map(m=>m.ID===selected?{...m,Read:true}:m)}:p)
     }).catch(e=>{if(!disposed)setDetailError(e instanceof Error?e.message:'Nie można otworzyć wiadomości.')}).finally(()=>{if(!disposed)setOpening(false)})
     return ()=>{disposed=true}
   },[active,selected,request])
 
+  useEffect(()=>{
+    if(!active||selected||deleting||confirmDelete||checked.length)return
+    const timer=window.setInterval(()=>{if(document.visibilityState==='visible')setRevision(v=>v+1)},15000)
+    return ()=>window.clearInterval(timer)
+  },[active,selected,deleting,confirmDelete,checked.length])
+  useEffect(()=>{if(selected)readerHeading.current?.focus()},[selected])
   const preview=useMemo(()=>message?.HTML?parseMailPreview(message.HTML):[],[message])
   const messages=page?.messages??[]
   const count=page?.messages_count??page?.total??0
   const attachments=[...(Array.isArray(message?.Attachments)?message.Attachments:[]),...(Array.isArray(message?.Inline)?message.Inline:[])].filter(a=>typeof a.PartID==='string'&&partPattern.test(a.PartID))
   const refresh=()=>{setRevision(v=>v+1);refreshStatus()}
-  function search(e:FormEvent){e.preventDefault();setSelected('');setStart(0);setAppliedQuery(query.trim());setRevision(v=>v+1)}
+  function search(e:FormEvent){e.preventDefault();setChecked([]);setStart(0);setAppliedQuery(query.trim());setRevision(v=>v+1)}
+  function changePage(next:number){setChecked([]);setStart(next)}
+  function back(){setSelected('');setMessage(null);setConfirmDelete(null);setCopied('');setActionError('');setRevision(v=>v+1)}
   async function remove(){
-    if(!message||!idPattern.test(message.ID)||deleting||!confirmDelete)return
-    setDeleting(true);setDetailError('')
+    if(deleting||!confirmDelete)return
+    const mode=confirmDelete
+    const ids=mode==='one'&&selected?[selected]:checked
+    if(mode!=='all'&&(!ids.length||ids.some(id=>!idPattern.test(id))))return
+    setDeleting(true);setActionError('');setActionNotice('')
     try{
-      await request('POST','/api/mail/delete',csrf,{id:message.ID})
-      setSelected('');setMessage(null);setConfirmDelete(false)
-      if(messages.length===1&&start>0)setStart(Math.max(0,start-pageSize))
+      if(mode==='all')await request('POST','/api/mail/clear',csrf,{confirmation:'delete-all'})
+      else if(mode==='one')await request('POST','/api/mail/delete',csrf,{id:ids[0]})
+      else await request('POST','/api/mail/delete-many',csrf,{ids})
+      setSelected('');setMessage(null);setConfirmDelete(null);setChecked([])
+      if(mode==='all'){setQuery('');setAppliedQuery('');setStart(0)}
+      else if(messages.every(m=>ids.includes(m.ID))&&start>0)setStart(Math.max(0,start-pageSize))
+      setActionNotice(mode==='all'?'Opróżniono skrzynkę.':mode==='one'?'Usunięto wiadomość.':'Usunięto wiadomości.')
       setRevision(v=>v+1)
-    }catch(e){setDetailError(e instanceof Error?e.message:'Nie udało się usunąć wiadomości.')}
+    }catch(e){setActionError(e instanceof Error?e.message:'Nie udało się usunąć wiadomości.')}
     finally{setDeleting(false)}
   }
   async function copy(value:string,label:string){
@@ -91,37 +114,71 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
     catch{setCopied('Nie udało się skopiować. Zaznacz tekst ręcznie.')}
   }
 
-  return <div className="space-y-5">
-    <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle className="flex items-center gap-2"><Mail className="size-5"/>Lokalna skrzynka testowa</CardTitle><CardDescription>Mailpit · wspólna skrzynka wiadomości przechwyconych z lokalnych projektów.</CardDescription></div><div className="flex flex-wrap items-center gap-2"><Badge>{active?'Działa':status==='not-installed'?'Niezainstalowana':status==='failed'?'Błąd usługi':status==='inactive'?'Zatrzymana':'Nieznany stan'}</Badge><Button size="sm" variant="outline" onClick={refresh} disabled={loading}><RefreshCw/>Odśwież</Button>{active&&<Button size="sm" variant="outline" onClick={()=>window.open('http://127.0.0.1:8025/','_blank','noopener,noreferrer')}><ExternalLink/>Pełny Mailpit</Button>}</div></div></CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        {active?<div className="flex flex-wrap gap-x-6 gap-y-2 text-muted-foreground"><span>SMTP <code className="text-foreground">127.0.0.1:1025</code></span><span>Bez TLS i logowania SMTP</span><span>Maks. 500 wiadomości · 10 MB/wiadomość</span></div>:<><p className="text-muted-foreground">{status==='not-installed'?'Zainstaluj opcjonalną usługę Mailpit w terminalu Ubuntu. Instalacja nie zmienia istniejących projektów.':'Sprawdź stan opcjonalnej usługi w Ubuntu, a potem odśwież panel.'}</p><div className="flex items-start gap-2"><code className="min-w-0 flex-1 select-all break-all rounded-md bg-secondary p-3 text-xs">{status==='not-installed'?installCommand:'sudo systemctl start devstack-mailpit.service'}</code><Button size="icon" variant="outline" aria-label="Kopiuj polecenie" onClick={()=>{void copy(status==='not-installed'?installCommand:'sudo systemctl start devstack-mailpit.service','Polecenie')}}><Copy/></Button></div></>}
-        <p className="text-xs text-muted-foreground">Tylko poczta przekazana do Mailpit jest przechwytywana. To skrzynka testowa, nie serwer wysyłający pocztę do internetu.</p>
-        {copied&&<p role="status" className="text-xs">{copied}</p>}
+  return <div className="min-w-0 space-y-3">
+    <Card className="min-w-0">
+      <CardContent className="space-y-3 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {selected?<Button size="sm" variant="outline" disabled={deleting} onClick={back}><ArrowLeft/>Odebrane</Button>:<><Mail className="size-4 text-muted-foreground"/><h2 className="text-sm font-semibold">Odebrane</h2>{page&&<Badge>{page.total} · {page.unread} nieprzeczytanych</Badge>}</>}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {!selected&&<Button size="sm" variant="outline" onClick={refresh} disabled={loading||deleting||!!confirmDelete}><RefreshCw className={loading?'animate-spin':''}/>Odśwież</Button>}
+            {active&&selected&&<Button size="sm" variant="outline" disabled={opening||deleting||!message||!!confirmDelete} onClick={()=>setConfirmDelete('one')}><Trash2/>Usuń</Button>}
+            {active&&!selected&&checked.length>0&&<Button size="sm" variant="outline" disabled={loading||deleting||!!confirmDelete} onClick={()=>setConfirmDelete('many')}><Trash2/>Usuń ({checked.length})</Button>}
+            {active&&!selected&&<Button size="sm" variant="outline" disabled={loading||deleting||!!confirmDelete||!page||page.total===0} onClick={()=>setConfirmDelete('all')}><Trash2/>Opróżnij</Button>}
+            {active&&<Button size="icon" variant="outline" title="Otwórz Mailpit" aria-label="Otwórz Mailpit" onClick={()=>window.open('http://127.0.0.1:8025/','_blank','noopener,noreferrer')}><ExternalLink/></Button>}
+            <Button size="icon" variant="outline" aria-label="Konfiguracja poczty" title="Konfiguracja poczty" disabled={deleting||!!confirmDelete} onClick={()=>settingsDialog.current?.showModal()}><Settings/></Button>
+          </div>
+        </div>
+        {actionNotice&&<p role="status" className="text-xs text-muted-foreground">{actionNotice}</p>}
+        {actionError&&<p role="alert" className="text-sm text-destructive">{actionError}</p>}
+        {confirmDelete&&<div className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-2 text-sm" role="alert">
+          <span className="flex-1">{confirmDelete==='all'?'Trwale usunąć wszystkie wiadomości ze wszystkich projektów, także poza aktualnym wyszukiwaniem?':confirmDelete==='many'?'Usunąć zaznaczone wiadomości ('+checked.length+')?':'Trwale usunąć tę wiadomość?'}</span>
+          <Button size="sm" variant="destructive" disabled={deleting} onClick={()=>{void remove()}}>{deleting?'Usuwanie…':'Potwierdź'}</Button><Button size="sm" variant="outline" disabled={deleting} onClick={()=>{setConfirmDelete(null);setActionError('')}}>Anuluj</Button>
+        </div>}
+        {!active&&<div className="rounded-md border p-4 text-sm"><p className="font-medium">{status==='not-installed'?'Mailpit nie jest zainstalowany':status==='inactive'?'Mailpit jest zatrzymany':status==='failed'?'Błąd Mailpit':'Brak połączenia z Mailpit'}</p><p className="mt-1 text-muted-foreground">Otwórz konfigurację, aby sprawdzić polecenia.</p><Button className="mt-3" size="sm" variant="outline" onClick={()=>settingsDialog.current?.showModal()}><Settings/>Konfiguracja</Button></div>}
+        {active&&!selected&&<>
+          <form onSubmit={search} className="flex gap-2"><Input aria-label="Szukaj wiadomości" placeholder="Temat, nadawca, treść…" maxLength={200} value={query} onChange={e=>setQuery(e.target.value)} disabled={deleting||!!confirmDelete}/><Button type="submit" variant="outline" size="icon" aria-label="Szukaj" disabled={deleting||!!confirmDelete}><Search/></Button>{appliedQuery&&<Button type="button" size="icon" variant="ghost" aria-label="Wyczyść wyszukiwanie" disabled={deleting||!!confirmDelete} onClick={()=>{setQuery('');setAppliedQuery('');changePage(0)}}><X/></Button>}</form>
+          {listError&&<p role="alert" className="text-sm text-destructive">{listError}</p>}
+          {!messages.length&&!listError&&<p className="py-8 text-center text-sm text-muted-foreground">{loading?'Pobieranie wiadomości…':appliedQuery?'Brak wyników.':'Skrzynka jest pusta.'}</p>}
+          {messages.length>0&&<div className="overflow-hidden rounded-md border">
+            <div className="flex items-center gap-2 border-b bg-secondary/40 px-2 py-1.5 text-xs text-muted-foreground"><input type="checkbox" ref={node=>{if(node)node.indeterminate=checked.length>0&&!messages.every(m=>checked.includes(m.ID))}} className="size-4 accent-primary" aria-label="Zaznacz wszystkie wiadomości na stronie" checked={messages.every(m=>checked.includes(m.ID))} disabled={deleting||!!confirmDelete||loading} onChange={e=>setChecked(e.target.checked?messages.map(m=>m.ID):[])}/><span className="flex-1">{checked.length?'Zaznaczono: '+checked.length:'Wiadomości'}</span><span>{count} {appliedQuery?'wyników':'łącznie'}</span></div>
+            <div className="max-h-[max(16rem,calc(100dvh-20rem))] divide-y overflow-y-auto">{messages.map(m=><div key={m.ID} className="flex min-w-0 items-center gap-2 px-2 hover:bg-secondary/50">
+              <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={'Zaznacz: '+(m.Subject||'bez tematu')} checked={checked.includes(m.ID)} disabled={deleting||!!confirmDelete||loading} onChange={e=>setChecked(ids=>e.target.checked?[...ids,m.ID]:ids.filter(id=>id!==m.ID))}/>
+              <button type="button" disabled={deleting||!!confirmDelete} onClick={()=>{setChecked([]);setActionError('');setActionNotice('');setCopied('');setSelected(m.ID)}} className="grid min-w-0 flex-1 gap-0.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-ring sm:grid-cols-[minmax(7rem,0.8fr)_minmax(0,1.4fr)_auto] sm:items-center sm:gap-2">
+                <span className={'min-w-0 truncate text-xs '+(!m.Read?'font-semibold':'text-muted-foreground')}>{address(m.From)}</span>
+                <span className="min-w-0"><span className={'block truncate text-sm '+(!m.Read?'font-semibold':'font-medium')}>{!m.Read&&<span className="mr-1.5 inline-block size-2 rounded-full bg-blue-500"/>}{m.Subject||'(bez tematu)'}</span><span className="block truncate text-xs text-muted-foreground">{m.Snippet??''}</span></span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground sm:justify-end">{!!m.Attachments&&<Paperclip className="size-3"/>}<time dateTime={m.Created}>{messageDate(m.Created)}</time></span>
+              </button>
+            </div>)}</div>
+          </div>}
+          {page&&count>pageSize&&<div className="flex items-center justify-between gap-2"><Button size="sm" variant="outline" disabled={start===0||loading||deleting||!!confirmDelete} onClick={()=>changePage(Math.max(0,start-pageSize))}><ArrowLeft/>Wstecz</Button><span className="text-xs text-muted-foreground">{start+1}–{start+messages.length} / {count}</span><Button size="sm" variant="outline" disabled={start+pageSize>=count||loading||deleting||!!confirmDelete} onClick={()=>changePage(start+pageSize)}>Dalej<ArrowRight/></Button></div>}
+        </>}
+        {active&&selected&&<article className="min-w-0 space-y-3 border-t pt-3">
+          <h2 ref={readerHeading} tabIndex={-1} className="break-words text-xl font-semibold outline-none">{message?.Subject|| (opening?'Otwieranie wiadomości…':'Wiadomość')}</h2>
+          {detailError&&<p role="alert" className="text-sm text-destructive">{detailError}</p>}
+          {opening&&<p className="py-6 text-center text-sm text-muted-foreground">Wczytywanie…</p>}
+          {message&&<>
+            <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 break-words text-sm"><dt className="text-muted-foreground">Od</dt><dd className="font-medium">{address(message.From)}</dd><dt className="text-muted-foreground">Do</dt><dd>{addresses(message.To)}</dd>{message.Cc?.length?<><dt className="text-muted-foreground">DW</dt><dd>{addresses(message.Cc)}</dd></>:null}{message.Bcc?.length?<><dt className="text-muted-foreground">UDW</dt><dd>{addresses(message.Bcc)}</dd></>:null}<dt className="text-muted-foreground">Data</dt><dd>{messageDate(message.Date)}</dd></dl>
+            <div className="flex flex-wrap items-center gap-1.5 border-y py-2">{message.HTML&&<Button size="sm" variant={format==='html'?'default':'ghost'} onClick={()=>setFormat('html')}>HTML</Button>}<Button size="sm" variant={format==='text'?'default':'ghost'} onClick={()=>setFormat('text')}>Tekst</Button>{message.HTML&&<Button size="sm" variant={format==='source'?'default':'ghost'} onClick={()=>setFormat('source')}>Źródło HTML</Button>}<Button size="icon" variant="ghost" aria-label="Kopiuj treść" title="Kopiuj treść" onClick={()=>{void copy(format==='text'?message.Text??'':message.HTML??'','Treść')}}><Copy/></Button></div>
+            {copied&&<p role="status" className="text-xs">{copied}</p>}
+            {attachments.length>0&&<div className="space-y-1.5"><h3 className="text-xs font-semibold text-muted-foreground">Załączniki ({attachments.length})</h3><div className="flex flex-wrap gap-2">{attachments.map((a,i)=><a key={a.PartID+'-'+i} href={'/api/mail/message/'+message.ID+'/part/'+encodeURIComponent(a.PartID)} download={a.FileName||'mailpit-attachment'} className="flex min-w-0 max-w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-secondary"><Download className="size-4 shrink-0"/><span className="min-w-0 break-all">{a.FileName||a.ContentType||'Załącznik'}</span><span className="shrink-0 text-xs text-muted-foreground">{typeof a.Size==='number'?Math.ceil(a.Size/1024)+' KB':''}</span></a>)}</div></div>}
+            {format==='html'?<><div className="overflow-x-auto break-words rounded-md border bg-background p-4 text-sm leading-relaxed [&_h1]:text-2xl [&_h2]:text-xl [&_h3]:text-lg [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_p]:my-2 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_pre]:whitespace-pre-wrap [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:p-2 [&_hr]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:pl-3">{renderPreview(preview)}</div><p className="text-xs text-muted-foreground">Bez zewnętrznych obrazów, aktywnych linków i stylów nadawcy.{(message.HTML?.length??0)>250000?' Podgląd skrócono; pełna treść dostępna w Mailpit.':''}</p></>:<pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 text-sm">{(format==='source'?message.HTML:message.Text)||'(brak treści w tym formacie)'}</pre>}
+          </>}
+        </article>}
       </CardContent>
     </Card>
-    {active&&<div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)]">
-      <Card className="min-w-0"><CardHeader><CardTitle>Odebrane</CardTitle><CardDescription>{page?String(count)+' wiadomości'+(appliedQuery?' pasujących':''):loading?'Wczytywanie…':'Skrzynka'}</CardDescription><form onSubmit={search} className="mt-2 flex gap-2"><Input aria-label="Szukaj wiadomości" placeholder="Temat, nadawca, treść…" maxLength={200} value={query} onChange={e=>setQuery(e.target.value)}/><Button type="submit" variant="outline" size="icon" aria-label="Szukaj"><Search/></Button></form>{appliedQuery&&<Button className="self-start" size="sm" variant="ghost" onClick={()=>{setQuery('');setAppliedQuery('');setStart(0);setSelected('')}}>Wyczyść wyszukiwanie</Button>}</CardHeader>
-        <CardContent className="min-w-0 space-y-3">
-          {listError&&<p role="alert" className="text-sm text-destructive">{listError}</p>}
-          {!messages.length&&!listError&&<p className="py-10 text-center text-sm text-muted-foreground">{loading?'Pobieranie wiadomości…':appliedQuery?'Nie znaleziono wiadomości.':'Brak wiadomości. Wyślij e-mail z aplikacji skonfigurowanej do lokalnego SMTP.'}</p>}
-          <div className="divide-y">{messages.map(m=><button key={m.ID} type="button" disabled={deleting} onClick={()=>setSelected(m.ID)} aria-pressed={selected===m.ID} className={'block w-full min-w-0 rounded-md px-3 py-3 text-left hover:bg-secondary/60 '+(selected===m.ID?'bg-secondary':'')}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs text-muted-foreground">{address(m.From)}</span><span className="shrink-0 text-[10px] text-muted-foreground">{messageDate(m.Created)}</span></div><div className={'mt-1 break-words text-sm '+(!m.Read?'font-semibold':'font-medium')}>{!m.Read&&<span className="mr-1.5 inline-block size-2 rounded-full bg-blue-500"/>}{m.Subject||'(bez tematu)'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{m.Snippet??''}</div></button>)}</div>
-          {page&&count>pageSize&&<div className="flex items-center justify-between gap-2"><Button size="sm" variant="outline" disabled={start===0||loading||deleting} onClick={()=>setStart(Math.max(0,start-pageSize))}><ArrowLeft/>Wstecz</Button><span className="text-xs text-muted-foreground">{start+1}–{start+messages.length} / {count}</span><Button size="sm" variant="outline" disabled={start+pageSize>=count||loading||deleting} onClick={()=>setStart(start+pageSize)}>Dalej<ArrowRight/></Button></div>}
-        </CardContent>
-      </Card>
-      <Card className="min-w-0"><CardHeader><CardTitle className="break-words">{message?.Subject||'Podgląd wiadomości'}</CardTitle><CardDescription>Podgląd nie ładuje zdalnych obrazów, stylów ani aktywnych linków.</CardDescription></CardHeader>
-        <CardContent className="min-w-0 space-y-4">
-          {detailError&&<p role="alert" className="text-sm text-destructive">{detailError}</p>}
-          {opening&&<p className="py-8 text-center text-sm text-muted-foreground">Otwieranie wiadomości…</p>}
-          {!selected&&!opening&&<p className="py-12 text-center text-sm text-muted-foreground">Wybierz wiadomość z listy.</p>}
-          {message&&<><dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm break-words"><dt className="text-muted-foreground">Od</dt><dd>{address(message.From)}</dd><dt className="text-muted-foreground">Do</dt><dd>{addresses(message.To)}</dd>{message.Cc?.length?<><dt className="text-muted-foreground">DW</dt><dd>{addresses(message.Cc)}</dd></>:null}{message.Bcc?.length?<><dt className="text-muted-foreground">UDW</dt><dd>{addresses(message.Bcc)}</dd></>:null}<dt className="text-muted-foreground">Data</dt><dd>{messageDate(message.Date)}</dd></dl>
-            <div className="flex flex-wrap gap-2">{message.HTML&&<Button size="sm" variant={format==='html'?'default':'outline'} onClick={()=>setFormat('html')}>HTML</Button>}<Button size="sm" variant={format==='text'?'default':'outline'} onClick={()=>setFormat('text')}>Tekst</Button>{message.HTML&&<Button size="sm" variant={format==='source'?'default':'outline'} onClick={()=>setFormat('source')}>Źródło HTML</Button>}<Button size="sm" variant="outline" aria-label="Kopiuj treść" onClick={()=>{void copy(format==='text'?message.Text??'':message.HTML??'','Treść')}}><Copy/></Button></div>
-            {format==='html'?<div className="overflow-x-auto break-words rounded-md border bg-background p-4 text-sm [&_h1]:text-xl [&_h2]:text-lg [&_h3]:font-semibold [&_p]:my-2 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_pre]:whitespace-pre-wrap [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:p-2 [&_hr]:my-3">{renderPreview(preview)}{(message.HTML?.length??0)>250000&&<p className="text-xs text-muted-foreground">Podgląd skrócono. Pełna treść dostępna w Mailpit.</p>}</div>:<pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background p-4 text-sm">{(format==='source'?message.HTML:message.Text)||'(brak treści w tym formacie)'}</pre>}
-            {attachments.length>0&&<div className="space-y-2"><h3 className="text-sm font-semibold">Załączniki</h3>{attachments.map((a,i)=><a key={a.PartID+'-'+i} href={'/api/mail/message/'+message.ID+'/part/'+encodeURIComponent(a.PartID)} download={a.FileName||'mailpit-attachment'} className="flex items-center gap-2 rounded-md border p-2 text-sm hover:bg-secondary"><Download className="size-4 shrink-0"/><span className="min-w-0 flex-1 break-all">{a.FileName||a.ContentType||'Załącznik'}</span><span className="shrink-0 text-xs text-muted-foreground">{typeof a.Size==='number'?Math.ceil(a.Size/1024)+' KB':''}</span></a>)}</div>}
-            <div className="flex flex-wrap gap-2 border-t pt-4">{confirmDelete?<><span className="self-center text-sm text-muted-foreground">Usunąć tę wiadomość?</span><Button variant="destructive" disabled={deleting} onClick={()=>{void remove()}}>{deleting?'Usuwanie…':'Usuń'}</Button><Button variant="outline" disabled={deleting} onClick={()=>setConfirmDelete(false)}>Anuluj</Button></>:<Button variant="outline" onClick={()=>setConfirmDelete(true)}><Trash2/>Usuń wiadomość</Button>}</div>
-          </>}
-        </CardContent>
-      </Card>
-    </div>}
-    <Card><CardHeader><CardTitle>Konfiguracja poczty w projektach</CardTitle><CardDescription>Nowe projekty: zaznacz „Lokalna poczta testowa” w formularzu.</CardDescription></CardHeader><CardContent className="space-y-3 text-sm text-muted-foreground"><p>Laravel otrzyma ustawienia SMTP i domyślny adres nadawcy we własnej domenie .test. W zwykłym projekcie PHP przechwytywane jest mail() z indywidualnej puli PHP-FPM. Istniejące projekty pozostają bez zmian.</p><details><summary className="cursor-pointer font-medium text-foreground">Ręczna konfiguracja istniejącego projektu Laravel</summary><p className="my-2">Zastąp odpowiednie zmienne MAIL_* w lokalnym .env projektu, ustaw właściwy adres nadawcy i wykonaj <code>php artisan config:clear</code>. Nie kopiuj tej konfiguracji do środowiska produkcyjnego.</p><pre className="overflow-x-auto rounded-md bg-secondary p-3 text-xs text-foreground">{manualConfig}</pre><Button className="mt-2" size="sm" variant="outline" onClick={()=>{void copy(manualConfig,'Konfiguracja SMTP')}}><Copy/>Kopiuj ustawienia</Button></details></CardContent></Card>
+    <dialog ref={settingsDialog} aria-labelledby="mail-settings-title" className="fixed inset-0 m-auto max-h-[90vh] w-[min(94vw,42rem)] overflow-y-auto rounded-xl border bg-card p-4 text-foreground shadow-xl backdrop:bg-black/50">
+      <div className="flex items-center justify-between gap-2"><h2 id="mail-settings-title" className="text-lg font-semibold">Konfiguracja poczty</h2><Button size="icon" variant="ghost" aria-label="Zamknij konfigurację" onClick={()=>settingsDialog.current?.close()}><X/></Button></div>
+      <div className="mt-3 space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2"><Badge>{active?'Działa':status==='not-installed'?'Niezainstalowany':status==='failed'?'Błąd':status==='inactive'?'Zatrzymany':'Brak danych'}</Badge><Button size="sm" variant="outline" onClick={refresh}><RefreshCw/>Odśwież stan</Button>{active&&<Button size="sm" variant="outline" onClick={()=>window.open('http://127.0.0.1:8025/','_blank','noopener,noreferrer')}><ExternalLink/>Mailpit</Button>}</div>
+        {!active&&<div className="flex items-start gap-2"><code className="min-w-0 flex-1 select-all break-all rounded-md bg-secondary p-2 text-xs">{status==='not-installed'?installCommand:'sudo systemctl start devstack-mailpit.service'}</code><Button size="icon" variant="outline" aria-label="Kopiuj polecenie" onClick={()=>{void copy(status==='not-installed'?installCommand:'sudo systemctl start devstack-mailpit.service','Polecenie')}}><Copy/></Button></div>}
+        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1"><dt className="text-muted-foreground">SMTP</dt><dd><code>127.0.0.1:1025</code></dd><dt className="text-muted-foreground">TLS / logowanie</dt><dd>Wyłączone</dd><dt className="text-muted-foreground">Limit</dt><dd>500 wiadomości · 10 MB/wiadomość</dd></dl>
+        <p className="text-xs text-muted-foreground">Mailpit przechwytuje pocztę testową; nie wysyła jej do internetu.</p>
+        <div className="border-t pt-3"><h3 className="font-semibold">Konfiguracja projektu</h3><p className="mt-1 text-muted-foreground">Nowy projekt: zaznacz „Lokalna poczta testowa”. Laravel otrzyma ustawienia SMTP, a PHP — przechwytywanie mail().</p></div>
+        <details><summary className="cursor-pointer font-medium">Istniejący projekt Laravel (.env)</summary><p className="my-2 text-muted-foreground">Zmień MAIL_* lokalnie, ustaw adres nadawcy i wykonaj <code>php artisan config:clear</code>. Nie używaj tej konfiguracji na produkcji.</p><pre className="overflow-x-auto rounded-md bg-secondary p-2 text-xs">{manualConfig}</pre><Button className="mt-2" size="sm" variant="outline" onClick={()=>{void copy(manualConfig,'Konfiguracja SMTP')}}><Copy/>Kopiuj ustawienia</Button></details>
+        {copied&&<p role="status" className="text-xs">{copied}</p>}
+      </div>
+    </dialog>
   </div>
 }

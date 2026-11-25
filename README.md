@@ -67,7 +67,7 @@ cd ~/projects/devstack-source
 sudo bash scripts/install-mailpit.sh
 ```
 
-Open **E-mail** in DevStack to read, search, download attachments and delete individual captured messages. Select **Lokalna poczta testowa** when creating a new project to configure its PHP-FPM mail transport and, for Laravel, its private `.env` SMTP settings. Existing projects are never changed automatically. See [Local test email](docs/LOCAL-MAIL.md) for limits, manual configuration and service management.
+Open **E-mail** in DevStack to read, search, download attachments and delete individual or selected captured messages. Clearing the entire inbox requires explicit confirmation. Select **Lokalna poczta testowa** when creating a new project to configure its PHP-FPM mail transport and, for Laravel, its private `.env` SMTP settings. Existing projects are never changed automatically. See [Local test email](docs/LOCAL-MAIL.md) for limits, manual configuration and service management.
 
 ## Framework installers
 
@@ -96,4 +96,4 @@ MIT — [LICENSE](LICENSE).
 
 The dashboard lists every installed service in the root-owned `daemon/service-catalog.json` registry (including optional Mailpit). Click a service to start, stop or restart it after confirmation. Stopping Nginx/PHP-FPM also stops the dashboard; recover in Ubuntu with `sudo systemctl start nginx php8.5-fpm` or use the widget's existing restart action when available. The panel queues one delayed systemd action; an accepted request is not proof of success. Do not run updates or create projects while changing core services.
 
-Settings → Widżet DevStack w Windows saves the selected services independently of the dashboard. Widget 0.5.0.0 reads the selection through the existing authenticated read bridge and retains the original default four tiles; extra tiles scroll. New managed services are added to the registry, not arbitrary systemd services. The Windows bundle requires both the MSIX update and its `Install-DevStackWidget.ps1 -SkipFrontend` integration update, after the normal Linux updater. Never replace a newer dashboard with a static frontend from an older Windows bundle. WSL telemetry and lifecycle are unchanged.
+Settings → Widżety → Widżet DevStack w Windows saves the selected services independently of the dashboard. Widget 0.5.0.0 reads the selection through the existing authenticated read bridge and retains the original default four tiles; extra tiles scroll. New managed services are added to the registry, not arbitrary systemd services. The Windows bundle requires both the MSIX update and its `Install-DevStackWidget.ps1 -SkipFrontend` integration update, after the normal Linux updater. Never replace a newer dashboard with a static frontend from an older Windows bundle. WSL telemetry and lifecycle are unchanged.

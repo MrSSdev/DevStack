@@ -3,7 +3,7 @@
 
 :root {
   color-scheme: light;
-  --radius: .8rem;
+  --radius: .55rem;
   --background: oklch(0.985 0.003 260);
   --foreground: oklch(0.20 0.02 260);
   --card: oklch(1 0 0);
@@ -72,5 +72,4 @@
 * { border-color: var(--border); }
 html { @apply bg-background text-foreground; }
 body { @apply bg-background text-foreground antialiased; }
-button, input, textarea { font: inherit; }
 ::selection { @apply bg-foreground/15; }

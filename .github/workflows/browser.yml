@@ -1,0 +1,89 @@
+name: DevStack browser and real mailbox
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - 'daemon/**'
+      - 'scripts/install.sh'
+      - 'scripts/install-mailpit.sh'
+      - 'tests/browser-smoke.py'
+      - '.github/workflows/browser.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: Installed stack, Chromium, themes and SMTP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: composer
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build production UI
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm test && npm run build
+      - name: Install real stack in the disposable runner
+        run: |
+          # The product targets Ubuntu 26.04. The 24.04 CI image needs the
+          # upstream PHP packaging repository for the same 8.5 FPM packages.
+          sudo add-apt-repository -y ppa:ondrej/php
+          mkdir -p "$HOME/projects"
+          printf '2\nDISABLE\n' | sudo bash scripts/install.sh
+          sudo bash scripts/install-mailpit.sh
+          composer global require laravel/installer:^5.33 --no-interaction --no-progress
+          sudo apt-get install -y libnss3-tools
+          echo '127.0.0.1 devstack.test' | sudo tee -a /etc/hosts
+          sudo cp /var/lib/devstack/ca/rootCA.pem /usr/local/share/ca-certificates/devstack-browser.crt
+          sudo update-ca-certificates
+          mkdir -p "$HOME/.pki/nssdb"
+          certutil -N --empty-password -d "sql:$HOME/.pki/nssdb"
+          certutil -A -d "sql:$HOME/.pki/nssdb" -n DevStack-browser-fixture -t 'C,,' -i /usr/local/share/ca-certificates/devstack-browser.crt
+          python3 - <<'PY'
+          import os, secrets, subprocess
+          password = secrets.token_urlsafe(32)
+          print('::add-mask::' + password)
+          subprocess.run(['sudo', 'php', '-r', '$p = stream_get_contents(STDIN); file_put_contents("/etc/devstack/auth.hash", password_hash($p, PASSWORD_DEFAULT)); chown("/etc/devstack/auth.hash", "root"); chgrp("/etc/devstack/auth.hash", "devstackweb"); chmod("/etc/devstack/auth.hash", 0640);'], input=password, text=True, check=True)
+          subprocess.run(['sudo', 'sh', '-c', 'printf "required\\n" > /etc/devstack/auth.mode'], check=True)
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('DEVSTACK_E2E_PASSWORD=' + password + '\n')
+          PY
+      - name: Install browser tooling
+        run: |
+          python3 -m venv /tmp/devstack-browser-venv
+          /tmp/devstack-browser-venv/bin/pip install playwright==1.60.0
+          /tmp/devstack-browser-venv/bin/python -m playwright install --with-deps chromium
+      - name: Exercise actual HTTPS, PHP, helper, services and Mailpit
+        env:
+          DEVSTACK_E2E_ISOLATED: '1'
+          NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/devstack-browser.crt
+        run: /tmp/devstack-browser-venv/bin/python tests/browser-smoke.py
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          sudo journalctl -u devstackd -u nginx -u php8.5-fpm -u devstack-mailpit --no-pager -n 100
+          sudo tail -80 /var/log/nginx/error.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: devstack-browser-verification
+          path: browser-results/
+          if-no-files-found: warn
+          retention-days: 1

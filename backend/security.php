@@ -165,7 +165,7 @@ function devstack_body(): array
 /** Rate limit independent of browser cookies; local panel, one workstation. */
 function devstack_login_limit(bool $failure = false, bool $reset = false): bool
 {
-    $file = '/var/lib/devstack/web-sessions/login-attempts.json';
+    $file = '/var/lib/devstack-web/sessions/login-attempts.json';
     $fp = @fopen($file, 'c+');
     if ($fp === false) {
         // Fail closed if throttling data is inaccessible.
@@ -205,6 +205,24 @@ function devstack_mailpit_target(string $action, array $data): array
         $query = trim($query);
         return ['GET', ($query === '' ? '/messages?' : '/search?query=' . rawurlencode($query) . '&') .
                 'start=' . (int)$start . '&limit=40', null];
+    }
+    if ($action === 'clear') {
+        if (count($data) !== 1 || ($data['confirmation'] ?? null) !== 'delete-all') {
+            throw new InvalidArgumentException('Potwierdź opróżnienie całej skrzynki.');
+        }
+        return ['DELETE', '/messages', '{"IDs":[]}'];
+    }
+    if ($action === 'delete-many') {
+        $ids = $data['ids'] ?? null;
+        if (count($data) !== 1 || !is_array($ids) || !array_is_list($ids) || count($ids) < 1 || count($ids) > 40) {
+            throw new InvalidArgumentException('Wybierz od 1 do 40 wiadomości.');
+        }
+        foreach ($ids as $id) {
+            if (!is_string($id) || !preg_match('~^[A-Za-z0-9]{22}$~D', $id)) {
+                throw new InvalidArgumentException('Nieprawidłowy identyfikator wiadomości.');
+            }
+        }
+        return ['DELETE', '/messages', json_encode(['IDs' => array_values(array_unique($ids))], JSON_THROW_ON_ERROR)];
     }
     $id = $data['id'] ?? null;
     // Mailpit 1.34 uses 22-character shortuuid identifiers; exclude "latest".
@@ -249,7 +267,7 @@ function devstack_mailpit_request(string $action, array $data): array|string
         throw new RuntimeException('Wiadomość jest za duża dla podglądu DevStack. Użyj pełnego interfejsu Mailpit.');
     }
     if ($action === 'attachment') return $response;
-    if ($action === 'delete') {
+    if (in_array($action, ['delete', 'delete-many', 'clear'], true)) {
         if (trim($response) !== 'ok') throw new RuntimeException('Mailpit nie potwierdził usunięcia.');
         return ['deleted' => true];
     }
