@@ -135,6 +135,31 @@ class BrowserAcceptance(unittest.TestCase):
     def test_01_real_project_and_all_views(self):
         response = self.post('/api/projects', dict(slug='browser-fixture', name='Browser fixture', domain='browser-fixture.test', webroot='public', database=True, https=True, local_mail=True, engine='none', starter_kit='none', installer_options={}))
         self.assertEqual(response.status, 200, response.text())
+        # Seed a project using the former two-field API, then open and save it
+        # using the single editor. The real helper must retain both rule types.
+        flux = (r'location ~* ^/flux/flux\.js$ {'
+                ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        legacy = self.post('/api/config', {'slug':'browser-fixture','overrides':'client_max_body_size 64m;','extra_locations':flux})
+        self.assertEqual(legacy.status, 200, legacy.text())
+        self.goto('projects')
+        self.page.locator('main button').filter(has_text='Browser fixture').click()
+        editor = self.page.get_by_role('textbox',name='Dodatkowe reguły Nginx',exact=True)
+        expect(editor).to_have_count(1)
+        self.assertIn('client_max_body_size 64m;', editor.input_value())
+        self.assertIn('location ~* ^/flux/', editor.input_value())
+        expect(self.page.get_by_text('Dodatkowe reguły — location /',exact=True)).to_have_count(0)
+        expect(self.page.get_by_text('Dodatkowe lokalizacje zasobów JS/CSS',exact=True)).to_have_count(0)
+        editor.fill('client_max_body_size 128m;\n\n' + flux)
+        self.page.get_by_role('button',name='Sprawdź i zastosuj',exact=True).click()
+        expect(self.page.get_by_role('status').filter(has_text='Konfiguracja przetestowana')).to_be_visible()
+        self.assertIn('client_max_body_size 128m;', editor.input_value())
+        self.assertIn('expires off;', editor.input_value())
+        invalid = self.post('/api/config', {'slug':'browser-fixture','rules':'include /etc/shadow;'})
+        self.assertEqual(invalid.status,422)
+        self.goto('projects')
+        self.page.locator('main button').filter(has_text='Browser fixture').click()
+        self.assertIn('client_max_body_size 128m;', editor.input_value())
+        self.assertIn('location ~* ^/flux/', editor.input_value())
         long_slug='long-'+'a'*35
         response=self.post('/api/projects',dict(slug=long_slug,name='A'*70,domain=long_slug+'.test',webroot='public',database=False,https=False,local_mail=False,engine='none',starter_kit='none',installer_options={}))
         self.assertEqual(response.status,200,response.text())

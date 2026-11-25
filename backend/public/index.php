@@ -226,6 +226,15 @@ try {
         ])]);
     }
     if ($method === 'POST' && $path === '/api/config') {
+        if (array_key_exists('rules', $body)) {
+            if (count($body) !== 2 || !array_key_exists('slug', $body)) {
+                throw new InvalidArgumentException('Nieprawidłowe pola konfiguracji Nginx.');
+            }
+            devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
+                'slug' => $body['slug'],
+                'rules' => $body['rules'],
+            ])]);
+        }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
             'slug' => $body['slug'] ?? null,
             'overrides' => $body['overrides'] ?? null,

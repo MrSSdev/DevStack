@@ -11,7 +11,7 @@ at 640, 853, 1024, 1280 and 1920 CSS pixels; persisted themes; keyboard drawer
 navigation; project creation; installer links; widget persistence; confirmed
 Redis stop/start; HTML/plain/source views; exact attachment downloads;
 search, pagination, deletion, polling and recovery from a stopped Mailpit;
-long project names; authentication, session rotation,
+long project names; unified Nginx editor with both stored rule types, safe validation and reload; authentication, session rotation,
 CSRF, origin validation, input rejection and login rate limiting.
 
 Screenshots, traces and the screenshot manifest are uploaded for one day.

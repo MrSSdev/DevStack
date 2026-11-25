@@ -47,6 +47,33 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(d.InputError, msg=value):
                 d.check_overrides(value)
 
+    def test_unified_nginx_editor_preserves_both_managed_regions(self):
+        flux = (r'location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {'
+                ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        tuning = 'client_max_body_size 64m;\nclient_body_timeout 120s;'
+        expected = {'overrides': tuning, 'extra_locations': d.check_extra_locations(flux)}
+        self.assertEqual(d.check_nginx_rules(tuning + '\n\n' + flux), expected)
+        self.assertEqual(d.check_nginx_rules(flux + '\n# tuning\n' + tuning), expected)
+        self.assertEqual(d.check_nginx_rules(expected['overrides'] + '\n\n' + expected['extra_locations']), expected)
+        self.assertEqual(d.check_nginx_rules(' \n# nothing\n'), {'overrides': '', 'extra_locations': ''})
+        self.assertEqual(d.check_nginx_rules(flux)['overrides'], '')
+        self.assertEqual(d.check_nginx_rules(tuning)['extra_locations'], '')
+
+    def test_unified_nginx_editor_rejects_unsafe_or_duplicate_rules(self):
+        flux = (r'location ~* ^/flux/flux\.js$ {'
+                ' try_files $uri $uri/ /index.php?$query_string; }')
+        for bad in (None, 'x' * 5803, 'client_max_body_size 0m;',
+                    'client_max_body_size 64m;\nclient_max_body_size 128m;',
+                    'location / { proxy_pass http://evil.test; }',
+                    flux + '\n' + flux, flux + '\ninclude /etc/shadow;',
+                    flux.replace('try_files', 'root /etc; try_files'),
+                    flux.replace('/index.php?', '/secret.php?'),
+                    'client_body_timeout 120s;\n' + flux + '\x00'):
+            with self.assertRaises(d.InputError, msg=repr(bad)):
+                d.check_nginx_rules(bad)
+        with self.assertRaises(d.InputError):
+            d.update_config({'slug':'alpha','rules':'','overrides':''})
+
     def test_theme_defaults_and_persists_server_side(self):
         with tempfile.TemporaryDirectory() as tmp:
             pref = Path(tmp) / 'preferences.json'
@@ -436,7 +463,7 @@ class ValidationTests(unittest.TestCase):
                 # Preserve pathlib.Path semantics for other uses and redirect only backup location.
                 dummy.Path.side_effect = lambda value: backup if value=='/var/lib/devstack' else Path(value)
                 with self.assertRaises(RuntimeError):
-                    d.update_config({'slug':'alpha','overrides':'client_max_body_size 64m;'})
+                    d.update_config({'slug':'alpha','rules':'client_max_body_size 64m;'})
             self.assertEqual(target.read_text(), 'old config')
             self.assertEqual(json.loads(state.read_text())['alpha']['overrides'], '')
 
