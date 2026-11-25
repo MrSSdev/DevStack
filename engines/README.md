@@ -4,6 +4,15 @@ DevStack manages the project lifecycle; adapters delegate scaffolding and tool
 maintenance to the framework's official CLI. An engine is not a template
 bundled by DevStack. No framework package is executed as root.
 
+## Adding an engine
+
+The root-owned catalog describes the label, tool, document root and allowed
+installation variants. The UI and API use its registered identifiers. Add a
+separate adapter directory, explicitly register its class in registry.py, add
+its catalog entry, include the files in the trusted installation/update
+package, and add tests. Do not resolve arbitrary Python module names or CLI
+arguments from a browser request.
+
 ## Contract
 
 The root-owned coordinator selects an allowlisted engine and action. An

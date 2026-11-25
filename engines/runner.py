@@ -12,7 +12,8 @@ import tempfile
 # The installed runner and its modules are root-owned. Isolated Python is
 # invoked by the coordinator; never import modules from the working project.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from laravel.adapter import AdapterError, LaravelAdapter
+from laravel.adapter import AdapterError
+from registry import ADAPTERS
 
 
 def main() -> int:
@@ -23,19 +24,19 @@ def main() -> int:
     if pathlib.Path(os.environ.get("HOME", "")) != home:
         print(json.dumps({"ok": False, "error": "Invalid developer home."}))
         return 1
-    if len(sys.argv) < 3 or sys.argv[1] != "laravel":
+    if len(sys.argv) < 3 or sys.argv[1] not in ADAPTERS:
         print(json.dumps({"ok": False, "error": "Unsupported engine."}))
         return 1
-    action, args = sys.argv[2], sys.argv[3:]
+    engine, action, args = sys.argv[1], sys.argv[2], sys.argv[3:]
     log_path = None
     try:
         directory = home / ".cache" / "devstack" / "engines"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
-                                         dir=directory, prefix="laravel-",
+                                         dir=directory, prefix=engine + "-",
                                          suffix=".log", delete=False) as log:
             log_path = pathlib.Path(log.name)
-            adapter = LaravelAdapter(home, log)
+            adapter = ADAPTERS[engine](home, log)
             if action == "status" and not args:
                 result = adapter.status()
             elif action == "check" and not args:

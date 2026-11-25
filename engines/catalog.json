@@ -1,0 +1,21 @@
+{
+  "laravel": {
+    "label": "Laravel",
+    "tool": "Laravel Installer",
+    "webroot": "public",
+    "default_option": "none",
+    "option_label": "Starter kit Laravel",
+    "option_hint": "Livewire zawiera Flux UI i uwierzytelnianie Laravel.",
+    "options": [
+      {
+        "id": "none",
+        "label": "Bez starter kitu"
+      },
+      {
+        "id": "livewire",
+        "label": "Livewire"
+      }
+    ],
+    "description": "Oficjalny instalator Composer; wymagane PHP, Composer, Node.js i npm."
+  }
+}

@@ -109,13 +109,14 @@ try {
         }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('set_preferences', ['theme' => $theme])]);
     }
-    if ($method === 'GET' && $path === '/api/engines/laravel') {
+    $engineRoute = preg_match('~^/api/engines/([a-z][a-z0-9-]{1,39})$~D', $path, $engineMatch) === 1;
+    if ($method === 'GET' && $engineRoute) {
         if (!devstack_password_required()) {
             devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_status', ['engine' => 'laravel'])]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_status', ['engine' => $engineMatch[1]])]);
     }
-    if ($method === 'POST' && $path === '/api/engines/laravel') {
+    if ($method === 'POST' && $engineRoute) {
         if (!devstack_password_required()) {
             devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
         }
@@ -124,12 +125,12 @@ try {
             devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowa operacja instalatora.']);
         }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_action', [
-            'engine' => 'laravel', 'action' => $body['action'],
+            'engine' => $engineMatch[1], 'action' => $body['action'],
         ])]);
     }
     if ($method === 'POST' && $path === '/api/projects') {
         $engine = $body['engine'] ?? 'none';
-        if (!is_string($engine) || !in_array($engine, ['none', 'laravel'], true)) {
+        if (!is_string($engine) || !preg_match('~^[a-z][a-z0-9-]{1,39}$~D', $engine)) {
             devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowy silnik projektu.']);
         }
         if ($engine !== 'none' && !devstack_password_required()) {
