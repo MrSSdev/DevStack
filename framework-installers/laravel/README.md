@@ -16,7 +16,38 @@ laravel new example --no-interaction --no-ansi --database=sqlite --pest --npm --
 laravel new example --no-interaction --no-ansi --database=mariadb --pest --npm --no-boost --livewire
 ```
 
-The variants are plain Laravel and the official Livewire Starter Kit.
+## Discovering starter kits
+
+The dropdown is not a maintained list of kit names. The adapter invokes the
+installed binary as the developer:
+
+```sh
+laravel help new --format=json --no-interaction --no-ansi
+```
+
+Symfony Console supplies the command definition. The adapter recognizes
+value-less switches described by the installer as "Install the ... Starter Kit"
+and offers Blade (no kit), the recognized first-party kits and their blank
+variants when the official `--no-authentication` switch is available. In
+Installer 5.33.0 this yields React, Svelte, Vue and Livewire, plus the four
+without application authentication. These are different from the dashboard's
+authentication setting. Status is read when opening/selecting the framework
+form, manually refreshing it, and after an installer job; the server and
+worker validate the choice again before installation. There is no periodic
+background discovery or network lookup for this list.
+
+The JSON help is official, but its descriptions are not a dedicated stable
+starter-kit schema. If the option metadata changes incompatibly, discovery
+fails closed while the installer version and maintenance remain available.
+Do not forward arbitrary flags or package URLs. Community starter kits
+(`--using`) are unbounded external package choices and are not automatically
+listed. WorkOS, teams and component style are separate installer settings, not
+additional frontend stacks; this form keeps the standard authenticated
+starter kit defaults unless a blank variant is chosen.
+
+## Standard migrations
+
+
 The Laravel Installer v5.33.0 does not provide a no-migrations option. Its
 normal initial migrations and Composer hooks are therefore retained, on the
 database selected in the panel. DevStack does not run artisan migrate or

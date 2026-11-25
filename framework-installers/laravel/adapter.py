@@ -59,18 +59,80 @@ def project_path(projects: pathlib.Path, slug: str, *, exists: bool) -> pathlib.
     return root
 
 
-def scaffold_argv(installer: str, slug: str, kit: str, driver: str = "sqlite") -> list[str]:
+KIT_FLAG = re.compile(r"[a-z][a-z0-9-]{1,28}\Z")
+KIT_DESCRIPTION = re.compile(r"Install the ([A-Za-z0-9][A-Za-z0-9 .+/#-]{0,39}) Starter Kit\.?", re.I)
+# Never interpret operational flags as a starter-kit selection, even if
+# upstream changes a description. The browser cannot supply arguments.
+NON_KIT_FLAGS = frozenset({
+    "none", "force", "using", "dev", "git", "branch", "github",
+    "organization", "database", "workos", "teams", "no-authentication",
+    "livewire-class-components", "pest", "phpunit", "npm", "pnpm", "bun",
+    "yarn", "no-node", "boost", "no-boost", "help", "quiet", "verbose",
+    "version", "ansi", "no-ansi", "no-interaction", "format",
+})
+
+
+def discover_starter_kits(raw: str) -> dict[str, dict[str, Any]]:
+    """Read Symfony's official JSON help, not the interactive screen or files.
+
+    There is no dedicated upstream starter-kit enumeration endpoint. A
+    first-party kit is a value-less option described as "Install the ... Starter
+    Kit". If the metadata contract changes, fail closed rather than guessing
+    flags or silently presenting a stale list.
+    """
+    try:
+        if len(raw) > 65536:
+            raise ValueError("oversized help")
+        document = json.loads(raw)
+        if document["name"] != "new":
+            raise ValueError("unexpected command")
+        options = document["definition"]["options"]
+        if not isinstance(options, dict) or not {"database", "pest", "npm", "no-boost"} <= options.keys():
+            raise ValueError("missing installer metadata")
+    except (KeyError, TypeError, ValueError):
+        raise AdapterError("Unable to discover starter kits from the official installer.", "starter_kits") from None
+
+    def switch(name: str, option: Any) -> bool:
+        return (isinstance(option, dict) and option.get("name") == "--" + name
+                and option.get("accept_value") is False
+                and option.get("is_multiple") is False
+                and option.get("default") is False)
+
+    found: dict[str, dict[str, Any]] = {}
+    for name, option in options.items():
+        if (not isinstance(name, str) or not KIT_FLAG.fullmatch(name)
+                or name in NON_KIT_FLAGS or name.startswith(("no-", "blank-"))
+                or not switch(name, option)):
+            continue
+        description = option.get("description")
+        match = KIT_DESCRIPTION.fullmatch(description) if isinstance(description, str) else None
+        if match:
+            found[name] = {"label": match.group(1), "flags": ["--" + name]}
+    if not found or len(found) > 16:
+        raise AdapterError("Unable to discover starter kits from the official installer.", "starter_kits")
+
+    result: dict[str, dict[str, Any]] = {"none": {"label": "Blade (bez starter kitu)", "flags": []}}
+    result.update(found)
+    if switch("no-authentication", options.get("no-authentication")):
+        for name, item in found.items():
+            result["blank-" + name] = {
+                "label": item["label"] + " (bez logowania aplikacji)",
+                "flags": [*item["flags"], "--no-authentication"],
+            }
+    return result
+
+
+def scaffold_argv(installer: str, slug: str, kit: str, driver: str = "sqlite",
+                  *, choices: dict[str, dict[str, Any]]) -> list[str]:
     if not isinstance(slug, str) or not SLUG.fullmatch(slug):
         raise AdapterError("Invalid project identifier.")
-    if kit not in ("none", "livewire"):
-        raise AdapterError("Unsupported Laravel starter kit.")
+    if not isinstance(kit, str) or kit not in choices:
+        raise AdapterError("Starter kit is unavailable in the installed Laravel version.", "starter_kit_unavailable")
     if driver not in ("sqlite", "mariadb"):
         raise AdapterError("Unsupported Laravel database driver.")
-    args = [installer, "new", slug, "--no-interaction", "--no-ansi",
-            "--database=" + driver, "--pest", "--npm", "--no-boost"]
-    if kit == "livewire":
-        args.append("--livewire")
-    return args
+    return [installer, "new", slug, "--no-interaction", "--no-ansi",
+            "--database=" + driver, "--pest", "--npm", "--no-boost",
+            *choices[kit]["flags"]]
 
 
 def tool_argv(composer: str, action: str) -> list[str]:
@@ -157,17 +219,29 @@ class LaravelAdapter:
             raise AdapterError("Laravel Installer is not installed.")
         return None
 
+    def starter_kits(self, installer: pathlib.Path) -> dict[str, dict[str, Any]]:
+        raw = self.command([str(installer), "help", "new", "--format=json",
+                            "--no-interaction", "--no-ansi"], capture=True, timeout=12)
+        return discover_starter_kits(raw)
+
     def status(self) -> dict[str, Any]:
         if not shutil.which("composer"):
-            return {"composer": False, "installed": None}
+            return {"composer": False, "installed": None, "starter_kits": []}
         installer = self.installer(required=False)
         if installer is None:
-            return {"composer": True, "installed": None}
+            return {"composer": True, "installed": None, "starter_kits": []}
         raw = self.command([str(installer), "--version", "--no-ansi"], capture=True, timeout=15)
         match = re.fullmatch(r"Laravel Installer (v?[0-9]+\.[0-9]+\.[0-9]+)", raw)
         if not match:
             raise AdapterError("Could not determine the installed Laravel Installer version.")
-        return {"composer": True, "installed": version(match.group(1))}
+        # Keep maintenance available when a new upstream help format cannot
+        # be classified. Do not fall back to an old hard-coded kit list.
+        try:
+            kits = [{"id": name, "label": item["label"]}
+                    for name, item in self.starter_kits(installer).items()]
+        except AdapterError:
+            kits = None
+        return {"composer": True, "installed": version(match.group(1)), "starter_kits": kits}
 
     def check(self) -> dict[str, Any]:
         current = self.status()
@@ -221,6 +295,8 @@ class LaravelAdapter:
             raise AdapterError("Database choice does not match the supplied configuration.")
         self.require_frontend_tools()
         binary = self.installer()
+        choices = self.starter_kits(binary)
+        argv = scaffold_argv(str(binary), slug, kit, driver, choices=choices)
         # Laravel's own installer and its Composer hooks perform their normal
         # migrations. PHP's dotenv loader preserves process environment values.
         # Override the connection for the whole installer process, including
@@ -230,8 +306,7 @@ class LaravelAdapter:
                    "DB_SOCKET"}
         clean_env = {key: value for key, value in os.environ.items() if key not in db_keys}
         installer_env = {**clean_env, **values, "DB_CONNECTION": driver}
-        self.command(scaffold_argv(str(binary), slug, kit, driver),
-                     cwd=self.projects, env=installer_env)
+        self.command(argv, cwd=self.projects, env=installer_env)
         project_path(self.projects, slug, exists=True)
         public = root / "public"
         if public.is_symlink() or not public.is_dir():

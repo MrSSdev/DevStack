@@ -13,14 +13,53 @@ permissions:
   contents: read
 
 jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      matrix: ${{ steps.kits.outputs.matrix }}
+      installer: ${{ steps.kits.outputs.installer }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: none
+      - name: Discover real installed starter kits
+        id: kits
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          runner="$PWD/framework-installers/runner.py"
+          mkdir -p "$HOME/projects"
+          composer global require laravel/installer --no-interaction --no-ansi --no-progress --prefer-dist
+          python3 -I "$runner" laravel status > "$RUNNER_TEMP/engine-status.json"
+          python3 - "$RUNNER_TEMP/engine-status.json" <<'PY'
+          import json, os, sys
+          result = json.load(open(sys.argv[1]))["result"]
+          kits = result["starter_kits"]
+          assert kits and result["installed"], "Could not discover installer capabilities"
+          ids = [item["id"] for item in kits]
+          assert "none" in ids and len(ids) > 1
+          print("Discovered starter kits:", ", ".join(ids))
+          matrix = {"include": [{"kit": kit, "driver": driver}
+                                for kit in ids
+                                for driver in ("sqlite", "mariadb")
+                                if not (kit.startswith("blank-") and driver == "mariadb")]}
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print("matrix=" + json.dumps(matrix, separators=(",", ":")), file=out)
+              print("installer=" + result["installed"], file=out)
+          PY
   install:
+    needs: discover
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      matrix:
-        kit: [none, livewire]
-        driver: [sqlite, mariadb]
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     services:
       mariadb:
         image: mariadb:11.8
@@ -52,20 +91,24 @@ jobs:
         env:
           KIT: ${{ matrix.kit }}
           DRIVER: ${{ matrix.driver }}
+          INSTALLER_VERSION: ${{ needs.discover.outputs.installer }}
         run: |
           set -Eeuo pipefail
           test "$(id -u)" -ne 0
           git config --global user.name "DevStack CI"
           git config --global user.email "ci@example.invalid"
           mkdir -p "$HOME/projects"
-          slug="devstack-ci-$KIT"
+          slug="ci-$KIT"
           test ! -e "$HOME/projects/$slug"
           runner="$PWD/framework-installers/runner.py"
+          composer global require "laravel/installer:$INSTALLER_VERSION" --no-interaction --no-ansi --no-progress --prefer-dist
           python3 -I "$runner" laravel status > "$RUNNER_TEMP/engine-status.json"
-          if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["result"]["installed"] is None else 1)' "$RUNNER_TEMP/engine-status.json"; then
-            python3 -I "$runner" laravel install-tool
-          fi
-          python3 -I "$runner" laravel status
+          python3 - "$RUNNER_TEMP/engine-status.json" "$KIT" "$INSTALLER_VERSION" <<'PY'
+          import json, sys
+          info = json.load(open(sys.argv[1]))["result"]
+          assert info["installed"] == sys.argv[3]
+          assert sys.argv[2] in [kit["id"] for kit in info["starter_kits"]]
+          PY
           python3 -I "$runner" laravel check
           if [[ "$DRIVER" = mariadb ]]; then
             settings="{\"url\":\"https://$slug.test\",\"db_name\":\"fixture_db\",\"db_user\":\"fixture_user\",\"db_password\":\"fixture_password\"}"
@@ -80,10 +123,12 @@ jobs:
           cd "$HOME/projects/$slug"
           composer check-platform-reqs
           composer show laravel/framework
-          if [[ "$KIT" = livewire ]]; then
-            composer show livewire/livewire
-            composer show livewire/flux
-          fi
+          case "$KIT" in
+            livewire) composer show livewire/livewire; composer show livewire/flux ;;
+            blank-livewire) composer show livewire/livewire ;;
+            react|blank-react|vue|blank-vue|svelte|blank-svelte)
+              STACK="${KIT#blank-}" node -e 'const p=require("./package.json"); if (!({...p.dependencies,...p.devDependencies})[process.env.STACK]) process.exit(1)' ;;
+          esac
           test -s public/build/manifest.json
           grep -Fxq "APP_URL=https://$slug.test" .env
           grep -Fxq "DB_CONNECTION=$DRIVER" .env
@@ -121,12 +166,12 @@ jobs:
           KIT: ${{ matrix.kit }}
           DRIVER: ${{ matrix.driver }}
         run: |
-          if printf '%s' '{"url":"https://existing.test"}' | python3 -I framework-installers/runner.py laravel scaffold "devstack-ci-$KIT" "$KIT" "$DRIVER"; then
+          if printf '%s' '{"url":"https://existing.test"}' | python3 -I framework-installers/runner.py laravel scaffold "ci-$KIT" "$KIT" "$DRIVER"; then
             echo 'Adapter unexpectedly accepted an existing project' >&2
             exit 1
           fi
-          if python3 -I framework-installers/runner.py laravel migrate "devstack-ci-$KIT"; then
+          if python3 -I framework-installers/runner.py laravel migrate "ci-$KIT"; then
             echo 'Adapter unexpectedly accepted a separate migration operation' >&2
             exit 1
           fi
-          test -s "$HOME/projects/devstack-ci-$KIT/artisan"
+          test -s "$HOME/projects/ci-$KIT/artisan"
