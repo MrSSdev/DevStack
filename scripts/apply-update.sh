@@ -37,8 +37,13 @@ if cfg.get('dev_user') != sys.argv[1] or cfg.get('projects_dir') != sys.argv[2] 
     sys.exit('DevStack configured owner/project root does not match the updating user.')
 PY
 
+if [[ -L "$src/engines" || -L "$src/engines/laravel" ]]; then
+  echo 'Unsafe adapter source directory.' >&2
+  exit 1
+fi
+
 for file in backend/public/index.php backend/public/index.html backend/security.php \
-    daemon/devstackd.py scripts/list-domains.py scripts/watch-domains.py \
+    daemon/devstackd.py engines/runner.py engines/laravel/__init__.py engines/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
     scripts/set-password.php scripts/configure-auth.php; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
     echo "Missing or unsafe source file: $file" >&2
@@ -98,6 +103,10 @@ install -m 0644 -o root -g root "$src/backend/security.php" "$stage_dir/security
 install -m 0644 -o root -g root "$src/backend/public/index.php" "$stage_dir/public/index.php"
 install -m 0644 -o root -g root "$src/backend/public/index.html" "$stage_dir/public/index.html"
 install -m 0644 -o root -g root "$src/daemon/devstackd.py" "$stage_dir/daemon/devstackd.py"
+install -d -m 0755 -o root -g root "$stage_dir/engines" "$stage_dir/engines/laravel"
+for item in runner.py laravel/__init__.py laravel/adapter.py; do
+  install -m 0644 -o root -g root "$src/engines/$item" "$stage_dir/engines/$item"
+done
 for item in list-domains.py watch-domains.py set-password.php configure-auth.php; do
   install -m 0644 -o root -g root "$src/scripts/$item" "$stage_dir/scripts/$item"
 done
@@ -122,7 +131,7 @@ python3 - "$stage_dir" <<'PY'
 import pathlib
 import sys
 root = pathlib.Path(sys.argv[1])
-for rel in ('daemon/devstackd.py', 'scripts/list-domains.py', 'scripts/watch-domains.py'):
+for rel in ('daemon/devstackd.py', 'engines/runner.py', 'engines/laravel/adapter.py', 'scripts/list-domains.py', 'scripts/watch-domains.py'):
     path = root / rel
     compile(path.read_bytes(), str(path), 'exec')
 print('Staged Python syntax OK')

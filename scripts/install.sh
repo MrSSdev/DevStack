@@ -50,6 +50,15 @@ install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web /var/lib/
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
 cp -a "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
+if [[ -L "$SRC/engines" || -L "$SRC/engines/laravel" ]]; then
+  echo 'Unsafe adapter source directory.' >&2
+  exit 1
+fi
+install -d -m 0755 -o root -g root /opt/devstack/engines /opt/devstack/engines/laravel
+for item in runner.py laravel/__init__.py laravel/adapter.py; do
+  [[ -f "$SRC/engines/$item" && ! -L "$SRC/engines/$item" ]] || { echo "Unsafe engine source: $item" >&2; exit 1; }
+  install -m 0644 -o root -g root "$SRC/engines/$item" "/opt/devstack/engines/$item"
+done
 cp -a "$SRC/scripts/list-domains.py" /opt/devstack/scripts/list-domains.py
 cp -a "$SRC/scripts/watch-domains.py" /opt/devstack/scripts/watch-domains.py
 cp -a "$SRC/scripts/set-password.php" /opt/devstack/scripts/set-password.php

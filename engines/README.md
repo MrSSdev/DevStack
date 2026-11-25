@@ -34,15 +34,21 @@ scoped to its Composer package/dependencies. It does not upgrade existing
 Laravel applications. A major-version constraint change requires a deliberate
 separate decision.
 
-## Integration still required
+## Integration and acceptance (draft)
 
-- Authenticated new-project dropdown and conditional starter-kit options.
-- A durable job lifecycle outside the request timeout; no idle polling or new
-  resident watcher. Reserve the slug and domain, serialize conflicting work,
-  preserve partial files, and report failure honestly.
-- Root provisioning only after successful scaffolding; pass database settings
-  via private stdin to the unprivileged adapter after provisioning. Mark ready
-  only after the application configuration and migration checks succeed.
-- Settings UI for tool status, install, check and update.
-- Package the root-owned adapter code in both fresh installs and updates.
-- Mock-based tests, CI, and a real isolated WSL acceptance test.
+- The new-project form includes the engine selector and starter kit. Laravel
+  requires the public document root and an authenticated panel (not the
+  passwordless mode). No-engine projects retain the original workflow.
+- A single root-owned job record reserves conflicting operations, and the daemon
+  runs only developer-identity workers outside the HTTP request. The daemon
+  checks for completion while a job is active, not when idle. Restart records
+  an interrupted job without automatically retrying or deleting files.
+- Root provisioning follows successful scaffolding; the configure worker reads
+  the generated DB settings through private stdin. The migration worker runs
+  as the developer. Failure preserves partial files and any already-registered
+  project, marking its engine status as failed instead of ready.
+- Settings exposes explicit local version, check, install and update operations.
+- Both fresh installation and update package the root-owned adapter code.
+- Required before release: CI plus a real isolated WSL test of the worker
+  identity, constraints, complete workflow, Composer and npm versions, TLS,
+  database configuration, failure/restart handling and no-engine regression.

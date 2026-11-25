@@ -109,7 +109,32 @@ try {
         }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('set_preferences', ['theme' => $theme])]);
     }
+    if ($method === 'GET' && $path === '/api/engines/laravel') {
+        if (!devstack_password_required()) {
+            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
+        }
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_status', ['engine' => 'laravel'])]);
+    }
+    if ($method === 'POST' && $path === '/api/engines/laravel') {
+        if (!devstack_password_required()) {
+            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
+        }
+        if (count($body) !== 1 || !is_string($body['action'] ?? null) ||
+            !in_array($body['action'], ['check', 'install-tool', 'update-tool'], true)) {
+            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowa operacja instalatora.']);
+        }
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_action', [
+            'engine' => 'laravel', 'action' => $body['action'],
+        ])]);
+    }
     if ($method === 'POST' && $path === '/api/projects') {
+        $engine = $body['engine'] ?? 'none';
+        if (!is_string($engine) || !in_array($engine, ['none', 'laravel'], true)) {
+            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowy silnik projektu.']);
+        }
+        if ($engine !== 'none' && !devstack_password_required()) {
+            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają włączonego logowania do panelu.']);
+        }
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('create', [
             'slug' => $body['slug'] ?? null,
             'name' => $body['name'] ?? null,
@@ -117,6 +142,8 @@ try {
             'webroot' => $body['webroot'] ?? null,
             'database' => $body['database'] ?? false,
             'https' => $body['https'] ?? true,
+            'engine' => $engine,
+            'starter_kit' => $body['starter_kit'] ?? 'none',
         ])]);
     }
     if ($method === 'POST' && $path === '/api/projects/test-db') {

@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 import pathlib
+import queue
+import threading
 import pwd
 import re
 import secrets
@@ -26,6 +28,12 @@ SECRET_FILE = pathlib.Path('/var/lib/devstack/credentials.json')
 PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
 CA_PUBLIC_FILE = pathlib.Path('/var/lib/devstack/ca/rootCA.pem')  # Public cert ONLY; never expose rootCA-key.pem.
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
+ENGINE_JOB_FILE = pathlib.Path('/var/lib/devstack/engine-job.json')
+ENGINE_RUNNER = '/opt/devstack/engines/runner.py'
+ENGINE_RESULTS = queue.SimpleQueue()
+ENGINE_ACTIVE = {'scaffolding', 'configuring', 'migrating', 'checking', 'installing', 'updating'}
+ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
+ENGINE_UNIT = re.compile(r'devstack-engine-[0-9a-f]{32}-[a-z-]+\Z')
 WINDOWS_SCHTASKS = pathlib.Path('/mnt/c/Windows/System32/schtasks.exe')
 WINDOWS_HOSTS_TASK = 'DevStack Hosts Event Sync'
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
@@ -294,7 +302,7 @@ def preferences(_: dict[str, Any]) -> dict[str, str]:
 
 def status(_: dict[str, Any]) -> dict[str, Any]:
     return {'services': service_status(), 'projects': public_projects(),
-            'preferences': get_ui_preferences()}
+            'preferences': get_ui_preferences(), 'engine_job': public_engine_job()}
 
 
 
@@ -513,7 +521,7 @@ def drop_db(name: str, user: str) -> None:
     mariadb_execute(f"DROP DATABASE IF EXISTS `{name}`; DROP USER IF EXISTS '{user}'@'127.0.0.1';")
 
 
-def create(data: dict[str, Any]) -> dict[str, str]:
+def create_environment(data: dict[str, Any]) -> dict[str, str]:
     cfg = config()
     slug = check_slug(data.get('slug'))
     name = check_name(data.get('name'))
@@ -560,6 +568,8 @@ def create(data: dict[str, Any]) -> dict[str, str]:
             'db_user': db_info[1] if db_info else '',
             'overrides': '', 'extra_locations': '',
         }
+        if data.get('engine') == 'laravel':
+            state[slug].update(engine='laravel', starter_kit=data['starter_kit'], engine_status='configuring')
         if db_info:
             secrets_state[slug] = {'password': db_info[2]}
         write_json_atomic(SECRET_FILE, secrets_state)
@@ -642,6 +652,7 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
     A MariaDB project requires explicit acknowledgement of permanent database
     removal. Staged Nginx/PHP configs are restored if a pre-commit step fails.
     """
+    ensure_engine_idle()
     if set(data) != {'slug', 'confirmation', 'delete_database'}:
         raise InputError('Nieprawidlowe dane usuwania projektu.')
     slug = check_slug(data.get('slug'))
@@ -813,7 +824,273 @@ def update_full_config(data: dict[str, Any]) -> dict[str, str]:
     return {**outcome, **validated}
 
 
+
+# The request handler is intentionally short. Only the developer-identity
+# process runs in a worker thread; all privileged provisioning and JSON state
+# mutations remain serialized on the daemon's main thread.
+def engine_job() -> dict[str, Any]:
+    return read_json(ENGINE_JOB_FILE) if ENGINE_JOB_FILE.exists() else {}
+
+
+def engine_busy() -> bool:
+    return engine_job().get('state') in ENGINE_ACTIVE
+
+
+def ensure_engine_idle() -> None:
+    if engine_busy():
+        raise InputError('Trwa operacja instalatora. Zaczekaj na jej zakonczenie.')
+
+
+def public_engine_job() -> dict[str, Any] | None:
+    job = engine_job()
+    if not job:
+        return None
+    # Never return private request state or a database credential.
+    return {key: job[key] for key in
+            ('id', 'action', 'state', 'message', 'slug', 'log', 'tool')
+            if key in job}
+
+
+def engine_identity() -> tuple[str, str]:
+    cfg = config()
+    user = cfg['dev_user']
+    account = pwd.getpwnam(user)
+    home = '/home/' + user
+    if account.pw_uid == 0 or user == 'devstackweb' or account.pw_dir != home:
+        raise RuntimeError('Nieprawidlowe konto instalatora.')
+    return user, home
+
+
+def engine_unit_args(unit: str, action: str, args: list[str], timeout: int) -> list[str]:
+    if not ENGINE_UNIT.fullmatch(unit):
+        raise RuntimeError('Nieprawidlowa jednostka instalatora.')
+    user, home = engine_identity()
+    # systemd, not the root daemon, switches identity. No shell or inherited
+    # root HOME/PATH. Third-party scripts cannot use sudo or write system files.
+    return [
+        '/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+        '--unit=' + unit, '--uid=' + user, '--working-directory=' + home,
+        '--setenv=HOME=' + home,
+        '--setenv=PATH=' + home + '/.local/bin:/usr/local/bin:/usr/bin:/bin',
+        '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
+        '--property=PrivateDevices=yes', '--property=ProtectSystem=strict',
+        '--property=ReadWritePaths=' + home,
+        '--property=InaccessiblePaths=-/mnt -/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack',
+        '--property=ProtectKernelTunables=yes', '--property=ProtectKernelModules=yes',
+        '--property=ProtectControlGroups=yes', '--property=RestrictSUIDSGID=yes',
+        '--property=KillMode=control-group', '--property=UMask=0077',
+        '--property=PartOf=devstackd.service',
+        '--property=RuntimeMaxSec=' + str(timeout) + 's',
+        '/usr/bin/python3', '-I', ENGINE_RUNNER, 'laravel', action, *args,
+    ]
+
+
+def stop_engine_unit(unit: Any) -> None:
+    if not isinstance(unit, str) or not ENGINE_UNIT.fullmatch(unit):
+        return
+    try:
+        subprocess.run(['/usr/bin/systemctl', 'stop', unit + '.service'],
+                       capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def sanitize_tool_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not isinstance(value.get('composer'), bool):
+        raise RuntimeError('Nieprawidlowy wynik instalatora.')
+    result = {'composer': value['composer']}
+    for key in ('installed', 'latest'):
+        if key not in value and key == 'latest':
+            continue
+        item = value.get(key)
+        if item is not None and (not isinstance(item, str) or not ENGINE_VERSION.fullmatch(item)):
+            raise RuntimeError('Nieprawidlowa wersja instalatora.')
+        result[key] = item
+    return result
+
+
+def adapter_call(unit: str, action: str, args: list[str],
+                 settings: dict[str, str] | None = None, timeout: int = 950) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(engine_unit_args(unit, action, args, timeout),
+                              input=json.dumps(settings) if settings is not None else '',
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, timeout=timeout + 5, check=False, close_fds=True)
+        if len(proc.stdout) > 8192:
+            raise ValueError('oversized response')
+        envelope = json.loads(proc.stdout)
+        if not isinstance(envelope, dict):
+            raise ValueError('invalid response')
+        if proc.returncode == 0 and envelope.get('ok') is True and isinstance(envelope.get('result'), dict):
+            return {'ok': True, 'result': envelope['result']}
+        log = envelope.get('log')
+        return {'ok': False, 'log': log if isinstance(log, str) and
+                re.fullmatch(r'laravel-[A-Za-z0-9_-]+\.log', log) else None}
+    except subprocess.TimeoutExpired:
+        stop_engine_unit(unit)
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return {'ok': False}
+
+
+def engine_tool_status(data: dict[str, Any]) -> dict[str, Any]:
+    if data != {'engine': 'laravel'}:
+        raise InputError('Nieobslugiwany instalator.')
+    ensure_engine_idle()
+    result = adapter_call('devstack-engine-' + secrets.token_hex(16) + '-status',
+                          'status', [], timeout=20)
+    if not result.get('ok'):
+        raise RuntimeError('Nie udalo sie odczytac wersji instalatora.')
+    return sanitize_tool_result(result['result'])
+
+
+def start_engine_phase(job: dict[str, Any], state: str, action: str, args: list[str],
+                       message: str, settings: dict[str, str] | None = None) -> None:
+    unit = 'devstack-engine-' + job['id'] + '-' + action
+    job.update(state=state, unit=unit, message=message)
+    write_json_atomic(ENGINE_JOB_FILE, job)
+    # The thread receives only a validated argument vector and, for configure,
+    # the credentials through private stdin. It never writes root-owned state.
+    job_id = job['id']
+    def worker():
+        try:
+            result = adapter_call(unit, action, args, settings)
+        except Exception:
+            result = {'ok': False}
+        ENGINE_RESULTS.put((job_id, unit, action, result))
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def create(data: dict[str, Any]) -> dict[str, Any]:
+    ensure_engine_idle()
+    engine = data.get('engine', 'none')
+    if engine == 'none':
+        return create_environment(data)
+    if engine != 'laravel':
+        raise InputError('Nieobslugiwany silnik projektu.')
+    slug = check_slug(data.get('slug'))
+    name = check_name(data.get('name'))
+    domain = check_domain(data.get('domain'))
+    if data.get('webroot') != 'public' or data.get('starter_kit') not in ('none', 'livewire'):
+        raise InputError('Laravel wymaga katalogu public i obslugiwanego starter kitu.')
+    if not isinstance(data.get('database'), bool) or not isinstance(data.get('https'), bool):
+        raise InputError('Nieprawidlowe ustawienia projektu.')
+    cfg = config()
+    state = read_json(STATE_FILE)
+    if slug in state or any(p.get('domain') == domain for p in state.values()):
+        raise InputError('Projekt lub domena juz istnieje.')
+    root = pathlib.Path(cfg['projects_dir']) / slug
+    if root.exists() or root.is_symlink():
+        raise InputError('Katalog juz istnieje. Instalator nie nadpisuje plikow.')
+    if any(p.exists() or p.is_symlink() for p in (site_path(slug), site_link_path(slug), pool_path(slug))):
+        raise InputError('Istnieje konfiguracja serwera dla tego projektu.')
+    # Root-owned reservation (one operation at a time) precedes any install.
+    request = {'slug': slug, 'name': name, 'domain': domain, 'webroot': 'public',
+               'database': data['database'], 'https': data['https'],
+               'engine': 'laravel', 'starter_kit': data['starter_kit']}
+    job = {'id': secrets.token_hex(16), 'action': 'create', 'slug': slug, 'request': request}
+    start_engine_phase(job, 'scaffolding', 'scaffold', [slug, request['starter_kit']],
+                       'Instalowanie Laravel i budowanie zasobow...')
+    return {'message': job['message'], 'job_id': job['id']}
+
+
+def engine_tool_action(data: dict[str, Any]) -> dict[str, Any]:
+    ensure_engine_idle()
+    if set(data) != {'engine', 'action'} or data.get('engine') != 'laravel':
+        raise InputError('Nieobslugiwany instalator.')
+    actions = {'check': ('checking', 'Sprawdzanie aktualizacji...'),
+               'install-tool': ('installing', 'Instalowanie Laravel Installer...'),
+               'update-tool': ('updating', 'Aktualizowanie Laravel Installer...')}
+    action = data.get('action')
+    if not isinstance(action, str) or action not in actions:
+        raise InputError('Nieobslugiwana operacja instalatora.')
+    state, message = actions[action]
+    job = {'id': secrets.token_hex(16), 'action': action}
+    start_engine_phase(job, state, action, [], message)
+    return {'message': message, 'job_id': job['id']}
+
+
+def finish_engine_job(job: dict[str, Any], *, success: bool, message: str,
+                      log: str | None = None) -> None:
+    if job.get('action') == 'create':
+        slug = job['slug']
+        state = read_json(STATE_FILE)
+        project = state.get(slug)
+        if isinstance(project, dict) and project.get('engine') == 'laravel':
+            project['engine_status'] = 'ready' if success else 'failed'
+            write_json_atomic(STATE_FILE, state)
+    job.update(state='succeeded' if success else 'failed', message=message)
+    if log:
+        job['log'] = log
+    job.pop('unit', None)
+    job.pop('request', None)
+    write_json_atomic(ENGINE_JOB_FILE, job)
+
+
+def poll_engine_results() -> None:
+    while True:
+        try:
+            job_id, unit, action, outcome = ENGINE_RESULTS.get_nowait()
+        except queue.Empty:
+            return
+        job = engine_job()
+        if job.get('id') != job_id or job.get('unit') != unit or job.get('state') not in ENGINE_ACTIVE:
+            continue
+        if not outcome.get('ok'):
+            finish_engine_job(job, success=False,
+                              message='Operacja nie powiodla sie. Istniejace pliki pozostawiono bez usuwania.',
+                              log=outcome.get('log'))
+            continue
+        try:
+            result = outcome['result']
+            if action == 'scaffold':
+                if result.get('scaffolded') is not True:
+                    raise RuntimeError('Invalid scaffold result')
+                request = job['request']
+                slug = job['slug']
+                # Reuse the normal infrastructure transaction only after the
+                # installer has completed. It creates the public ACL, pool,
+                # database, certificate and managed hosts entry.
+                create_environment(request)
+                settings = {'url': ('https://' if request['https'] else 'http://') + request['domain']}
+                if request['database']:
+                    project = read_json(STATE_FILE)[slug]
+                    settings.update(db_name=project['db_name'], db_user=project['db_user'],
+                                    db_password=read_json(SECRET_FILE)[slug]['password'])
+                start_engine_phase(job, 'configuring', 'configure', [slug],
+                                   'Konfigurowanie aplikacji...', settings)
+            elif action == 'configure':
+                if result.get('configured') is not True:
+                    raise RuntimeError('Invalid configuration result')
+                start_engine_phase(job, 'migrating', 'migrate', [job['slug']],
+                                   'Uruchamianie migracji...')
+            elif action == 'migrate':
+                if result.get('migrated') is not True:
+                    raise RuntimeError('Invalid migration result')
+                finish_engine_job(job, success=True, message='Laravel zainstalowany i skonfigurowany.')
+            elif action in ('check', 'install-tool', 'update-tool'):
+                job['tool'] = sanitize_tool_result(result)
+                if action != 'check' and job['tool']['installed'] is None:
+                    raise RuntimeError('Missing installed version')
+                finish_engine_job(job, success=True, message='Operacja instalatora zakonczona.')
+            else:
+                raise RuntimeError('Unknown job phase')
+        except Exception:
+            # Do not leak database settings or arbitrary command output.
+            finish_engine_job(job, success=False,
+                              message='Nie zakonczono konfiguracji. Pliki i ewentualny utworzony projekt zachowano.')
+
+
+def recover_engine_job() -> None:
+    job = engine_job()
+    if job.get('state') in ENGINE_ACTIVE:
+        stop_engine_unit(job.get('unit'))
+        finish_engine_job(job, success=False,
+                          message='Operacja przerwana przez restart DevStack. Nie zostala automatycznie ponowiona.')
+
+
 OPS = {'status': status, 'create': create, 'reveal': reveal,
+       'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,
        'set_preferences': set_ui_preferences, 'get_preferences': preferences,
@@ -841,6 +1118,7 @@ def handle(raw: bytes) -> bytes:
 
 def serve() -> None:
     config()
+    recover_engine_job()
     uid = pwd.getpwnam('devstackweb').pw_uid
     gid = pwd.getpwnam('devstackweb').pw_gid
     SOCKET_FILE.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
@@ -857,7 +1135,12 @@ def serve() -> None:
     request_windows_hosts_sync()
     print('DevStack local helper listening', flush=True)
     while True:
-        conn, _ = server.accept()
+        poll_engine_results()
+        server.settimeout(1 if engine_busy() else None)
+        try:
+            conn, _ = server.accept()
+        except socket.timeout:
+            continue
         with conn:
             conn.settimeout(30)
             pid, peer_uid, peer_gid = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
