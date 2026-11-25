@@ -256,6 +256,11 @@ export function App() {
     return ()=>document.removeEventListener('visibilitychange',remember)
   },[authenticated,initializing,engineJob,dismissedJob])
   useEffect(()=>{
+    if(!authenticated || !server.service_action_pending)return
+    const id=window.setInterval(()=>{if(document.visibilityState==='visible')void refresh()},1500)
+    return ()=>window.clearInterval(id)
+  },[authenticated,server.service_action_pending,refresh])
+  useEffect(()=>{
     if(!authenticated || !engineBusy)return
     const id=window.setInterval(()=>{if(document.visibilityState==='visible')void refresh()},1500)
     return ()=>window.clearInterval(id)

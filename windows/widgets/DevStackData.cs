@@ -44,7 +44,7 @@ internal static class DevStackData
             !response.Services.All(s=>ValidService(new(s.Id,null,null,s.MemoryBytes,s.CpuPercent,s.Active))))return false;
         if(response.Schema==1)return response.Services.Length==4&&response.Services.Select(s=>s.Id).Order().SequenceEqual(Ids.Order());
         return response.Schema==2&&response.Services.All(s=>s.Name is {Length:>0 and <=40}&&s.Description is {Length:>0 and <=150}
-            &&s.Probe is "https" or "tcp" or "unit"&&s.Port>=0&&s.Port<=65535&&(s.Probe!="tcp"||s.Port>0));
+            &&(s.Probe is "https" or "tcp" or "unit")&&s.Port>=0&&s.Port<=65535&&(s.Probe!="tcp"||s.Port>0));
     }
     private static async Task<Response?> ReadMetrics(Settings settings,CancellationToken ct)
     {

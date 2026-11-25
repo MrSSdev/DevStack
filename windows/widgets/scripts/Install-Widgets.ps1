@@ -60,4 +60,4 @@ if ($resetErrors.Count -gt 0) {
 $packages | Select-Object Name, Version, Status
 Write-Host 'Widgets updated to 0.5.0.0. Approved WSL appearance and controls are preserved.'
 Write-Host 'Existing Ubuntu telemetry setup is retained. Do not reinstall WSL telemetry.'
-Write-Host 'Existing DevStack integration is retained. Run Install-DevStackWidget.ps1 only if not already configured.'
+Write-Host 'Update the DevStack service integration once with Install-DevStackWidget.ps1 -SkipFrontend (Ubuntu must already be running).'

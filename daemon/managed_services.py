@@ -136,7 +136,7 @@ def schedule(service, action):
     if action_pending():
         raise RuntimeError('Trwa juz operacja uslugi. Odswiez stan.')
     command = ['/usr/bin/systemd-run', '--quiet', '--collect', '--unit='+ACTION_UNIT,
-               '--on-active=2s', '--timer-property=AccuracySec=100ms',
+               '--on-active=2s', '--timer-property=AccuracySec=100ms', '--timer-property=RemainAfterElapse=no',
                '--property=TimeoutStartSec=90s', SYSTEMCTL, '--no-ask-password',
                action, target['unit']]
     result = subprocess.run(command, capture_output=True, timeout=5, env=ENV, check=False)
