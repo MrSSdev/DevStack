@@ -6,6 +6,12 @@ type StorageProvider = () => NoticeStorage
 export const JOB_NOTICE_KEY = 'devstack.engine-job-notice.v1'
 const browserStorage:StorageProvider = () => window.localStorage
 
+export function jobNoticeTimeout(job:NoticeJob):number {
+  // A running installation is never timed; only a confirmed success gets
+  // the normal six-second window. Keep failure/log details until dismissal.
+  return job.state==='succeeded'?6000:0
+}
+
 function completedKey(job:NoticeJob|null|undefined):string {
   return job && /^[a-f0-9]{32}$/.test(job.id) && (job.state==='succeeded'||job.state==='failed')
     ? job.state+':'+job.id : ''

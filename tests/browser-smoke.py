@@ -1,7 +1,7 @@
 """Destructive acceptance tests for a disposable, fully installed DevStack.
 
 The app, PHP session boundary, Unix helper, Nginx, databases, and Mailpit are
-real. No HTTP requests or browser APIs are mocked. Never use a personal inbox.
+real. The dedicated notification lifecycle scenario replays only engine_job in a state response; other scenarios use real requests. Never use a personal inbox.
 """
 import json
 import os
@@ -119,7 +119,10 @@ class BrowserAcceptance(unittest.TestCase):
             expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
         else:
             expect(self.page.locator('html')).not_to_have_class(re.compile(r'\bdark\b'))
-        for b in self.page.locator('[role="status"] button[aria-label="Zamknij"]').all():b.click()
+        # Exclude ending toasts; nth locators shift as each toast is removed.
+        close = self.page.locator('[data-slot="toast"]:not([data-ending-style]) button[aria-label="Zamknij powiadomienie"]')
+        while close.count():
+            close.first.click()
 
     def shot(self, name):
         self.page.evaluate('document.fonts.ready')
@@ -181,7 +184,7 @@ class BrowserAcceptance(unittest.TestCase):
         expect(self.page.get_by_text('Dodatkowe lokalizacje zasobów JS/CSS',exact=True)).to_have_count(0)
         editor.fill('client_max_body_size 128m;\n\n' + flux)
         self.page.get_by_role('button',name='Sprawdź i zastosuj',exact=True).click()
-        expect(self.page.get_by_role('status').filter(has_text='Konfiguracja przetestowana')).to_be_visible()
+        expect(self.page.locator('[data-slot="toast"]').filter(has_text='Konfiguracja przetestowana')).to_be_visible()
         expected_rules = 'client_max_body_size 128m;\n\n' + legacy_rules['extra_locations']
         expect(editor).to_have_value(expected_rules)
         invalid = self.post('/api/config', {'slug':'browser-fixture','rules':'include /etc/shadow;'})
@@ -234,7 +237,7 @@ class BrowserAcceptance(unittest.TestCase):
                         if route=='dashboard':
                             self.page.locator('main button').filter(has_text='Nginx').click()
                             self.shot(prefix+'service-dialog')
-                            self.page.get_by_role('dialog').get_by_role('button',name='Zamknij',exact=True).click()
+                            self.page.locator('dialog:modal').get_by_role('button',name='Zamknij',exact=True).click()
                         if route=='projects':
                             self.page.locator('main button').filter(has_text='Browser fixture').click()
                             expect(self.page.get_by_role('heading',name='Browser fixture',exact=True)).to_be_visible()
@@ -311,7 +314,8 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(mailpit()['total'],43)
         self.page.get_by_role('button',name='Usuń',exact=True).click()
         self.page.get_by_role('button',name='Potwierdź',exact=True).click()
-        expect(self.page.get_by_text('Usunięto wiadomość.',exact=True)).to_be_visible()
+        expect(self.page.locator('[data-slot="toast"]').get_by_text('Usunięto wiadomość.',exact=True)).to_be_visible()
+        expect(self.page.locator('main').get_by_text('Usunięto wiadomość.',exact=True)).to_have_count(0)
         self.wait_total(42)
         self.page.get_by_role('textbox',name='Szukaj wiadomości').fill('Pagination fixture 00')
         self.page.get_by_role('button',name='Szukaj',exact=True).click()
@@ -419,21 +423,120 @@ class BrowserAcceptance(unittest.TestCase):
         box=self.page.get_by_role('checkbox').last
         checked=box.is_checked();box.set_checked(not checked)
         self.page.get_by_role('button',name='Zapisz wybór').click()
-        expect(self.page.get_by_text('Zapisano wybór usług.',exact=True)).to_be_visible()
+        expect(self.page.locator('[data-slot="toast"]').get_by_text('Zapisano wybór usług.',exact=True)).to_be_visible()
         self.page.reload()
         self.page.get_by_role('navigation',name='Kategorie ustawień').get_by_role('button',name='Widżety',exact=True).click()
         self.assertEqual(self.page.get_by_role('checkbox').last.is_checked(),not checked)
         self.goto('dashboard')
         self.page.locator('main button').filter(has_text='Redis').click()
-        dialog=self.page.get_by_role('dialog')
+        dialog=self.page.locator('dialog:modal')
         dialog.get_by_role('button',name='Zatrzymaj',exact=True).click()
         dialog.get_by_role('button',name='Anuluj',exact=True).click()
         dialog.get_by_role('button',name='Zatrzymaj',exact=True).click()
         dialog.get_by_role('button',name='Potwierdź',exact=True).click()
+        expect(dialog.locator('[data-slot="toast"]').filter(has_text='Polecenie przyjęte:')).to_be_visible()
         expect(dialog.get_by_text('Zatrzymana',exact=True)).to_be_visible(timeout=12000)
         dialog.get_by_role('button',name='Uruchom',exact=True).click()
         dialog.get_by_role('button',name='Potwierdź',exact=True).click()
         expect(dialog.get_by_text('Działa',exact=True)).to_be_visible(timeout=12000)
+
+    def test_07_global_toasts_and_job_presentation(self):
+        # Real operations for the shared renderer; separately replay only a
+        # synthetic job status through GET /api/state for deterministic UI
+        # lifecycle coverage. All writes and authentication are real.
+        self.goto('dashboard')
+        self.page.set_viewport_size({'width':640,'height':800})
+        toasts=self.page.locator('[data-slot="toast"]')
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(toasts.get_by_text('Odświeżono dane.',exact=True)).to_be_visible()
+        self.page.get_by_role('button',name=re.compile('Włącz (jasny|ciemny) motyw')).click()
+        expect(toasts.filter(has_text='Zapisano').first).to_be_visible()
+        expect(toasts.get_by_text('Odświeżono dane.',exact=True)).to_be_visible()
+        self.page.get_by_role('button',name='Otwórz menu').click()
+        self.page.get_by_role('navigation',name='Nawigacja główna').get_by_role('button',name='Projekty',exact=False).click()
+        expect(self.page.get_by_role('heading',name='Projekty',exact=True)).to_be_visible()
+        expect(toasts.get_by_text('Odświeżono dane.',exact=True)).to_be_visible()
+        self.assertTrue(toasts.first.evaluate("e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight}"))
+        expect(self.page.locator('main').get_by_text('Odświeżono dane.',exact=True)).to_have_count(0)
+
+        # Actual API state remains the basis; override the job alone to test
+        # long-running and failed/completed rendering without fetching packages.
+        job={'id':'a'*32,'engine':'laravel','action':'create','state':'scaffolding','message':'Instalacja testowa w toku…','slug':'browser-fixture'}
+        def job_response(route):
+            response=route.fetch()
+            body=response.json()
+            body['result']['engine_job']=dict(job)
+            route.fulfill(response=response,json=body)
+        self.page.route('**/api/state',job_response)
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        installer=toasts.filter(has_text='Instalacja projektu')
+        expect(installer).to_have_count(1)
+        expect(installer.get_by_text('Instalacja testowa w toku…',exact=False)).to_be_visible()
+        expect(installer).to_have_attribute('data-toast-type','loading')
+        expect(installer.get_by_role('button',name='Zamknij powiadomienie')).to_have_count(0)
+        installer.evaluate("e=>e.dataset.lifecycleTest='same-node'")
+        # The running toast outlives the ordinary six-second timeout, even
+        # when the user is not hovering/focusing it. Escape cannot dismiss it.
+        installer.focus()
+        self.page.keyboard.press('Escape')
+        self.page.locator('main h1').first.evaluate("e=>{e.tabIndex=-1;e.focus()}")
+        self.page.mouse.move(1,1)
+        self.page.wait_for_timeout(6800)
+        expect(installer).to_be_visible()
+        job.update(state='configuring',message='Konfiguracja projektu w toku…')
+        expect(installer.get_by_text('Konfiguracja projektu w toku…',exact=False)).to_be_visible(timeout=12000)
+        expect(installer).to_have_attribute('data-lifecycle-test','same-node')
+        job.update(state='succeeded',message='Środowisko testowe gotowe.')
+        expect(installer.get_by_text('Środowisko testowe gotowe.',exact=False)).to_be_visible(timeout=12000)
+        expect(installer).to_have_attribute('data-toast-type','success')
+        expect(installer).to_have_attribute('data-lifecycle-test','same-node')
+        expect(installer).to_have_count(1)
+        expect(installer.get_by_role('button',name='Przejdź do projektu')).to_be_visible()
+        self.page.wait_for_timeout(2500)
+        expect(installer).to_be_visible()
+        # Repeated reads of the same completed job must not restart its timer.
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        self.page.mouse.move(1,1)
+        expect(installer).to_have_count(0,timeout=5500)
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(installer).to_have_count(0)
+        # A distinct success still exposes the existing project action.
+        job.update(id='d'*32,state='succeeded',message='Drugi wynik testowy gotowy.')
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(installer.get_by_text('Drugi wynik testowy gotowy.',exact=False)).to_be_visible()
+        installer.get_by_role('button',name='Przejdź do projektu').click()
+        expect(self.page.get_by_role('heading',name='Browser fixture',exact=True)).to_be_visible()
+        self.page.reload()
+        expect(self.page.locator('main')).to_be_visible()
+        expect(installer).to_have_count(0)
+        job.update(id='b'*32,state='failed',message='Instalacja testowa nieudana.',log='fixture.log')
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(installer.get_by_text('Instalacja testowa nieudana.',exact=False)).to_be_visible()
+        expect(installer.get_by_text('fixture.log',exact=False)).to_be_visible()
+        self.page.reload()
+        expect(installer.get_by_text('Instalacja testowa nieudana.',exact=False)).to_be_visible()
+        # A newer job replaces the previous installer toast, not other
+        # independent notices. The previous failure is not acknowledged.
+        job.update(id='c'*32,state='failed',message='Nowszy błąd instalacji.',log='new-fixture.log')
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(installer.get_by_text('Nowszy błąd instalacji.',exact=False)).to_be_visible()
+        expect(installer).to_have_count(1)
+        # Full cards remain expanded visually even when the pointer and focus
+        # are elsewhere. Close must be discoverable by its accessible role
+        # without hovering, forcing the click, or including hidden elements.
+        self.page.mouse.move(1,1)
+        close = installer.get_by_role('button',name='Zamknij powiadomienie',exact=True)
+        expect(close).to_be_visible()
+        expect(close).to_have_attribute('aria-hidden','false')
+        close.focus()
+        expect(close).to_be_focused()
+        self.page.keyboard.press('Enter')
+        expect(installer).to_have_count(0)
+        self.assertEqual(self.page.evaluate("localStorage.getItem('devstack.engine-job-notice.v1')"), 'failed:'+'c'*32)
+        self.page.reload()
+        expect(self.page.locator('main')).to_be_visible()
+        expect(installer).to_have_count(0)
+        self.page.unroute('**/api/state',job_response)
 
     def test_05_login_screen_and_form(self):
         anonymous=self.browser.new_context(viewport={'width':853,'height':950})
@@ -478,7 +581,7 @@ class BrowserAcceptance(unittest.TestCase):
                 self.theme(theme)
                 self.shot('853-'+theme+'-mail-offline')
                 self.page.get_by_role('button',name='Konfiguracja poczty',exact=True).click()
-                expect(self.page.get_by_role('dialog').get_by_text('sudo systemctl start devstack-mailpit.service',exact=True)).to_be_visible()
+                expect(self.page.locator('dialog:modal').get_by_text('sudo systemctl start devstack-mailpit.service',exact=True)).to_be_visible()
                 self.page.get_by_role('button',name='Zamknij konfigurację',exact=True).click()
         finally:
             self.assertEqual(self.post('/api/services/control',{'service':'mailpit','action':'start','confirmed':True}).status,200)

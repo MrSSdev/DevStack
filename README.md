@@ -56,7 +56,7 @@ Readings refresh while the panel is open. Start Ubuntu explicitly when you want 
 
 ## Daily use
 
-Create a project in the dashboard. The folder identifier follows the project name as you type, and the local .test domain follows the identifier. Either field can be edited independently and restored to automatic generation. Choose the document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Save your work before stopping Ubuntu or restarting services.
+Create a project in the dashboard. The folder identifier follows the project name as you type, and the local .test domain follows the identifier. Either field can be edited independently and restored to automatic generation. Choose the document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Operation feedback is shown in shared shadcn/Base UI toast notifications, visible across views and while scrolling. Installer progress cannot be dismissed and has no timeout; its existing toast becomes a six-second success notice only after the server confirms completion. Installer failures stay until dismissed so their log details remain available. Other short success and error notices expire automatically and pause on hover/focus. Confirmations and service-state indicators remain in their original controls. Save your work before stopping Ubuntu or restarting services.
 
 ## Local test email (optional)
 

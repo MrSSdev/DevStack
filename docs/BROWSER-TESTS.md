@@ -4,14 +4,14 @@ The **DevStack browser and real mailbox** workflow installs the production
 build and actual DevStack services on an isolated Ubuntu runner. Chromium
 uses the fixture CA as a trusted certificate; HTTPS errors are not ignored.
 Mail is sent through real SMTP and read through the authenticated PHP API.
-The test does not mock requests or privileged operations.
+The main acceptance scenarios do not mock requests or privileged operations. A separate toast lifecycle scenario uses a synthetic engine_job in the real GET /api/state response solely to exercise presentation and acknowledgement without installing a new framework; all authentication and writes remain real.
 
 Coverage includes all primary screens and settings categories in both themes
 at 640, 853, 1024, 1280 and 1920 CSS pixels; persisted themes; keyboard drawer
 navigation; project creation; installer links; widget persistence; confirmed
 Redis stop/start; HTML/plain/source views; exact attachment downloads;
 search, pagination, deletion, polling and recovery from a stopped Mailpit;
-long project names; project search, detected Composer versions, home link and shared favicon; unified Nginx editor with both stored rule types, safe validation and reload; authentication, session rotation,
+long project names; project search, detected Composer versions, home link and shared favicon; shared fixed Base UI toasts, multiple notices, non-dismissible installer progress across polling phases and a six-second success timeout starting only after completion, persistent installer failure details, navigation, acknowledgement across reloads, retirement of older installer results, accessible dismissal without hover (including keyboard activation), and notices inside native service dialogs; unified Nginx editor with both stored rule types, safe validation and reload; authentication, session rotation,
 CSRF, origin validation, input rejection and login rate limiting.
 
 Screenshots, traces and the screenshot manifest are uploaded for one day.
