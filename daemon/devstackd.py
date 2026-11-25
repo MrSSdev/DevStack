@@ -929,6 +929,12 @@ def sanitize_tool_result(value: Any) -> dict[str, Any]:
     return result
 
 
+ENGINE_FAILURE_MESSAGES = {
+    'frontend_node': 'Laravel wymaga Node.js 20.19+ (20.x) lub 22.12+. Sprawdz Node.js w Ubuntu.',
+    'frontend_npm': 'Laravel w DevStack wymaga npm 11+. Zaktualizuj npm w Ubuntu przed utworzeniem projektu.',
+}
+
+
 def adapter_call(unit: str, action: str, args: list[str],
                  settings: dict[str, str] | None = None, timeout: int = 950,
                  engine: str = 'laravel') -> dict[str, Any]:
@@ -945,8 +951,10 @@ def adapter_call(unit: str, action: str, args: list[str],
         if proc.returncode == 0 and envelope.get('ok') is True and isinstance(envelope.get('result'), dict):
             return {'ok': True, 'result': envelope['result']}
         log = envelope.get('log')
+        code = envelope.get('code')
         return {'ok': False, 'log': log if isinstance(log, str) and
-                re.fullmatch(re.escape(engine) + r'-[A-Za-z0-9_-]+\.log', log) else None}
+                re.fullmatch(re.escape(engine) + r'-[A-Za-z0-9_-]+\.log', log) else None,
+                'code': code if isinstance(code, str) and code in ENGINE_FAILURE_MESSAGES else None}
     except subprocess.TimeoutExpired:
         stop_engine_unit(unit)
     except (OSError, ValueError, RuntimeError):
@@ -1066,7 +1074,8 @@ def poll_engine_results() -> None:
             continue
         if not outcome.get('ok'):
             finish_engine_job(job, success=False,
-                              message='Operacja nie powiodla sie. Istniejace pliki pozostawiono bez usuwania.',
+                              message=ENGINE_FAILURE_MESSAGES.get(outcome.get('code'),
+                                  'Operacja nie powiodla sie. Istniejace pliki pozostawiono bez usuwania.'),
                               log=outcome.get('log'))
             continue
         try:

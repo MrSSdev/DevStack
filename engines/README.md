@@ -38,6 +38,16 @@ npm; do not launch a development server. The infrastructure coordinator must
 grant the public directory ACL after scaffolding and preserve existing project
 metadata and the current no-engine creation path.
 
+Before scaffold the adapter checks the worker's Node.js and npm versions.
+DevStack's Laravel support baseline is Node.js 20.19+ on 20.x or 22.12+,
+and npm 11+. This is a DevStack support policy, not a claim that all older
+npm releases fail: npm 9.2.0 rejected the current kit's Vite Plus alias
+in WSL, while CI succeeded with npm 11.19.1. An unsupported or missing tool
+is reported with an allowlisted error code before laravel new. DevStack does
+not modify the starter kit's manifest or update npm automatically. The
+worker's PATH already prefers the developer's ~/.local/bin, so a user-level
+npm installation can coexist with Ubuntu's system npm.
+
 Status is local, checking latest is explicit, and updating the installer is
 scoped to its Composer package/dependencies. It does not upgrade existing
 Laravel applications. A major-version constraint change requires a deliberate

@@ -25,6 +25,25 @@ def version(value: Any) -> str | None:
     return value.lstrip("v") if isinstance(value, str) and VERSION.fullmatch(value) else None
 
 
+def require_supported_frontend(node: str, npm: str) -> None:
+    """DevStack's supported frontend baseline, checked before creating files.
+
+    Current official starter kits use Vite and npm alias overrides. Ubuntu's
+    npm 9.2.0 failed on npm:@voidzero-dev/vite-plus-core during the WSL smoke
+    test. npm 11.19.1 passed the official installer CI. Do not patch the kit
+    or silently replace system tools.
+    """
+    node_version = version(node)
+    npm_version = version(npm)
+    if node_version is None:
+        raise AdapterError("Cannot determine Node.js version.", "frontend_node")
+    node_parts = tuple(map(int, node_version.split(".")))
+    if not ((node_parts[0] == 20 and node_parts >= (20, 19, 0)) or node_parts >= (22, 12, 0)):
+        raise AdapterError("Use Node.js 20.19+ (20.x) or 22.12+ for Laravel assets.", "frontend_node")
+    if npm_version is None or int(npm_version.split(".")[0]) < 11:
+        raise AdapterError("DevStack requires npm 11+ for Laravel. Update npm before creating a project.", "frontend_npm")
+
+
 def project_path(projects: pathlib.Path, slug: str, *, exists: bool) -> pathlib.Path:
     if not isinstance(slug, str) or not SLUG.fullmatch(slug):
         raise AdapterError("Invalid project identifier.")
@@ -174,8 +193,26 @@ class LaravelAdapter:
             raise AdapterError("Installer version was not confirmed after Composer completed.")
         return result
 
+    def require_frontend_tools(self) -> None:
+        node = shutil.which("node")
+        npm = shutil.which("npm")
+        if node is None:
+            raise AdapterError("Node.js is missing from the worker PATH.", "frontend_node")
+        if npm is None:
+            raise AdapterError("npm is missing from the worker PATH.", "frontend_npm")
+        try:
+            node_version = self.command([node, "--version"], capture=True, timeout=15)
+        except AdapterError:
+            raise AdapterError("Unable to run Node.js.", "frontend_node") from None
+        try:
+            npm_version = self.command([npm, "--version"], capture=True, timeout=15)
+        except AdapterError:
+            raise AdapterError("Unable to run npm.", "frontend_npm") from None
+        require_supported_frontend(node_version, npm_version)
+
     def scaffold(self, slug: str, kit: str) -> dict[str, Any]:
         root = project_path(self.projects, slug, exists=False)
+        self.require_frontend_tools()
         binary = self.installer()
         self.command(scaffold_argv(str(binary), slug, kit), cwd=self.projects)
         project_path(self.projects, slug, exists=True)

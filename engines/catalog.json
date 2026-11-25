@@ -16,6 +16,6 @@
         "label": "Livewire"
       }
     ],
-    "description": "Oficjalny instalator Composer; wymagane PHP, Composer, Node.js i npm."
+    "description": "Oficjalny instalator Composer; wymagane PHP, Composer, Node.js 20.19+ (20.x) lub 22.12+ oraz npm 11+."
   }
 }

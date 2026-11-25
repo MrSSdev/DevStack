@@ -61,7 +61,7 @@ Create a project in the dashboard, choose its local domain, source directory, do
 
 When creating a project, select no engine or Laravel, then choose the supported
 installation variant. In Settings, manage the official installer (requires
-Composer, PHP, Node.js, npm and enabled panel password authentication). The
+Composer, PHP, Node.js 20.19+ on 20.x or 22.12+, npm 11+ for Laravel, and enabled panel password authentication). The
 installer creates a fresh directory before DevStack configures hosting; existing
 source directories are never overwritten. Long operations continue independently
 of the web request, and interrupted jobs retain files for review. See the

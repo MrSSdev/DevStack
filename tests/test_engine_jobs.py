@@ -64,6 +64,19 @@ class EngineJobTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             d.sanitize_tool_result({"composer":True,"installed":"arbitrary output"})
 
+    def test_frontend_failure_code_is_allowlisted(self):
+        import json
+        unit = "devstack-engine-" + "a"*32 + "-scaffold"
+        for code, expected in (("frontend_npm", "frontend_npm"), ("arbitrary output", None), ([], None)):
+            outcome = SimpleNamespace(returncode=1, stdout=json.dumps({
+                "ok": False, "code": code, "error": "private diagnostic",
+                "log": "laravel-test.log",
+            }))
+            with patch.object(d, "engine_unit_args", return_value=["fake"]), \
+                 patch.object(d.subprocess, "run", return_value=outcome):
+                result = d.adapter_call(unit, "scaffold", ["demo", "livewire"])
+            self.assertEqual(result, {"ok": False, "code": expected, "log": "laravel-test.log"})
+
     def test_restart_does_not_retry_running_job(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "job.json"

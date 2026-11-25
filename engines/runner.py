@@ -29,6 +29,7 @@ def main() -> int:
         return 1
     engine, action, args = sys.argv[1], sys.argv[2], sys.argv[3:]
     log_path = None
+    error_code = None
     try:
         directory = home / ".cache" / "devstack" / "engines"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -61,11 +62,12 @@ def main() -> int:
         return 0
     except AdapterError as exc:
         error = str(exc)
+        error_code = exc.code
     except (OSError, ValueError, UnicodeError):
         error = "Adapter operation failed."
     # The log belongs only to the developer; no command output or secret is
     # returned to the privileged process. The filename is a local hint.
-    print(json.dumps({"ok": False, "error": error,
+    print(json.dumps({"ok": False, "error": error, "code": error_code,
                       "log": log_path.name if log_path is not None else None}))
     return 1
 

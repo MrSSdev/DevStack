@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "engines"))
 from laravel.adapter import (
     AdapterError, LaravelAdapter, environment_values, project_path,
-    rewrite_environment, scaffold_argv, tool_argv,
+    rewrite_environment, scaffold_argv, tool_argv, require_supported_frontend,
 )
 
 
@@ -78,6 +78,38 @@ class LaravelAdapterTests(unittest.TestCase):
             with self.assertRaises(AdapterError):
                 adapter.configure("demo", {"url": "https://demo.test"})
 
+    def test_frontend_version_baseline(self):
+        require_supported_frontend("v22.22.1", "11.19.1")
+        require_supported_frontend("v24.22.3", "11.19.1")
+        require_supported_frontend("v20.19.0", "11.0.0")
+        for node, npm, code in (
+            ("v22.22.1", "9.2.0", "frontend_npm"),
+            ("v22.11.0", "11.19.1", "frontend_node"),
+            ("v20.18.0", "11.19.1", "frontend_node"),
+            ("v21.7.3", "11.19.1", "frontend_node"),
+            ("unknown", "11.19.1", "frontend_node"),
+            ("v22.22.1", "unknown", "frontend_npm"),
+        ):
+            with self.subTest(node=node, npm=npm):
+                with self.assertRaises(AdapterError) as error:
+                    require_supported_frontend(node, npm)
+                self.assertEqual(error.exception.code, code)
+
+    def test_unsupported_npm_refused_before_scaffold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            (home / "projects").mkdir()
+            adapter = LaravelAdapter(home, io.StringIO())
+            with patch("laravel.adapter.shutil.which", side_effect=lambda tool: "/usr/bin/" + tool), \
+                 patch.object(adapter, "command", side_effect=["v22.22.1", "9.2.0"]) as command, \
+                 patch.object(adapter, "installer") as installer:
+                with self.assertRaises(AdapterError) as error:
+                    adapter.scaffold("demo", "livewire")
+                self.assertEqual(error.exception.code, "frontend_npm")
+                installer.assert_not_called()
+                self.assertEqual(command.call_count, 2)
+            self.assertFalse((home / "projects" / "demo").exists())
+
     def test_failed_scaffold_does_not_delete_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = pathlib.Path(tmp)
@@ -88,7 +120,8 @@ class LaravelAdapterTests(unittest.TestCase):
                 root.mkdir()
                 (root / "partial").write_text("keep")
                 raise AdapterError("failed")
-            with patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
+            with patch.object(adapter, "require_frontend_tools"), \
+                 patch.object(adapter, "installer", return_value=pathlib.Path("/fake/laravel")), \
                  patch.object(adapter, "command", side_effect=fail):
                 with self.assertRaises(AdapterError):
                     adapter.scaffold("demo", "livewire")
