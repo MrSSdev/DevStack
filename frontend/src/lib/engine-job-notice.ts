@@ -30,7 +30,10 @@ export function showJobNotice(job:NoticeJob|null|undefined, acknowledged:string)
 export function acknowledgeJob(job:NoticeJob|null|undefined, storage:StorageProvider=browserStorage):string {
   const key=completedKey(job)
   if(!key)return ''
-  try{storage().setItem(JOB_NOTICE_KEY,key)}catch{/* in-memory dismissal still works */}
+  try{
+    const current=storage()
+    if(current.getItem(JOB_NOTICE_KEY)!==key)current.setItem(JOB_NOTICE_KEY,key)
+  }catch{/* in-memory dismissal still works */}
   return key
 }
 

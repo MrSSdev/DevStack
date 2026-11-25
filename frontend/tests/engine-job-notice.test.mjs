@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { JOB_NOTICE_KEY, readAcknowledgedJob, showJobNotice, acknowledgeJob, rememberVisibleSuccess } from '../src/lib/engine-job-notice.ts'
+import { readFileSync } from 'node:fs'
+import ts from 'typescript'
+
+// Use the existing TypeScript compiler so tests also run on the Node 20.19+
+// baseline supported by Vite, without relying on Node's native TS loader.
+const source=readFileSync(new URL('../src/lib/engine-job-notice.ts',import.meta.url),'utf8')
+const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText
+const { JOB_NOTICE_KEY, readAcknowledgedJob, showJobNotice, acknowledgeJob, rememberVisibleSuccess } =
+  await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'))
 
 const job=(state,id='a'.repeat(32))=>({id,state})
 function fakeStorage(){
