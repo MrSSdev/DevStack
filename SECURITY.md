@@ -1,32 +1,45 @@
 # Security policy
 
-**DevStack is a localhost-only development convenience tool, not a public control panel, production hosting system, or substitute for container isolation.** It deliberately runs a small privileged helper: security defects in that boundary can affect the host Linux distribution. Treat code changes as security-sensitive.
+**DevStack is a local development tool for trusted code, not production hosting, a public control panel or a project-isolation boundary.** It deliberately includes privileged Linux and Windows components. Review changes and protect the Windows session, WSL filesystem and backups.
 
-## Safeguards
+## Dashboard and helper
 
-- Nginx listens only on WSL loopback. Windows localhost forwarding is still available; host firewall/network policy must remain enabled.
-- By default, authentication via Argon2id hash, secure HttpOnly SameSite Strict session cookies, 8-hour inactivity cutoff, CSRF token, origin checking and a 15-minute login throttle. An **explicit root-enabled passwordless local mode** bypasses login and reauthentication; TLS, strict host checks and CSRF remain enabled. Missing auth-mode configuration fails closed.
-- PHP-FPM web process under a dedicated `devstackweb` user with no login shell, separate from app PHP pools. Web process cannot directly write Nginx, databases, secret store, certificate keys or service units.
-- Root helper uses `SO_PEERCRED` UID verification and a fixed typed operation allowlist. No user-chosen command, Unix file path or raw Nginx directives are executed. Does not read environment-provided secrets into logs.
-- Generated Nginx site binds `127.0.0.1` and executes only `index.php`, denying other PHP endpoints; dotfiles denied.
-- MariaDB user has permissions only on its generated database. Credentials live under root-only `/var/lib/devstack/` and are never included in API status responses; revealing requires password reauthentication.
-- mkcert CA private key is not copied to Windows or published. The Windows trust script requires explicit confirmation before importing the public root certificate.
-- Systemd helper has additional sandboxing (restricted address families, private temp and devices, kernel tunable protections), but **it is still a root process**.
-- CI uses `permissions: contents: read`, public GitHub-hosted runners, and no repository secrets or self-hosted agents.
+- Nginx listens on WSL loopback; Windows localhost forwarding remains part of the trust boundary. Keep normal firewall policy and do not expose the dashboard to a LAN.
+- Password authentication uses an Argon2id hash, secure HttpOnly SameSite Strict cookies, session expiry, CSRF/origin checks and login throttling. Missing authentication configuration fails closed.
+- The PHP manager runs as the non-login `devstackweb` account. A local Unix socket and peer UID check gate the privileged helper's typed operation allowlist.
+- Project Nginx configuration and paths are validated. Syntax checks precede reloads; invalid edits are rolled back. Per-project PHP-FPM pools run as the trusted developer, not separate security tenants.
+- Database credentials and the project registry are protected in Linux. Credential reveal requires dashboard authentication/reauthentication. Never expose these files as widget or HTTP status content.
+- The mkcert private CA key stays in Ubuntu. Windows trust of the public CA requires deliberate fingerprint review and confirmation.
+
+## Windows integration
+
+The hosts task is installed explicitly by a Windows administrator under the WSL-owning account. Scripts in `C:\ProgramData\DevStack` use protected ACLs. Only a validated managed hosts block is reconciled; unrelated lines are preserved. The Linux helper triggers a fixed task name rather than passing arbitrary commands, domains or secret values to Windows.
+
+Widget MSIX signing is separate from HTTPS CA trust. The installer checks package identity/version, the matching MSIX/CER signer and signature trust before deployment. Its development CER is imported into TrustedPeople, not the TLS Root store. CI removes the private signing PFX and distributes only the signed MSIX and public CER. Review the exact run/revision before trusting it. Test signing is not independent security review or a Store release.
+
+## Widget actions and credentials
+
+The Windows provider validates widget identity, session, native handshake, authenticated context, sequence, active state and freshness. Stop/restart confirmations are one-use and expire; hiding/cancel invalidates unused capabilities. Read-only fallback data cannot authorize commands. WSL and DevStack use separate page origins and handlers.
+
+The Ubuntu resource endpoint is read-only. DevStack service reads and controls use separate tokens and loopback sockets. The reader is a dedicated non-login account with filesystem/process restrictions. The control helper is root but accepts only four fixed unit names and one bounded restart operation. Host/Origin/framing checks, request-ID consumption and locking restrict unauthenticated, browser-origin, duplicate and concurrent requests. No arbitrary shell or WSL lifecycle endpoint is exposed.
+
+A confirmed request may finish after the panel closes. An ambiguous timeout is not automatically retried. Later service availability does not prove an unconfirmed command executed. No passive widget read starts a stopped distribution.
+
+`%LOCALAPPDATA%\DevStack\Widgets\telemetry.json` and `services.json` contain access credentials. Linux counterparts are under `/etc/devstack-widgets`. Do not print, commit or attach them. Windows diagnostic logs intentionally omit tokens and raw message bodies, but all logs/screenshots should still be reviewed before publication. Full project data used locally by the reader is never returned to the widget; only the count is returned.
 
 ## Passwordless mode
 
-An operator who explicitly runs `sudo php /opt/devstack/scripts/configure-auth.php --no-password --i-understand-local-risk` disables the authentication gate. **Anyone able to connect to `https://devstack.test` from the host then has full administrative access to DevStack and can reveal database credentials.** This is not suitable for LAN exposure, untrusted programs running on the same machine, or shared Windows user sessions. Re-enable via `sudo php /opt/devstack/scripts/configure-auth.php --password`. The web UI cannot toggle authentication mode by itself.
+The deliberate command `sudo php /opt/devstack/scripts/configure-auth.php --no-password --i-understand-local-risk` disables the dashboard's login/reauthentication gate. **Anyone able to connect locally can then administer DevStack and reveal credentials.** It is unsuitable for untrusted programs, shared user sessions or network exposure. Restore password mode with `sudo php /opt/devstack/scripts/configure-auth.php --password`. The web UI cannot change this mode itself.
 
-## Known risk and safe-use boundaries
+## Limits
 
-1. Per-project PHP-FPM pools run as the same local development user. Code from one project can potentially read another developer-owned project. Do not run untrusted PHP code.
-2. Database passwords are root-only but recoverable plaintext at rest. Protect the virtual disk, Windows session and all backups; these are local development credentials only.
-3. Webroot paths are within a developer-owned directory; filesystem races may exist if another untrusted local process can mutate it. DevStack is not an isolation boundary against a malicious local developer account. All project directory creation runs as the developer user, not root.
-4. Trusting a new local CA enables it to sign certificates Windows trusts. Protect the CA key and verify the public CA fingerprint before import. Use no public domain.
-5. Automatic certificate renewal, database backups, privilege separation per individual project, full server-config editor, recovery from abrupt disk failures, and audited upgrade/migration are future work.
-6. A successful GitHub build does **not** prove the app is safe to run on the target WSL machine. Run isolated smoke tests and keep a WSL export before first deployment.
+1. Trusted developer-owned projects can read one another's files. Do not run untrusted PHP code.
+2. Local database/widget credentials are recoverable secrets at rest. Protect the disk and backups; a localhost address is not authentication.
+3. The root helpers and elevated hosts task are privileged attack surfaces despite allowlists and sandboxing. No independent security audit is claimed.
+4. Trusting a local CA grants certificate-signing trust. Never publish its private key or copy it into repository artifacts.
+5. Code rollback is best-effort; it does not restore databases or all system configuration. Keep verified SQL and WSL backups. Automatic certificate renewal and scheduled backups are not implemented.
+6. CI and functional device acceptance do not prove safety across every Windows/WSL build, battery/sleep state or untrusted workload. Test isolated environments before deploying changes to important workstations.
 
 ## Reporting
 
-Please open a GitHub Security Advisory/private report for suspected vulnerabilities. Avoid publishing exploit details or live credentials in a public issue. Never submit real CA keys, `.env` files, WSL snapshots, database dumps or screenshots containing secrets.
+Use a private security report/GitHub advisory for suspected vulnerabilities. Do not put live credentials, exploit details, CA keys, project registries, `.env` files, database dumps or WSL exports in a public issue. Public examples should use fictional placeholders rather than real project or workstation data.

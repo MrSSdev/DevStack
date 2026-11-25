@@ -1,146 +1,76 @@
-# DevStack services widget 0.4.2
+# Windows widgets: technical reference
 
-Implements the user's approved **DevStack-widget-prototyp-03.html**. No redesign:
-transparent dark outer surface, original icons/type/layout, 2x2 service tiles,
-response time and RAM in each footer, small information popover, confirmed
-restart in that popover, plain project count line and two browser links.
-The source prototype is retained with a pinned SHA-256. Its demo script is
-NOT shipped; generated HTML/CSS uses production CSP and the native message bridge.
+Applies to widget package **0.4.2.0** and its current installer. See [README](README.md) for end-user setup. This document describes implementation boundaries, not a workstation-specific deployment log.
 
-## Install (Windows account that owns Ubuntu)
+## Provider and UI
 
-Extract the complete archive into:
-`%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
+`DevStack.Widgets.csproj` targets .NET 8, Windows x64 and Windows App SDK 2.7.0. One out-of-process COM provider registers `DevStack_WSL` and `DevStack_Services`. Both definitions expose one large size. The manifest uses an Adaptive Card metadata URL with a local resource filter for each HTML page.
 
-1. Run `Install-Widgets.ps1` in an elevated PowerShell on the usual account.
-   Expected version **0.4.2.0**. It updates in place; do not unpin, remove user
-   state or reinstall `Install-WslTelemetry.ps1`.
-2. Only for a new integration, start Ubuntu deliberately using the existing WSL widget, then run
-   `Install-DevStackWidget.ps1` from this same bundle. This is a NEW integration
-   setup, not replacement WSL telemetry. It refuses to run when Ubuntu is off.
-3. The installer stops WidgetBoard and DevStack.Widgets before deployment,
-   then always attempts the same reset after successful deployment and
-   verification of the installed version and Status Ok. Reopen Win+W.
-   No separate manual reset is normally needed. A failed deployment skips
-   the post-update reset; a process-stop error produces a warning. Never
-   reset Ubuntu or make this a per-open step.
+| Card | Reserved resource origin | Native implementation |
+| --- | --- | --- |
+| Ubuntu | `https://devstack-widgets.invalid` | `WidgetProvider`, `WslWebContent`, `WslResources`, `StateProbe` |
+| DevStack | `https://devstack-services.invalid` | `DevStackWidget`, `DevStackWebContent`, `DevStackData`, `DevStackNavigation` |
 
-The new setup installs two separate authenticated loopback socket listeners:
-43872 provides service statistics, 43873 accepts one explicitly confirmed
-service restart. Separate random read/control credentials stay in protected
-Linux files and the current user's ACL-protected `services.json`. They never
-enter HTML, logs, URLs or command-line arguments. Do not paste that file.
-Existing WSL telemetry on 43871 and its credential remain unchanged.
+The `.invalid` origins are intercepted by the provider, not external services or local web servers. HTML, CSS, icons and JavaScript are packaged in MSIX. Unknown resources are denied locally rather than falling through to network fetching. Production pages have content security policies with hashes for inline code/styles; no runtime CDN is used. Design fixtures under `design/` are build/test references, not deployed simulations.
 
-By default setup also deploys the matching **static frontend only** for
-`https://devstack.test/#/new` and `#/projects`. The old index is backed up in
-`/var/backups/devstack/widget-frontend-*`; old hashed assets are retained.
-No PHP/API, password, CA, database, project registry or WSL setting is changed.
-`-SkipFrontend` opts out, but exact page navigation then requires a dashboard
-that already supports these hash routes. Normal DevStack login is preserved.
+The dark outer card is transparent. Windows owns its backing surface, system menu and initial loader. No provider API guarantee is made that the WebView survives every panel closure. Short spinner/background transitions are a known limitation, not an instruction to keep Ubuntu or polling active.
 
-## Truthful readings
+[Microsoft Web Widget provider documentation](https://learn.microsoft.com/en-us/windows/apps/develop/widgets/web-widget-providers) describes the host requirements, resource interception and messaging surface.
 
-Availability/latency is measured from Windows: one end-to-end HTTPS request
-for Nginx and PHP-FPM, TCP connection setup for MariaDB and Redis. The two web
-timings are the same request, NOT separate per-server processing times.
-RAM is systemd `MemoryCurrent` for each service cgroup (includes cache), not
-sum of RSS. CPU is a short on-demand delta of CPUUsageNSec; 100% is one logical
-CPU. Unavailable accounting is shown as a dash, never a fictional zero.
-Project count is the number of entries in DevStack's protected registry;
-only the count leaves Ubuntu, not names, paths or credentials.
+## Native message boundary
 
-Linux uses one short process per request, no resident collector loop. Windows
-probes only when this widget is active, cancels reads on hide and never runs
-`wsl -d` to collect status. WSL offline means no service requests or control.
-WSL layout, collector and its resource/command implementation are unchanged;
-only the top-level provider dispatches DevStack events to a separate handler.
+Pages use one-argument `window.chrome.webview.postMessage` and native replies. The provider validates the widget definition/session, client correlation, increasing sequence, payload bounds, active state, host-expanded authentication and freshness. A resource-read fallback can supply display data but cannot grant control or reveal a confirmation capability.
 
-## Restart security and limits
+WSL lifecycle commands and DevStack service actions remain separate. There is no page-provided shell command, executable, arbitrary distro, arbitrary systemd unit or arbitrary browser URL. Stop/restart confirmation is one-use, service-bound where applicable and expires after 30 seconds. Cancel, navigation and hiding invalidate unused confirmation. A request already dispatched can finish after hiding; it is never automatically retried after an uncertain outcome.
 
-A restart needs active/authenticated native page, fresh WSL and service state,
-a service-bound one-use confirmation expiring after 30 seconds, and a second
-explicit click. Hide/navigation/cancel invalidates confirmation. The Linux
-control helper accepts only POST to one exact endpoint, no browser Origin,
-valid bearer credential, strict body and four fixed unit names: nginx.service,
-php8.5-fpm.service, mariadb.service, redis-server.service. There is no arbitrary
-command, unit or WSL start endpoint. Only one restart runs at once; request IDs
-are recorded before execution. No automatic retries after a timeout.
+## Read scheduling
 
-A confirmed request already sent may finish after the panel is closed. Its
-result is checked by the next visible read. Save work before testing a real
-restart: the selected service's active connections can be interrupted.
+Activation requests a fresh read; the service card's visible refresh period is 20 seconds. Visibility changes cancel in-flight reads and disable hidden periodic work. A passive running-distribution list does not start Linux. Linux endpoints are queried only after confirming Ubuntu is running. A short-lived socket handler is started per request; there is no resident Linux sampling loop.
 
-## Validation / device gate
+The Windows provider may remain resident before its idle exit. No guarantee of zero RAM or identical power behavior across Windows/WSL versions is implied by stopping probes.
 
-Run unchanged WSL tests plus service authentication/parser/replay tests, actual
-provider policy under mocked WinRT/OS, original-prototype geometry/interaction
-checks in both themes, static frontend build, x64 MSIX compilation and signing.
-Tests with mocked transport do NOT replace the ASUS check. Confirm the real
-systemd helper, four timings/RAM, count, browser targets, Cancel, one selected
-restart and reopen/offline behaviour on-device. Do not mark sleep/power or
-post-upgrade installation acceptance passed without corresponding evidence.
+## Linux integration
 
-The already accepted native loading spinner/background transitions remain.
-No further cosmetic experiments, no changes to public main; PR remains draft.
+| Port | Interface | Purpose | Identity |
+| --- | --- | --- | --- |
+| 43871 | `127.0.0.1`, authenticated read-only | Ubuntu procfs/filesystem measurements | Sandboxed dynamic reader |
+| 43872 | `127.0.0.1`, authenticated `GET /v1/services` | Service cgroup measurements and project count | Dedicated non-login `devstack-widget-reader` |
+| 43873 | `127.0.0.1`, authenticated health/restart | Guarded `POST /v1/restart` | Restricted root helper |
 
-## 0.4.1 — restart feedback (ASUS follow-up)
+The service reader explicitly selects its local user/group and retains `DynamicUser=yes` sandbox defaults; the preallocated identity avoids the dynamic-account D-Bus compatibility issue. It has no login, home or supplementary groups. Setup rejects conflicting identities. No D-Bus policy, NSS configuration or broad credential permissions are changed.
 
-The accepted 0.4.0 installation with the reader fix succeeded on ASUS. The
-user observed a confirmed restart and live data; the old verification popup
-covered controls and stayed visible after reopening. Confirmation is retained;
-on explicit confirmation the service details close. A compact inline message
-with a service name and icon appears directly below the project count. The
-provider transitions restarting -> verifying -> success/error only from a new
-post-command snapshot (selected systemd unit active AND Windows probe reachable,
-with valid integration). Command failure/unknown outcome is not treated as a
-successful restart, and is never retried automatically. Success has an absolute
-30-second expiry; hidden time counts. A verification error or unconfirmed
-command remains visible until another confirmed restart or provider exit.
-No read is scheduled solely to clear a notice; hidden verification waits for
-normal visible reads. State is kept in provider memory across page recreation,
-not persisted across a full provider-process restart. No credential or command
-capability is cached by the page. WSL/UI geometry, Linux reader fix, frontend,
-allowlist, credentials and project routes are otherwise unchanged.
+systemd supplies protected files through `LoadCredential`. The reader returns only the registry entry count, not project names, paths or secrets. The control helper accepts exactly four unit mappings: `nginx.service`, `php8.5-fpm.service`, `mariadb.service`, `redis-server.service`. It checks Host, rejects browser Origin and malformed/oversized framing, validates a separate bearer token and accepts only the fixed JSON request schema. A lock and pre-consumed request IDs prevent concurrent/replayed operations. It is still a privileged trust boundary, not an independently audited security guarantee.
 
-Existing 0.4.0 users who completed the reader fix only need Install-Widgets.ps1
-from the matching new signed package. Do NOT run either Linux setup again.
-The first device test is Cancel; then a single confirmed restart and verify
-popover dismissal, inline progression, expiry after closing/reopening, and
-normal project links. Automated validation does not replace device acceptance.
+## Measurements
 
-## 0.4.2 — consistent popover dismissal and recovered service notices
+Ubuntu CPU/RAM reflect the WSL kernel; disk reflects `/`, and uptime reflects PID 1. Service memory is cgroup `MemoryCurrent`, including cache, and CPU is an on-demand `CPUUsageNSec` delta where 100% is one logical CPU.
 
-WSL resource details now close on a click elsewhere inside the widget; clicks
-inside details keep them open, another resource opens its own details, and
-Escape/close still work. No change to WSL Stop confirmation, layout, metrics,
-Ubuntu lifecycle or reader. Both document versions are bumped to avoid stale
-cached JS after upgrading. The package version is 0.4.2.0.
+Windows independently checks endpoint reachability. Nginx/PHP share a single end-to-end HTTPS `/api/session` probe. MariaDB/Redis timings measure TCP connection setup. These are not query/command benchmarks. Unavailable values stay null/dashes. The display and post-restart verification distinguish endpoint availability from systemd state.
 
-The 0.4.1 error lifetime above is superseded: unresolved error, unconfirmed
-command or not-run notices remain visible while the affected service is not
-verified healthy. A new accepted read must show the same service's systemd
-unit active AND its Windows HTTPS/TCP probe reachable, valid integration and
-running Ubuntu. Another healthy service, a stale snapshot, just one of those
-checks, missing data or an offline/hidden panel cannot resolve the error.
-When health returns, replace the error with a service-specific recovery notice
-for 30 seconds (absolute expiry including hidden time). If the command itself
-was not confirmed or did not run, show availability with that qualification,
-never "restart succeeded". This is passive verification only: no automatic
-restart, extra polling, Linux setup, privilege or project route change. Like
-0.4.1, notices are kept within the provider lifetime, not across process exit.
-Existing configured 0.4.x users run only the matching Install-Widgets.ps1.
+## Restart result lifecycle
 
-Regression tests cover WSL inside/outside/Escape/close in both themes and the
-DevStack transition from unresolved errors to recovered/availability-only,
-including invalid integration, inactive unit, unreachable port, expiry and
-no extra restart. Actual Windows host acceptance remains a separate gate.
+`DevStackWidget` owns `restarting`, `verifying`, `success`, `error`, `unconfirmed`, `not-run` and recovery/availability states. After explicit confirmation the details popover closes; a small icon and service-specific line appear under the project count, never as an overlapping toast.
 
-## Installer maintenance — automatic post-update reset
+Success requires a newly accepted post-command snapshot with running Ubuntu, valid integration, the selected unit active and its endpoint reachable. An unrelated healthy service, stale/incomplete readings or endpoint reachability alone cannot clear a failure. Later healthy reads replace an error with a recovery notice. Unknown/not-executed commands preserve that qualification rather than claiming restart success.
 
-The post-deployment reset is now part of Install-Widgets.ps1 for all future
-bundles. This is an installer-only change; existing 0.4.2.0 binaries and
-telemetry need no reinstall for this maintenance. The Windows manifest test
-checks ordering and exercises the installer deployment tail with mocked
-commands (success, failed deployment, wrong version, bad status, missing
-package). Actual Windows process termination remains a device test.
+Success/recovery notices expire at an absolute timestamp 30 seconds later; closing the panel does not pause expiry. Clearing a notice performs no extra read. Errors remain unresolved during the provider's lifetime until verified recovery or a superseding action. Notices survive page recreation within that lifetime but are not persisted over full provider-process exit. No capability is restored from a display cache.
+
+## Install/update behavior
+
+`Install-Widgets.ps1` validates expected package identity/version and signer, imports only the matching development CER into TrustedPeople, verifies signature trust, performs an in-place update, checks installed version/Status Ok and attempts a final reset of `WidgetBoard` and `DevStack.Widgets`. A prior reset prevents stale processes during deployment; the final one handles processes relaunched during installation. Failed deployment skips the final reset. Reset errors warn instead of silently asserting success.
+
+`Install-WslTelemetry.ps1` and `Install-DevStackWidget.ps1` are deliberate, one-time Linux setup paths with exact UTF-8 stdin transport. They refuse a stopped distribution. Routine Windows package updates do not require either setup again. Service integration health checks are reads, not restarts. Default service setup updates only the bundled static frontend after successful health checks, preserving a previous-index backup and old hashed assets; `-SkipFrontend` opts out.
+
+## Configuration and diagnostics
+
+Windows settings are stored in `%LOCALAPPDATA%\DevStack\Widgets`: `telemetry.json` and `services.json` contain credentials and must not be shared. The bounded `wsl-bridge.log` contains event codes, hashed widget identifiers and sanitized exception type/HRESULT, not tokens or raw message bodies. Review diagnostics before posting.
+
+Linux integration files are under `/usr/local/lib/devstack-widgets`, `/etc/devstack-widgets` and `/etc/systemd/system/devstack-widget-*`. The service-control replay ledger is under `/run/devstack-widget-control`. Do not remove protected state or reset application services to repair a UI issue.
+
+## Build and validation
+
+The workflow `.github/workflows/widgets.yml` generates page assets, runs manifest/installer-order and provider tests, checks production pages in Chromium, builds the static frontend, compiles x64 MSIX, signs it with a temporary development key, deletes the private PFX, and uploads the matching installer bundle. The public CER is included; the private signing key is not.
+
+The Linux suites cover request bounds, authentication, replay and reader identity. `.github/workflows/widget-reader.yml` exercises the real systemd reader sandbox; `.github/workflows/widgets-installer.yml` checks telemetry installer behavior. Browser fixtures mock native message transport and provider policy tests mock OS actions. These tests complement, not replace, actual host validation and do not certify every sleep, battery or regional configuration.
+
+Use the exact workflow source revision and matching bundle when reporting a defect. The functional widget release has received device-user acceptance; broader application integration and multi-machine reliability testing are separate from that acceptance.

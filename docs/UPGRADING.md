@@ -1,78 +1,71 @@
-# Updating an existing DevStack installation
+# Updating DevStack
 
-This guide is for a **previously installed** DevStack on Ubuntu 26.04 under WSL2. **Never rerun the first-install-only bootstrap or scripts/install.sh**.
+The website/helper, Windows hosts task, Windows widgets and their Linux integrations are separate components. Updating one does not imply the others were updated. **Do not rerun first-install bootstrap or `scripts/install.sh` on an existing installation.**
 
-DevStack provides an updater that runs tests and builds as your ordinary Ubuntu user, stages the installed application under root, keeps a backup of the previous application code, verifies services, and attempts to roll back if deployment fails.
+## Existing website and helper
 
-**Important limitations:** This updater does not migrate service units, Nginx/FPM system configuration, the local CA, the Windows hosts scheduled task, or MariaDB schemas. It is not a substitute for a verified WSL export and SQL backups. Unexpected power loss or a forced process termination between two directory renames may require restoring from the root-only previous-code backup. The updater requires local WSL/Windows validation before being considered proven for a particular workstation.
+Before changes, follow [BACKUP-RESTORE.md](BACKUP-RESTORE.md). An application-code backup is not a database backup or full WSL export. Save work; helper restarts and PHP-FPM reloads can interrupt dashboard requests.
 
-## 1. Back up and inspect
+In the **Ubuntu shell as the ordinary developer account**:
 
-Follow [BACKUP-RESTORE.md](BACKUP-RESTORE.md) before applying changes to an important workstation. A full offline WSL export can restore both the installed application and its private data. Never commit backups or mkcert private keys to Git.
-
-Close long-running project operations; updating the PHP-FPM manager pool and DevStack helper can briefly interrupt dashboard requests.
-
-In the **Ubuntu shell** as your ordinary account (not under sudo):
-
-~~~bash
+```bash
 cd ~/projects/devstack-source
 git status --short
 git pull --ff-only
 git log -3 --oneline
-~~~
-
-Review incoming changes. The update script requires a clean tracked checkout on `main` in `~/projects/devstack-source`.
-
-## 2. One-command deployment
-
-~~~bash
-cd ~/projects/devstack-source
 bash scripts/update.sh
-~~~
+```
 
-The update entry point:
+Review incoming changes before the last command. The updater requires the checkout on `main`, the expected `~/projects/devstack-source` path and a clean tracked working tree. Do not run npm/builds as root.
 
-1. Checks the normal user, expected checkout path, clean tracked tree and installed DevStack.
-2. Fast-forwards only the `main` branch.
-3. Runs Python/PHP tests, PHP/Python syntax checks and the repository's security scan.
-4. Builds the frontend as the **ordinary user**, never with sudo.
-5. Asks for sudo only to run `scripts/apply-update.sh`, which validates the configured developer, stages a copy of `/opt/devstack`, updates only allowlisted application files, checks Nginx/PHP syntax, and makes a root-only backup at `/var/backups/devstack/update-*/installed`.
-6. Replaces the installed code, restarts `devstackd`, reloads PHP-FPM, and checks Nginx, PHP-FPM, MariaDB, Redis, the helper, and the HTTPS dashboard.
-7. On a detected failure during deployment, attempts to restore the previous `/opt/devstack` and restart the services.
+The updater validates the installation, fast-forwards source, runs Python/PHP tests, syntax and security checks, and builds the frontend. It requests sudo for `apply-update.sh`, which stages allowlisted application files, checks Nginx/PHP syntax, keeps a root-only previous-code backup under `/var/backups/devstack/update-*/installed`, replaces the installed code, restarts the helper, reloads PHP-FPM and checks services/HTTPS. On a detected deployment failure it attempts rollback.
 
-**The updater never reinitializes** `/var/lib/devstack`, `/etc/devstack`, the mkcert CA, project source directories, MariaDB accounts/databases, or Windows certificate trust. It updates only allowlisted application code and compiled frontend files in `/opt/devstack`.
+It does **not** reinitialize project data, databases, CA keys, Windows certificate trust or the hosts task. It is not a general migration tool for system service units, Nginx/FPM system configuration or database schemas. Rollback is best-effort; power loss or forced termination between directory operations can require manual recovery. Backup retention is not automatic.
 
-The protected code backup is not a complete system backup and should not be moved to public storage. Old backups are intentionally not deleted automatically.
+## Verify the website update
 
-## 3. Check after an update
-
-~~~bash
+```bash
 systemctl is-active nginx php8.5-fpm mariadb redis-server devstackd
 sudo nginx -t
 sudo php-fpm8.5 -t
 curl -ksS --noproxy '*' --resolve devstack.test:443:127.0.0.1 https://devstack.test/api/session
-~~~
+```
 
-Refresh https://devstack.test using Ctrl+F5. Use a disposable project to verify creation, database reads/writes, guarded removal, and Windows hosts changes if those parts were updated.
+The `-k` request diagnoses local response only; it does not verify certificate trust. Refresh the Windows browser with Ctrl+F5 and use normal certificate validation. Test a disposable project's affected workflow without repeatedly recreating a partially created project.
 
-The updater does not reconfigure the **Windows** hosts task or certificate trust. See [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md) for explicit changes to that integration.
+## Windows widget package
 
-## 4. Manual rollback / emergency recovery
+Download a complete matching artifact from a successful [Windows Widgets workflow](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml). Extract it to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`. Never mix the installer, CER and MSIX from different runs. Extraction itself is not installation.
 
-If the updater returns an error, read its rollback message and check service status; do not assume every failed update rolled back perfectly. Its root-only installed-code backups are created under:
+In **Windows PowerShell as Administrator under the WSL-owning account**:
 
-~~~text
-/var/backups/devstack/update-XXXXXXXX/installed
-~~~
+```powershell
+& {
+    $ErrorActionPreference = 'Stop'
+    $dir = "$env:USERPROFILE\Downloads\DevStack-Windows-Widgets-x64"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-Widgets.ps1"
+    if ($LASTEXITCODE -ne 0) { throw 'Widget update failed.' }
+    Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' |
+        Select-Object Name, Version, Status
+}
+```
 
-The exact directory is printed by the script. **The archive from your offline WSL export remains the safest full-system rollback point.**
+The installer verifies signature and identity, updates in place, checks the installed version/Status Ok and **automatically resets `WidgetBoard` and `DevStack.Widgets` after success**, in addition to the pre-deployment stop. A reset error produces a warning. Open Win + W again. Do not remove the working package first or reset Ubuntu as cleanup.
 
-If a hard power loss happened during a directory swap, inspect `/opt/devstack`, `/opt/.devstack-stage.*` and `/var/backups/devstack` before taking any action. Do **not** blindly delete anything or overwrite running databases. Restore only affected installed application code after inspecting the backup and paths. Verify `nginx -t`, `php-fpm8.5 -t`, `systemctl` status and dashboard access afterwards.
+Routine updates preserve integration configuration. Do not rerun `Install-WslTelemetry.ps1` or `Install-DevStackWidget.ps1` unless a version's instructions specifically require an integration change. The [widget guide](../windows/widgets/README.md) explains first setup, measurement scope and recovery.
 
-Existing workstation updates must not involve the initial installation script.
+## Linux integration and hosts changes
 
-References:
-- [Backups and restoration](BACKUP-RESTORE.md)
-- [Windows and Ubuntu fresh installation](INSTALL-WINDOWS-WSL.md)
-- [Troubleshooting](TROUBLESHOOTING.md)
-- [Security](../SECURITY.md)
+A new widget installation can optionally add the read-only Ubuntu collector and the service read/control integration while Ubuntu is already running. Service setup may deploy only the matching static frontend for project deep links, with an index backup. This is not a general DevStack backend update. Current service bundles include the [reader compatibility correction](../windows/widgets/DEVSTACK-READER-FIX.md).
+
+The Windows hosts task changes only when `windows/install-hosts-sync.ps1` is deliberately run. Follow the [existing-workstation migration](INSTALL-WINDOWS-WSL.md#5-existing-workstation-install-this-integration-without-reinstalling); do not repeat CA setup to update the task.
+
+## Rollback and recovery
+
+Read the updater's actual error and rollback result. Inspect `/opt/devstack`, any `/opt/.devstack-stage.*` directories and `/var/backups/devstack/update-*/installed` before changing anything. Do not blindly remove staged folders or overwrite running databases. Restore affected application files only after reviewing paths and backups, then repeat syntax, service and HTTPS checks.
+
+A static frontend integration backup is stored under `/var/backups/devstack/widget-frontend-*`. It contains the old `index.html`; retained hashed assets let a reviewed rollback reference those assets. It is not a full application or database backup.
+
+MSIX downgrade/reinstallation can affect pinned cards and per-user state. Prefer correcting a failed update in place; do not uninstall merely because a newer signer or host session needs diagnosis. Back up protected settings securely before any deliberate removal, and never post credentials in an issue.
+
+See [security](../SECURITY.md), [troubleshooting](TROUBLESHOOTING.md) and [backup/restore](BACKUP-RESTORE.md).

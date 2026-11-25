@@ -1,20 +1,28 @@
-# DevStack: clean Windows 11 + Ubuntu 26.04 WSL2 installation
+# First installation: Windows 11 and Ubuntu WSL2
 
-This walkthrough reconstructs a **fresh DevStack workstation** using public repository scripts. Keep the existing Linux projects and backups separate. **Do not rerun the first-install script on an existing machine.**
+This guide is for a **new DevStack installation**. Existing installations use [UPGRADING.md](UPGRADING.md), not the bootstrap or `install.sh`. Keep backups separate from the source checkout. All sample account names and paths below are configuration examples.
 
-## 1. Windows: initialize WSL2 once
+## 1. Prepare Windows and Ubuntu
 
-Open **Windows PowerShell as Administrator**:
+In **Windows PowerShell as Administrator**:
 
 ```powershell
 wsl --install -d Ubuntu-26.04
 ```
 
-Restart Windows if requested. Open Ubuntu, create your ordinary Ubuntu developer user and password, then enter the Ubuntu shell. Enable systemd if necessary (WSL Ubuntu 26.04 normally includes it); confirm `ps -p 1 -o comm=` displays `systemd`.
+Restart Windows if requested. Open Ubuntu and create an ordinary developer account with a password and sudo access. The supplied widget Start action currently uses Linux user `ubuntu`; use that account if you intend to install the prebuilt widgets, or review and rebuild their configuration for a different account.
 
-## 2. Ubuntu: fetch and install DevStack
+In **Ubuntu**, check PID 1:
 
-In **Ubuntu WSL2**, not Windows PowerShell:
+```bash
+ps -p 1 -o comm=
+```
+
+It must be `systemd` for DevStack's service units and widget integrations. Do not continue service setup until WSL/systemd is configured correctly. Use Linux `~/projects` for projects, not `/mnt/c`.
+
+## 2. Install DevStack in Ubuntu
+
+Run as the ordinary Ubuntu account, **not a root shell**:
 
 ```bash
 sudo apt update
@@ -27,11 +35,11 @@ less scripts/install.sh
 bash scripts/bootstrap-ubuntu.sh
 ```
 
-The bootstrap installs official Ubuntu build prerequisites, checks the installed Node.js version, builds the frontend as your normal user, runs preflight and tests, then invokes the first-install-only service setup with sudo. During that interactive setup, choose password authentication (recommended) or explicitly opt into passwordless local mode.
+The bootstrap installs Ubuntu build prerequisites, validates Node.js, builds the frontend without sudo, checks the environment and tests, and invokes the first-install script with sudo. It refuses an already installed DevStack. Node.js is needed for builds, not as a running server. An unsupported Node.js version causes a stop rather than an unreviewed third-party runtime installation.
 
-If the Ubuntu package's Node.js version is too old for Vite 8, the bootstrap **stops**, rather than running an unreviewed third-party installation script. Install a supported maintained Node.js version, then rerun the bootstrap before the actual installer has started.
+Review the authentication prompt. Password mode is recommended; passwordless local mode deliberately gives any process able to reach the dashboard extensive administration access. See [SECURITY.md](../SECURITY.md).
 
-Verify Ubuntu services:
+The installer configures the local Nginx/PHP-FPM stack, MariaDB, Redis, mkcert and the DevStack helper. Check:
 
 ```bash
 systemctl is-active nginx php8.5-fpm mariadb redis-server devstackd
@@ -40,22 +48,22 @@ sudo php-fpm8.5 -t
 curl -ksS --noproxy '*' --resolve devstack.test:443:127.0.0.1 https://devstack.test/api/session
 ```
 
-## 3. Windows: once-only CA authorization and hosts integration
+Here `curl -k` is a diagnostic before trust configuration, not proof that TLS trust is correct. Normal Windows browsing must validate the certificate.
 
-Back in **Windows PowerShell as Administrator** (run as the Windows user owning the WSL distro):
+## 3. Authorize local CA trust and Windows hosts integration
+
+Use **Windows PowerShell as Administrator under the Windows account that owns Ubuntu**:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-$setup = '\\wsl.localhost\Ubuntu-26.04\home\ubuntu\projects\devstack-source\windows\setup-windows.ps1'
+$setup = '\\wsl.localhost\Ubuntu-26.04\home\<ubuntu-user>\projects\devstack-source\windows\setup-windows.ps1'
 Get-Content -LiteralPath $setup
 & $setup
 ```
 
-Change `ubuntu` in the UNC path if the actual Ubuntu user is different. Review the public CA fingerprint shown by the interactive script before typing `YES`. The local CA's private key stays inside Ubuntu.
+Replace `<ubuntu-user>`. Review the displayed public CA fingerprint before typing the required confirmation. The CA private key stays in Ubuntu. This CA is separate from the Windows widget code-signing certificate. See [WINDOWS-CA.md](WINDOWS-CA.md).
 
-The Windows installer copies the trusted synchronization scripts to an ACL-protected `C:\ProgramData\DevStack` folder and registers **DevStack Hosts Event Sync** as a **manual-trigger-only**, elevated Windows task. It runs the already-tested `watch-hosts.ps1 -Once` as an elevated, **noninteractive S4U** Windows task (with `-WindowStyle Hidden` as an additional precaution), so **no PowerShell console should flash**. The task allows battery power and has **no Windows logon trigger or resident WMI listener**. On a target ASUS workstation, this configuration passed an actual create/delete and automatic Windows hosts sync test without a visible window. The installed Ubuntu daemon sends a fixed `schtasks.exe /Run` signal after project changes and at service startup. Windows checks that Ubuntu is already running before reading domains; it does not wake a stopped distro, accept shell arguments from projects, or change certificate trust.
-
-Confirm:
+The installer copies synchronization scripts to ACL-protected `C:\ProgramData\DevStack` and registers **DevStack Hosts Event Sync**. The task uses an elevated, noninteractive S4U session, `-Once`, no logon trigger, and no resident Windows WMI listener. Only the managed block in Windows hosts is replaced; unrelated entries are preserved and the previous file is backed up.
 
 ```powershell
 Get-ScheduledTask -TaskName 'DevStack Hosts Event Sync'
@@ -63,7 +71,7 @@ Get-ScheduledTaskInfo -TaskName 'DevStack Hosts Event Sync'
 Get-Content "$env:WINDIR\System32\drivers\etc\hosts"
 ```
 
-The hosts file will contain:
+When idle, expect the task to be `Ready`. The managed block includes:
 
 ```text
 # BEGIN DevStack managed domains
@@ -71,86 +79,59 @@ The hosts file will contain:
 # END DevStack managed domains
 ```
 
-## 4. Normal development
+The Linux helper requests the fixed task after project changes and at service startup. Windows validates the domain list and checks that Ubuntu is already running before any Linux read. Merely logging into Windows must not start Ubuntu. The task runs as the WSL-owning Windows account; a different account does not own the same distro registration.
 
-Open `https://devstack.test` in the Windows browser. Creating or removing a project commits the root-owned `/var/lib/devstack/projects.json` state and triggers the existing privileged Windows hosts reconciliation using a **fixed task name**, with no arbitrary command or domain input in the trigger. The Windows script reads and validates the complete domain list on each run; its managed `hosts` block is backed up before changes. Fast consecutive requests queue rather than cancel an in-progress sync.
+## 4. Open the dashboard and optional widgets
 
-The same one-shot request also runs when the existing `devstackd` service starts inside Ubuntu, so missed changes can be reconciled without a Windows watcher. There is no extra Windows process at logon. The `-Once` command first checks `wsl --list --running --quiet` and exits without starting Ubuntu if the distribution is stopped. Creating/deleting projects needs no UAC prompt after the initial Windows task registration. Editing a project's domain/slug is not yet implemented.
+With Ubuntu deliberately running, open **https://devstack.test**. Create a disposable project, verify its domain/HTTPS, and test guarded removal. Database deletion is a separate irreversible operation; source code is kept.
 
-**Existing workstations:** the installed Windows task does **not** change when you only pull source or update DevStack inside Ubuntu. An old B1 logon-triggered listener continues until you explicitly install the new task (section 5). Do not assume that GitHub source updates have changed your current Windows configuration.
+Opening the URL alone does not wake a stopped distribution. Start Ubuntu deliberately from a terminal or the Ubuntu widget. Closing the browser does not stop it.
+
+For the two separate Windows cards, follow [DevStack Widgets](../windows/widgets/README.md). Installing the Windows MSIX, setting up optional WSL metrics, and setting up DevStack service metrics/control are separate operations. No Visual Studio installation is needed for a prebuilt CI package.
 
 ## 5. Existing workstation: install this integration without reinstalling
 
-Since the CA is already trusted, avoid running the one-time CA wizard again.
+This section migrates an older Windows hosts listener. It does not reinstall DevStack or reauthorize an already trusted CA.
 
-In **Ubuntu**:
+First update the installed Linux application using [UPGRADING.md](UPGRADING.md). Pulling source alone does not update `/opt/devstack` or the installed Windows task. With Ubuntu deliberately running, inspect the current one-shot script:
 
-```bash
-cd ~/projects/devstack-source
-git pull --ff-only
-python3 -m unittest discover -s tests -v
-sudo install -m 0644 -o root -g root scripts/watch-domains.py /opt/devstack/scripts/watch-domains.py
+```powershell
+$testScript = '\\wsl.localhost\Ubuntu-26.04\home\<ubuntu-user>\projects\devstack-source\windows\watch-hosts.ps1'
+& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+    -File $testScript -Once
+$LASTEXITCODE
 ```
 
-In **Windows PowerShell as Administrator**:
+Run this in an elevated PowerShell session after substituting the Linux user. A zero exit code can mean successful reconciliation or a safe skip when Ubuntu is stopped. Check actual hosts results rather than relying only on the exit code.
+
+Then install only the Windows hosts task:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-$installer = '\\wsl.localhost\Ubuntu-26.04\home\ubuntu\projects\devstack-source\windows\install-hosts-sync.ps1'
+$installer = '\\wsl.localhost\Ubuntu-26.04\home\<ubuntu-user>\projects\devstack-source\windows\install-hosts-sync.ps1'
 Get-Content -LiteralPath $installer
 & $installer
 ```
 
-No Nginx, PHP, database or WSL restart is required.
+The script backs up the previous task definition under `C:\ProgramData\DevStack\task-before-on-demand.xml`, stops the older listener and registers the same task name without a logon trigger. It does not change CA trust. Test create/delete synchronization, no visible console, unrelated hosts preservation and stopped-WSL behavior. Restore an older task only deliberately after reviewing the backup; it may restore unwanted logon behavior.
 
-## 5a. Existing workstation: safe on-demand migration checks
+## 6. Diagnostics and removal
 
-**Do not replace the currently installed scheduled task on the basis of CI alone.** With Ubuntu intentionally running and the source updated, first test only the one-shot script from a separate elevated Windows PowerShell console:
-
-~~~powershell
-$testScript = '\\wsl.localhost\Ubuntu-26.04\home\ubuntu\projects\devstack-source\windows\watch-hosts.ps1'
-& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $testScript -Once
-$LASTEXITCODE
-~~~
-
-Expect exit code `0` and unchanged unrelated hosts entries. A running legacy B1 observer may perform the same idempotent sync; this is acceptable during this pre-deployment test. Next, install the new task from section 5 as Administrator. The installer backs up the previous task XML as `C:\ProgramData\DevStack\task-before-on-demand.xml`, stops the logon observer and registers the **same task name with no trigger**, using **S4U noninteractive logon**, the hidden PowerShell launch style and `-Once`. `S4U` deliberately avoids an interactive console; it does not require storing a user's password and must be run as the Windows account that owns Ubuntu. Check its domain-reading path on your WSL installation. It does not touch trusted CA settings.
-
-After installation, expect `Get-ScheduledTask -TaskName 'DevStack Hosts Event Sync'` to be `Ready` when idle, with zero triggers. Test a disposable non-database project creation/deletion, matching Windows `hosts`, one-shot `LastTaskResult = 0`, no visible PowerShell window and no admin prompts. Close Ubuntu via `wsl --terminate Ubuntu-26.04`, verify it stays stopped and the task does not run by itself. A new login must not start a DevStack Windows PowerShell process; the task remains available for next use.
-
-**Rollback:** the old XML task definition is saved in the protected directory and the legacy listener code remains in `watch-hosts.ps1`. Do not restore the old trigger automatically; only reinstall the saved task definition as Administrator if the new sync fails, then verify B1 behavior before returning to work.
-
-
-## 6. Troubleshooting and removal
-
-The current on-demand task should remain idle at Windows login and must not start Ubuntu. To diagnose:
+The [troubleshooting guide](TROUBLESHOOTING.md) separates dashboard, hosts and widget issues. For a one-shot installed hosts check, use an elevated PowerShell child process:
 
 ```powershell
-Get-ScheduledTask -TaskName 'DevStack Hosts Event Sync'
-Get-ScheduledTaskInfo -TaskName 'DevStack Hosts Event Sync'
-
-# Run the installed watcher once in a NEW PowerShell process.
-# Avoids PSSecurityException if direct .ps1 invocation is disabled.
 & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
     -File "$env:ProgramData\DevStack\watch-hosts.ps1" -Once
 $LASTEXITCODE
 ```
 
-The one-shot command requires an **elevated Windows PowerShell** session, and the exit code should be **0**. It checks whether Ubuntu is already running; if stopped, it skips without waking it. `-ExecutionPolicy Bypass` applies only to the child PowerShell process. Use for diagnostics; the normal project workflow triggers the protected task automatically.
-
-To stop the automatic bridge without touching Ubuntu or the CA:
+To deliberately remove the automatic hosts task, without touching Ubuntu or certificates:
 
 ```powershell
 Stop-ScheduledTask -TaskName 'DevStack Hosts Event Sync'
 Unregister-ScheduledTask -TaskName 'DevStack Hosts Event Sync' -Confirm:$false
 ```
 
-This intentionally does not remove the previously trusted local CA or unrelated entries from Windows hosts.
-
-## Security and scope
-
-- The Windows scheduled task has elevated file-writing access only because you configured it once as a Windows administrator. Its executable scripts are protected by an Administrators/SYSTEM ACL; this is an administrative trust boundary.
-- The WSL daemon sends only a fixed, no-argument task trigger to Windows; the privileged Windows reader obtains validated domains directly. It never passes passwords, arbitrary shell text, state JSON or CA keys as task arguments.
-- The Windows reader validates every `.test` domain. A malformed managed hosts block causes a safe failure rather than deleting unrelated lines. A backup is created before any change.
-- Only the Windows account owning the WSL distro should install and run this task. Do not expose DevStack or its socket/ports on LAN or the Internet.
-- The bridge does **not** grant trust to new certificate authorities. Replacing the local CA is an explicit security operation requiring new Windows consent.
+This leaves hosts entries and certificate trust in place; it does not uninstall DevStack. Removing a widget card is unrelated to removing this scheduled task. Do not delete project data, databases or CA material as a generic repair step.

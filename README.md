@@ -1,148 +1,143 @@
 # DevStack
 
-**Local development environment manager** for **Windows 11 + WSL2 + Ubuntu 26.04 LTS**. DevStack hosts trusted local PHP/Laravel projects using Nginx, PHP-FPM 8.5, MariaDB, Redis and mkcert, with a lightweight Polish web dashboard.
+**A local PHP development environment for Windows 11 and Ubuntu on WSL2.** Manage local projects, HTTPS certificates, Nginx configuration and MariaDB from a web dashboard, and control Ubuntu and check services from two separate Windows widgets.
 
-> **Status: 0.1 — working development preview.** Tested on Windows/Ubuntu WSL2 for the core project lifecycle. Not production hosting, not a public control panel and not a sandbox for untrusted project code. Installations and upgrades require an administrator's review and backups.
+DevStack uses **Nginx, PHP-FPM 8.5, MariaDB, Redis and mkcert**. Its Polish-language dashboard is built with React and TypeScript; it is served as static assets plus a PHP API, not a continuously running Node.js development server.
 
-## What works
+> For trusted local development only. DevStack is not production hosting, a public control panel, or a security sandbox for untrusted project code. Review privileged installers and keep backups. The dashboard and Windows widget package have separate version numbers: the widget package described here is **0.4.2.0**.
 
-- **Local dashboard:** React 19, TypeScript, Tailwind CSS 4; persisted light/dark theme; service status for Nginx, PHP-FPM, MariaDB and Redis.
-- **Project lifecycle:** create project in `~/projects/<slug>`, assign its `.test` domain, document root, optional HTTPS and isolated database account; remove managed project configuration through a confirmation flow **while preserving the source directory**.
-- **MariaDB:** cryptographically generated per-project credentials, password reveal behind panel authentication, and a TCP connection/read/write test using a temporary table.
-- **Nginx:** separate PHP-FPM socket per project, managed virtual hosts, protected `location /` directives and validated server-level JavaScript/CSS asset `location` blocks (including the documented Laravel Flux rule). A save runs `nginx -t` before reload and rolls back failed validation.
-- **Windows integration:** local mkcert CA trust with explicit consent; on-demand Windows `hosts` synchronization after project changes and once when DevStack starts in WSL. The elevated **noninteractive S4U** Windows task runs briefly, without a login watcher or a visible PowerShell console; only the DevStack-managed block is modified and unrelated hosts entries are preserved. **Settings now provide a public CA certificate download and Windows import instructions**; they never silently trust or expose the CA private key.
-- **Security:** loopback-only Nginx listeners, dedicated non-root PHP web account, CSRF/session/origin protection, local Unix socket to a narrowly scoped root helper, root-only settings and credentials. Authentication is required by default, with a deliberate CLI opt-in for passwordless use on a trusted workstation.
+## Features
 
-**Known limitations:** a staged in-place updater with rollback attempts is now included, but it still requires real-machine validation. MariaDB dump and disposable restore were tested on a WSL workstation; full WSL archive import was also verified for the key DevStack files. Scheduled backups and tested live service recovery from the imported distro are not yet available. The new on-demand Windows task needs explicit installation on existing workstations: older installations may still run the previous logon listener until manually migrated. Native WSL starts only when applications request Linux. WSL idle lifetime still needs target-machine validation. Changing a project's domain/slug, automatic certificate renewal, and a Windows 11 native widget are not currently shipped. Laravel + Livewire 4 + Flux have not yet been tested end-to-end as a real application. See [SECURITY.md](SECURITY.md).
+| Area | What DevStack provides |
+| --- | --- |
+| Projects | Create a project under Linux `~/projects`, choose its relative document root and `.test` domain, configure HTTPS and an optional MariaDB database. Removing managed configuration preserves the source directory. |
+| PHP and Nginx | Separate PHP-FPM pool/socket per project; guarded Nginx edits with syntax validation and rollback on invalid configuration. |
+| Local HTTPS | mkcert certificates and explicit Windows trust of the public local CA. The CA private key remains in Ubuntu. |
+| Databases | Per-project database accounts, generated credentials, authenticated password reveal and a connection/read/write smoke test. Database removal needs a separate confirmation. |
+| Windows hosts | An elevated, on-demand scheduled task updates only the DevStack-managed hosts block. No resident Windows logon watcher is required. |
+| Ubuntu widget | Running/offline state, explicit Start, confirmed Stop, CPU, RAM, disk and uptime. |
+| DevStack widget | Four service tiles, response time and RAM, details and confirmed restart, total project count, and browser links to project screens. |
+| Maintenance | Staged application update, protected previous-code backup, database dump and disposable restore verification, documented WSL backup procedures. |
 
-## Requirements
+The widgets are separate cards in **Win + W**, not tray windows. They use locally packaged HTML with a native Windows provider. Displaying a card does not start Ubuntu. The dark outer surface is transparent, and both themes use the same information layout. See the [complete widget guide](windows/widgets/README.md).
 
-- Windows 11 with WSL2, `Ubuntu-26.04`, `systemd`, and an ordinary Ubuntu user with `sudo`.
-- Developer projects stored under Linux `~/projects` on the WSL filesystem, **not under `/mnt/c`**.
-- A supported current Node.js version for the frontend **build only**; no Node.js server runs at runtime.
-- Initial interactive Windows Administrator access for local CA trust and the managed `hosts` integration.
+## Requirements and scope
 
-## Fresh installation (new workstation only)
+- Windows 11 and WSL2 with `systemd` enabled in Ubuntu 26.04.
+- An ordinary Ubuntu developer account with `sudo`; project files on the Linux filesystem, not `/mnt/c`.
+- Node.js/npm for frontend builds only. The bootstrap checks supported versions and stops rather than silently installing a third-party runtime.
+- Initial Windows Administrator access, using the Windows account that owns the WSL distribution, for CA trust, hosts integration and widget package installation.
+- For the supplied **x64 widgets**, a compatible Windows Widgets Board, Windows App Runtime 2.7, and Microsoft Web Widget eligibility. The current widget configuration targets **`Ubuntu-26.04`**; its explicit Start action uses Linux user **`ubuntu`**. Other distribution/user names require a reviewed source configuration and rebuild, not a UI setting.
 
-**Ubuntu terminal:**
+Microsoft currently documents Web Widgets as EEA-only. Regional/host support and the brief native loading screen are controlled by Windows. See [Microsoft's provider requirements](https://learn.microsoft.com/en-us/windows/apps/develop/widgets/web-widget-providers).
 
-~~~bash
+## First installation
+
+Use this path only on a workstation without an existing DevStack installation. For an existing installation, use [Updating](#updating) instead.
+
+**In the Ubuntu terminal, as your ordinary account:**
+
+```bash
 sudo apt update
 sudo apt install -y git ca-certificates
 mkdir -p ~/projects
 git clone https://github.com/MrSSdev/DevStack.git ~/projects/devstack-source
 cd ~/projects/devstack-source
-
-# Inspect before executing privileged setup:
 less scripts/bootstrap-ubuntu.sh
 less scripts/install.sh
-
 bash scripts/bootstrap-ubuntu.sh
-~~~
+```
 
-The bootstrap prepares build dependencies, builds the frontend, runs tests, then invokes the initial installer. The installer asks for local authentication configuration and sets up Nginx, PHP-FPM, MariaDB, Redis, mkcert and the DevStack helper. If the supported Node version is unavailable, the build stops instead of silently installing third-party packages.
+The bootstrap builds the frontend, checks prerequisites and tests, then invokes the first-install setup. Review the interactive authentication choice; password authentication is recommended.
 
-**Windows PowerShell (run as Administrator, once, under the Windows user that owns WSL):**
+**In Windows PowerShell as Administrator, under the WSL-owning account:**
 
-~~~powershell
+```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 $setup = '\\wsl.localhost\Ubuntu-26.04\home\<ubuntu-user>\projects\devstack-source\windows\setup-windows.ps1'
 Get-Content -LiteralPath $setup
 & $setup
-~~~
+```
 
-Replace `<ubuntu-user>` with the actual Linux username. Review the CA fingerprint before approving trust. The private CA key stays inside Ubuntu.
+Replace `<ubuntu-user>` with the actual Linux username. Verify the displayed public CA fingerprint before approving trust. This setup also registers the on-demand hosts task. It is separate from widget installation.
 
-Open **https://devstack.test** in a Windows browser. Opening the URL does not start a stopped WSL distribution; start Ubuntu only through an application or terminal that actually uses WSL. After upgrading an existing installation, reinstall only the Windows hosts task from [the existing-workstation guide](docs/INSTALL-WINDOWS-WSL.md#5-existing-workstation-install-this-integration-without-reinstalling) to switch from the old listener to on-demand behavior; do not rerun CA trust setup.
+Open **https://devstack.test** in a Windows browser. The URL alone does not start a stopped distribution; open Ubuntu deliberately first. Follow the [detailed installation guide](docs/INSTALL-WINDOWS-WSL.md) for prerequisites and verification.
 
-**For a detailed clean-install guide and verification:** [docs/INSTALL-WINDOWS-WSL.md](docs/INSTALL-WINDOWS-WSL.md).
+## Daily use
 
-## Existing installation — do not rerun the installer
+**Start work:** open Ubuntu deliberately, or use **Uruchom Ubuntu** in the Ubuntu widget. Services configured during setup start with the distribution. Opening the dashboard URL or a widget alone must not wake a stopped Ubuntu instance.
 
-The bootstrap and `scripts/install.sh` are first-install-only and refuse to overwrite an existing installation. For an existing DevStack instance, run `bash scripts/update.sh` **as your normal Ubuntu user** to test, build, stage and deploy the update with a protected code backup and health checks. The updater has not yet been validated on every workstation; review its code and make backups first. Details: **[docs/UPGRADING.md](docs/UPGRADING.md)**.
+**Create a project:** use the dashboard's new-project screen, choose a source folder, relative webroot (commonly `public`), local domain, HTTPS and optional MariaDB. DevStack manages server configuration; it does not install Laravel or application dependencies for you.
 
-## Common tasks
+**Open projects:** the DevStack widget's **Dodaj projekt** and **Projekty** buttons open `https://devstack.test/#/new` and `https://devstack.test/#/projects` in the default browser. The dashboard's normal authentication still applies. No project forms are embedded in the widget.
 
-**Create a project:** open the dashboard, select new project, choose a folder, relative webroot (typically `public`), local domain, HTTPS and optional MariaDB.
+**Inspect or restart a service:** click its DevStack tile, inspect its measurements, choose **Uruchom ponownie** and confirm. Cancel performs no restart. A confirmed restart may interrupt that service's connections. A status line names the service, verifies its state and hides a successful result after 30 seconds. An unresolved error remains until a subsequent read verifies recovery; an unconfirmed command is never reported as a successful restart.
 
-**Test MariaDB:** open the project detail view and choose **Sprawdź połączenie, zapis i odczyt MariaDB**.
+**Stop work:** save work before confirming **Zatrzymaj Ubuntu**. This terminates `Ubuntu-26.04`, not every installed WSL distribution. Closing the browser or Widgets Board does not stop Ubuntu.
 
-**Edit Nginx:** the basic field accepts a limited set of `location /` directives. The **Dodatkowe lokalizacje zasobów JS/CSS** field supports validated extra server-level asset routing. An example for Flux is documented in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+**Remove a project:** use the dashboard's guarded removal flow and separately confirm any database destruction. Source files are preserved. Deleted database data requires a backup to recover.
 
-**Remove a project:** open its detail view, choose **Usuń projekt z DevStack**, type its exact identifier, and separately confirm destruction of its managed MariaDB database if present. **The project source directory stays on disk. Database removal is irreversible without a backup.**
+## Updating
 
-**Back up MariaDB (Ubuntu):** `sudo bash scripts/backup-project-db.sh <project-slug>`; validate the archive with `scripts/verify-project-db-backup.sh`. For WSL export and restoration procedures, see [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md). The MariaDB dump and temporary restore workflow has been tested on a WSL workstation; verify it on your own data as well.
+There are separate update paths; do not confuse extracting an archive with installing it.
 
-**Check services (Ubuntu):**
+| Component | Procedure |
+| --- | --- |
+| Existing DevStack website/helper | Run `bash scripts/update.sh` as the ordinary Ubuntu account in `~/projects/devstack-source` on `main`. It tests, builds, stages and deploys with a previous-code backup and health checks. |
+| Windows widget package | Extract the complete matching MSIX/CER bundle and run `Install-Widgets.ps1` as Windows Administrator. It updates in place, verifies the installed version/status and resets the widget processes after success. |
+| Widget Linux integrations | Install once with Ubuntu already running. Do not rerun on every widget update. Read the release instructions when an integration change is specifically required. |
+| Windows hosts task | Updated explicitly through `windows/install-hosts-sync.ps1`; a source pull or Linux application update does not replace an installed Windows task. |
 
-~~~bash
-systemctl is-active devstackd nginx php8.5-fpm mariadb redis-server
-sudo nginx -t
-sudo php-fpm8.5 -t
-~~~
+The code updater is not a database, system configuration or CA migration tool. Its rollback is best-effort, not a replacement for verified backups. See [UPGRADING.md](docs/UPGRADING.md) and the [widget installation guide](windows/widgets/README.md#installation).
 
-## Architecture
+## Architecture and safety
 
-~~~text
-Windows browser (https://devstack.test)
-          │
-       Nginx (WSL loopback only)
-          ├── static React assets
-          └── PHP-FPM manager pool (devstackweb)
-                  │ Unix domain socket + peer UID check
-                  ▼
-             devstackd helper
-                  ├── managed Nginx and PHP-FPM project pools
-                  ├── local MariaDB accounts/databases
-                  ├── local mkcert certificates
-                  └── root-only state and credentials
+```text
+Windows browser -> WSL loopback Nginx
+                     |-- static dashboard
+                     `-- PHP-FPM manager (devstackweb)
+                           `-- local Unix socket -> restricted root helper
+                                 |-- managed projects and service configuration
+                                 |-- local databases and certificates
+                                 `-- on-demand Windows hosts task
 
-Windows scheduled task ← inotify watcher ← projects.json changes
-           └── updates only the managed Windows hosts block
-~~~
+Windows Widgets Board -> packaged C# provider
+                          |-- Ubuntu card: passive state / explicit lifecycle actions
+                          `-- DevStack card: network probes / confirmed service actions
+                                `-- authenticated, socket-activated Linux helpers
+```
 
-Project PHP-FPM pools run as the trusted Ubuntu developer account. DevStack does not isolate one project's source files from another's.
+The UI documents measurement scope. Network availability is not the same as systemd unit state; Nginx and PHP share one end-to-end HTTPS probe. Linux memory readings are not total Windows memory. Missing data uses dashes rather than fabricated zeros.
 
-## Windows 11 widgets (experimental)
+Project PHP-FPM pools run as the trusted developer account, so projects are not isolated from each other's files. Protect `.env` files, database credentials, local CA private keys and backups. See [SECURITY.md](SECURITY.md).
 
-The repository now contains an optional packaged C# Windows App SDK provider with **two
-separate widgets** for the Windows 11 **Win + W** board:
+## Known limits
 
-- **WSL / Ubuntu** — show running status of `Ubuntu-26.04`, deliberate Start, and
-  Stop after confirmation.
-- **DevStack** — show passive HTTPS/TCP availability of Nginx, PHP-FPM, MariaDB,
-  and Redis plus a link to the local dashboard. These are connectivity checks,
-  not `systemctl` state assertions.
+Only large, x64 widget cards are supplied. Web Widget support depends on Microsoft host/region requirements. A short native loading spinner and temporary background differences may appear when opening the board. No promise of zero resident process memory or universal sleep/battery behavior is made.
 
-Both widgets share one provider process; displaying or refreshing either widget
-**does not start WSL**. GitHub Actions builds and test-signs the x64 MSIX on
-Windows, so Visual Studio/.NET SDK are not needed on the target device just for
-building. The development certificate from the workflow run must be trusted
-explicitly before installation. **Windows device testing is still required**
-before calling this feature stable.
+Automatic certificate renewal, domain/slug changes, scheduled backups and project-to-project security isolation are not implemented. A full Laravel + Livewire 4 + Flux application remains an integration-validation task; the presence of a Flux Nginx rule alone is not end-to-end framework certification.
 
-See [widgets source, security model, CI and installation instructions](windows/widgets/README.md).
+## Development and tests
 
-## Development and testing
-
-~~~bash
+```bash
 cd ~/projects/devstack-source
 python3 -m unittest discover -s tests -v
 php tests/php-security.php
+bash scripts/security-scan.sh
 bash scripts/build-frontend.sh
-~~~
+```
 
-CI checks TypeScript/Vite builds, Python/PHP validation, Windows PowerShell syntax and Windows hosts transformations. CI tests are not a substitute for live smoke tests on the target Windows/WSL setup.
+GitHub Actions also builds and test-signs the Windows x64 MSIX, tests the provider state machines, renders both production widget pages in Chromium, and exercises the Linux reader under real systemd. Some Windows/OS actions are mocked; CI does not establish behavior on every workstation. Build details are in the [widget technical reference](windows/widgets/DEVSTACK-0.4.md).
 
 ## Documentation
 
-- [Windows 11 + Ubuntu WSL2 fresh installation](docs/INSTALL-WINDOWS-WSL.md)
-- [Installing or restoring Windows local CA trust](docs/WINDOWS-CA.md)
-- [Updating an existing installation](docs/UPGRADING.md)
-- [Troubleshooting common problems](docs/TROUBLESHOOTING.md)
-- [Backups and disaster recovery](docs/BACKUP-RESTORE.md)
-- [Security policy and known risks](SECURITY.md)
-
-## License
+- [First installation and Windows hosts](docs/INSTALL-WINDOWS-WSL.md)
+- [Windows local CA trust](docs/WINDOWS-CA.md)
+- [Application and widget updates](docs/UPGRADING.md)
+- [Windows widgets: installation, operation and diagnostics](windows/widgets/README.md)
+- [Widget architecture and security boundaries](windows/widgets/DEVSTACK-0.4.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Backups and restoration](docs/BACKUP-RESTORE.md)
+- [Security policy](SECURITY.md)
 
 MIT — [LICENSE](LICENSE).

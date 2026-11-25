@@ -1,102 +1,120 @@
-# DevStack troubleshooting
+# Troubleshooting DevStack
 
-This is a **local development** service for Windows 11 + Ubuntu 26.04 WSL2, not a production hosting stack. Never paste private secrets, database passwords or mkcert CA private keys into issues.
+Identify the failing component before changing configuration. The dashboard, Windows hosts task, widget package and Linux widget integrations have independent installation and failure paths. Do not publish passwords, `.env` files, project registries, widget tokens, CA private keys or unredacted workstation screenshots.
 
-## Quick checks
+## Read-only starting point
 
-Run inside **Ubuntu**, not Windows PowerShell:
+**Windows PowerShell:**
 
-~~~bash
+```powershell
+wsl.exe --list --running
+Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' | Select-Object Name, Version, Status
+Get-ScheduledTask -TaskName 'DevStack Hosts Event Sync' -ErrorAction SilentlyContinue
+Get-ScheduledTaskInfo -TaskName 'DevStack Hosts Event Sync' -ErrorAction SilentlyContinue
+```
+
+These checks do not start Ubuntu. Opening an Ubuntu terminal or using `wsl -d` does, so do that only deliberately.
+
+**In an already-running Ubuntu terminal:**
+
+```bash
 systemctl is-active nginx php8.5-fpm mariadb redis-server devstackd
 sudo php-fpm8.5 -t
 sudo nginx -t
 sudo journalctl -u devstackd -n 50 --no-pager
 curl -ksS --noproxy '*' --resolve devstack.test:443:127.0.0.1 https://devstack.test/api/session
-~~~
+```
 
-The curl -k option is for a localhost diagnostic before certificate trust is configured. Normal browsing should validate HTTPS certificates.
+`curl -k` is a localhost diagnostic, not a normal TLS configuration or proof of trust. Review journal output before sharing it.
 
-## CSRF error after installation
+## Dashboard cannot be reached
 
-If GET refresh works, but saving a preference or project gives an invalid CSRF-token error, a legacy version may have stored PHP sessions in a root-only directory. The panel worker must be able to traverse the session directory.
+Confirm Ubuntu is running, services are active, `devstack.test` is in the managed Windows hosts block and normal HTTPS trust is valid. The dashboard URL does not wake a stopped distribution. Use [Windows CA guidance](WINDOWS-CA.md) for trust problems; never disable certificate validation globally or export the CA private key.
 
-~~~bash
-sudo install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web/sessions
-sudo sed -i 's|/var/lib/devstack/web-sessions|/var/lib/devstack-web/sessions|g' /etc/php/8.5/fpm/pool.d/devstack-manager.conf
-sudo php-fpm8.5 -t && sudo systemctl reload php8.5-fpm
-~~~
+## Widget installation or loading
 
-Close and reopen https://devstack.test. This repairs a **known legacy path only**; check the file before running commands on a customized installation.
+The [widget diagnostic guide](../windows/widgets/README.md#diagnostics) includes package/configuration checks and the relevant Linux socket units.
 
-## Project creation returns HTTP 502
+- **Installer not found:** inspect the complete extracted artifact and any extra nested directory. The source/preview artifact is not the installer bundle.
+- **Old installed version:** extraction and Linux setup do not install MSIX; run the matching `Install-Widgets.ps1`.
+- **Runtime or region incompatibility:** a supported Web Widget host is required in addition to the package's minimum Windows version. An explanatory fallback is not a working full web card.
+- **A brief spinner/color change:** this can occur before the local page is rendered; do not reinstall Ubuntu or telemetry for that transient host behavior.
+- **Persistent failure after an update:** check version and installer warnings. Current installers attempt a post-success host/provider reset automatically. For a one-time recovery only:
 
-Older releases synchronously reloaded php8.5-fpm during an in-flight FastCGI request, interrupting it. Current code validates PHP-FPM and defers its reload to a short-lived systemd timer.
+```powershell
+Get-Process -Name 'WidgetBoard', 'DevStack.Widgets' -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+```
 
-Update the installed application using [UPGRADING.md](UPGRADING.md), then inspect the real error. **Do not repeatedly recreate a project without checking** the project list, existing project directories, and services.
+Reopen Win + W. This stops Windows processes, not Ubuntu or its applications. A recurring reset requirement is a defect to investigate, not an intended normal workflow.
 
-~~~bash
-sudo journalctl -u devstackd -n 50 --no-pager
-~~~
+## Resource data or controls missing
 
-## Project creation fails with "runuser cannot set user ID (EPERM)"
+A socket being active means it listens; it does not prove authenticated measurements work. A control health HTTP 200 is not a restart test. A read-only fallback can show data while native control authentication is unavailable; do not force-enable the button.
 
-The helper has \`NoNewPrivileges=yes\`. Earlier versions used \`runuser\` to create developer-owned directories; current code uses a transient systemd service running with the developer account identity.
+Check only the existence of `%LOCALAPPDATA%\DevStack\Widgets\telemetry.json` and `services.json`, not their secret contents. Inspect the setup's stage/HTTP status and `wsl-bridge.log`. A failed setup can leave Linux files installed while Windows settings remain unwritten; keep the complete bundle and repair the identified failure.
 
-Follow [UPGRADING.md](UPGRADING.md) to update the installed helper and run unit tests before trying again.
+A service reader returning HTTP 503 while `systemctl show` works as root can indicate a different execution context in the sandbox. Current setup uses a dedicated local non-login reader identity. See [D-Bus reader compatibility](../windows/widgets/DEVSTACK-READER-FIX.md). Do not change D-Bus policy, run the reader as root or make project/token files world-readable.
 
-## MariaDB connection smoke test
-
-Open the project's page and select **Sprawdź połączenie, zapis i odczyt MariaDB**. DevStack connects to \`127.0.0.1:3306\` as the project's limited DB user, tests a temporary table, and does not expose credentials.
-
-An older revision incorrectly wrote literal backslash-n characters to a temporary MariaDB client configuration; update the installed daemon using [UPGRADING.md](UPGRADING.md) if this specific test fails. Do not change user passwords or drop the database solely because the test fails.
-
-## Flux JavaScript/CSS resources return 404
-
-For applications using Laravel Flux, add the following to **Dodatkowe lokalizacje zasobów JS/CSS** for the project, not into \`location /\`:
-
-~~~nginx
-location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {
-    expires off;
-    try_files $uri $uri/ /index.php?$query_string;
-}
-~~~
-
-DevStack places the validated server-level block before protected PHP handlers, checks \`nginx -t\` and rolls back invalid changes. The block alone does not install Laravel or Flux: the application must supply the routes and assets.
+An unresolved restart error stays visible until a fresh healthy read of the affected service. Recovery changes the notice and expires it after 30 seconds. No automatic restart is performed. An unconfirmed command may already have executed; inspect current state before deliberately trying again.
 
 ## Windows hosts synchronization
 
-See [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md). The on-demand Windows task uses the existing protected `watch-hosts.ps1 -Once` and `hosts-lib.ps1`, launched by hidden PowerShell (`-WindowStyle Hidden`) with `RunLevel Highest` and **no logon trigger**. The Linux daemon requests one short task execution after create/delete and at service startup. A read-only WSL state check skips synchronization when Ubuntu is stopped; a stopped distro must not be awakened. **Existing installations keep the older B1 resident listener until the Administrator explicitly reruns `windows/install-hosts-sync.ps1`; `git pull` alone does not change `C:\ProgramData\DevStack` or Task Scheduler.**
+The installed task is on-demand, elevated and noninteractive S4U. It has no logon trigger and must not wake stopped Ubuntu. `git pull` or a Linux application update does not replace an installed Windows scheduled task.
 
-To inspect (Windows PowerShell):
+Inspect the task and hosts file, then use a new **elevated Windows PowerShell** process for a one-shot check:
 
-~~~powershell
-Get-ScheduledTask -TaskName 'DevStack Hosts Event Sync'
-Get-ScheduledTaskInfo -TaskName 'DevStack Hosts Event Sync'
-Get-Content "$env:WINDIR\System32\drivers\etc\hosts"
-~~~
-
-If running `& "$env:ProgramData\DevStack\watch-hosts.ps1" -Once` directly fails with `PSSecurityException` / "running scripts is disabled on this system", start **Windows PowerShell as Administrator** and use a one-time child process instead:
-
-~~~powershell
+```powershell
 & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
     -File "$env:ProgramData\DevStack\watch-hosts.ps1" -Once
 $LASTEXITCODE
-~~~
+```
 
-Exit code `0` indicates successful reconciliation (or a safe skip if Ubuntu is stopped). This does not persistently relax PowerShell's execution policy, register a new task or start the resident listener; `-Once` now checks the running distro before any potentially starting `wsl -d` call.
+Zero means reconciliation succeeded or safely skipped a stopped distro. Verify actual entries and unrelated hosts preservation. `-ExecutionPolicy Bypass` affects only this child process. For migration from an older resident listener, use the [existing-workstation procedure](INSTALL-WINDOWS-WSL.md#5-existing-workstation-install-this-integration-without-reinstalling), not CA reinstallation.
 
-Before migrating an existing B1 task, run the one-shot pre-deployment check in [INSTALL-WINDOWS-WSL.md](INSTALL-WINDOWS-WSL.md), section 5a. Verify actual create/delete synchronization, no window, no logon listener, and that stopped Ubuntu remains stopped. **Do not mark the on-demand migration complete from CI or a successful `schtasks.exe /Run` POC alone.**
+## CSRF error on a legacy installation
 
-## Authentication and theme
+Some older installations used a root-only PHP session directory. First inspect the actual manager pool. Apply this only for the known old `/var/lib/devstack/web-sessions` path:
 
-Panel authentication defaults to password mode. An administrator can change modes from the Ubuntu shell:
+```bash
+sudo install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web/sessions
+sudo sed -i 's|/var/lib/devstack/web-sessions|/var/lib/devstack-web/sessions|g' /etc/php/8.5/fpm/pool.d/devstack-manager.conf
+sudo php-fpm8.5 -t && sudo systemctl reload php8.5-fpm
+```
 
-~~~bash
+Then reopen the dashboard. A session-path repair is not a reason to disable CSRF or password authentication.
+
+## Project creation returns HTTP 502 or EPERM
+
+Legacy synchronous PHP-FPM reloads could interrupt a FastCGI request. Current helper code validates FPM configuration and defers its reload using a short systemd timer. Legacy `runuser` directory creation under `NoNewPrivileges=yes` was also replaced with a bounded service running as the developer account.
+
+Update through [UPGRADING.md](UPGRADING.md), read `devstackd` errors and inspect the project registry through the dashboard before retrying. Do not repeatedly recreate a partially created project or weaken helper isolation without evidence.
+
+## MariaDB smoke test
+
+In a project detail page, select **Sprawdź połączenie, zapis i odczyt MariaDB**. It connects using that project's restricted account and a temporary table. A legacy temporary-client-config escaping bug is addressed in current helper code; use the updater rather than changing passwords or dropping databases to fix a failed test.
+
+## Flux JavaScript/CSS 404
+
+For an application that supplies Laravel Flux routes, add this in **Dodatkowe lokalizacje zasobów JS/CSS**, not inside `location /`:
+
+```nginx
+location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {
+    expires off;
+    try_files $uri $uri/ /index.php?$query_string;
+}
+```
+
+DevStack validates the extra server-level block, runs `nginx -t` and rolls back invalid edits. This rule does not install Laravel/Flux or establish end-to-end application compatibility.
+
+## Authentication and reporting
+
+To inspect or restore password authentication in Ubuntu:
+
+```bash
 sudo php /opt/devstack/scripts/configure-auth.php --status
 sudo php /opt/devstack/scripts/configure-auth.php --password
-~~~
+```
 
-The theme is stored on the server and rendered before React loads. If a legacy build flashes light when the dark theme is selected, update the backend, daemon and built frontend through [UPGRADING.md](UPGRADING.md).
-
-For security boundaries, see [SECURITY.md](../SECURITY.md).
+The dashboard theme is a server-side preference; widget themes follow their host. Include package version, source revision, failing stage and sanitized event codes in a report. Never attach the contents of protected settings or project records. See [SECURITY.md](../SECURITY.md).
