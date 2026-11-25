@@ -51,3 +51,11 @@ To update the installed synchronization task, follow the [Windows hosts update](
 Previous application code is stored under `/var/backups/devstack/update-*/installed`. The widget frontend setup keeps its previous index under `/var/backups/devstack/widget-frontend-*`. Review the updater result and affected files before restoring a backup.
 
 See [troubleshooting](TROUBLESHOOTING.md) and [backups and recovery](BACKUP-RESTORE.md).
+
+## Framework installer access after upgrade
+
+An upgrade does not alter the panel's authentication mode. A passwordless
+panel keeps framework operations disabled until a local administrator opts in
+using the command in [Security](../SECURITY.md). Existing authenticated
+installations do not need this step. The policy is stored under /etc/devstack,
+not in the versioned source or the browser, so subsequent updates retain it.

@@ -12,6 +12,38 @@ Choose password authentication during installation. Passwordless mode grants adm
 sudo php /opt/devstack/scripts/configure-auth.php --password
 ```
 
+### Framework installers without a panel password
+
+Password authentication is recommended. Installing a framework or updating
+its official tool can execute third-party Composer/npm code as the Linux
+developer account. On a trusted local-only workstation the administrator
+may explicitly allow these operations in the existing passwordless mode:
+
+```bash
+sudo php /opt/devstack/scripts/configure-auth.php --allow-local-installers --i-understand-local-risk
+```
+
+This is a one-time permission, not a browser setting. It leaves the panel
+authentication mode unchanged and is stored in a root-controlled
+`/etc/devstack/engine-access.mode` file. PHP and the privileged local helper
+both enforce the policy; an absent/invalid consent file denies passwordless
+framework operations. Ordinary authenticated operation needs no such flag.
+HTTPS, same-origin/CSRF checks, peer identity, the adapter allowlist and the
+unprivileged systemd worker are unchanged. Do not expose the passwordless
+panel to a LAN or other untrusted clients. Local reachability alone does not
+authenticate a person; any client that can reach a passwordless panel may
+request installation or updates.
+
+Revoke the permission or inspect status at any time:
+
+```bash
+sudo php /opt/devstack/scripts/configure-auth.php --disallow-local-installers
+sudo php /opt/devstack/scripts/configure-auth.php --status
+```
+
+The permission persists across code updates until explicitly revoked.
+Revocation blocks new framework operations, not an already-running installer.
+
 ## Windows integration and widgets
 
 Review privileged installation scripts. Verify the public mkcert CA fingerprint before importing it into Windows. Keep the private CA key inside Ubuntu. Install the widget MSIX using its matching public code-signing certificate and installer from the same trusted build.

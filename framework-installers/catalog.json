@@ -1,0 +1,32 @@
+{
+  "laravel": {
+    "label": "Laravel",
+    "tool": "Laravel Installer",
+    "webroot": "public",
+    "default_option": "none",
+    "option_label": "Starter kit Laravel",
+    "option_hint": "Livewire zawiera Flux UI i uwierzytelnianie Laravel.",
+    "options": [
+      {
+        "id": "none",
+        "label": "Bez starter kitu"
+      },
+      {
+        "id": "livewire",
+        "label": "Livewire"
+      }
+    ],
+    "description": "Oficjalny Laravel Installer zarządzany przez Composer; wymagane PHP, Composer, Node.js 20.19+ (20.x) lub 22.12+ oraz npm 11+.",
+    "database_options": [
+      {
+        "id": "sqlite",
+        "label": "SQLite"
+      },
+      {
+        "id": "mariadb",
+        "label": "MariaDB"
+      }
+    ],
+    "database_hint": "Oficjalny instalator Laravel wykona swoje domyślne migracje w wybranej bazie. Dla MariaDB DevStack wygeneruje konto i zapisze dane połączenia w .env."
+  }
+}

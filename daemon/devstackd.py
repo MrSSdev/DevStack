@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 import pathlib
+import queue
+import threading
 import pwd
 import re
 import secrets
@@ -26,6 +28,16 @@ SECRET_FILE = pathlib.Path('/var/lib/devstack/credentials.json')
 PREFERENCES_FILE = pathlib.Path('/var/lib/devstack/ui-preferences.json')
 CA_PUBLIC_FILE = pathlib.Path('/var/lib/devstack/ca/rootCA.pem')  # Public cert ONLY; never expose rootCA-key.pem.
 SOCKET_FILE = pathlib.Path('/run/devstack/control.sock')
+ENGINE_JOB_FILE = pathlib.Path('/var/lib/devstack/engine-job.json')
+ENGINE_DB_FILE = pathlib.Path('/var/lib/devstack/engine-db-reservation.json')
+AUTH_MODE_FILE = pathlib.Path('/etc/devstack/auth.mode')
+ENGINE_ACCESS_FILE = pathlib.Path('/etc/devstack/engine-access.mode')
+ENGINE_RUNNER = '/opt/devstack/framework-installers/runner.py'
+ENGINE_CATALOG_FILE = pathlib.Path(__file__).resolve().parents[1] / 'framework-installers/catalog.json'
+ENGINE_RESULTS = queue.SimpleQueue()
+ENGINE_ACTIVE = {'preparing', 'scaffolding', 'configuring', 'migrating', 'checking', 'installing', 'updating'}
+ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
+ENGINE_UNIT = re.compile(r'devstack-engine-[0-9a-f]{32}-[a-z-]+\Z')
 WINDOWS_SCHTASKS = pathlib.Path('/mnt/c/Windows/System32/schtasks.exe')
 WINDOWS_HOSTS_TASK = 'DevStack Hosts Event Sync'
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
@@ -294,7 +306,8 @@ def preferences(_: dict[str, Any]) -> dict[str, str]:
 
 def status(_: dict[str, Any]) -> dict[str, Any]:
     return {'services': service_status(), 'projects': public_projects(),
-            'preferences': get_ui_preferences()}
+            'preferences': get_ui_preferences(), 'engine_job': public_engine_job(),
+            'engines': engine_catalog(), 'engine_access_allowed': engine_access_allowed()}
 
 
 
@@ -365,11 +378,20 @@ def ensure_project_paths(root: pathlib.Path, webroot: str, dev_user: str) -> pat
 
 def grant_public_access(root: pathlib.Path, public: pathlib.Path, dev_user: str) -> None:
     base = pathlib.Path('/home') / dev_user / 'projects'
-    for path in [base.parent, base, root]:
-        run(['/usr/bin/setfacl', '-m', 'u:www-data:--x', str(path)])
-    run(['/usr/bin/setfacl', '-R', '-m', 'u:www-data:rX', str(public)])
-    for folder, dirs, files in os.walk(public, followlinks=False):
-        run(['/usr/bin/setfacl', '-d', '-m', 'u:www-data:rX', folder])
+    # The freshly installed tree is developer-controlled. Never recursively
+    # change its permissions as root; avoid following symlinks.
+    pwd.getpwnam(dev_user)
+    def developer_acl(argv: list[str]) -> None:
+        run(['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+             '--uid=' + dev_user, '--unit=devstack-acl-' + secrets.token_hex(8),
+             '--property=NoNewPrivileges=yes', '--property=RuntimeMaxSec=40s',
+             '--property=ProtectSystem=strict', '--property=ReadWritePaths=' + str(base.parent),
+             *argv])
+    developer_acl(['/usr/bin/setfacl', '-P', '-m', 'u:www-data:--x', '--',
+                   str(base.parent), str(base), str(root)])
+    developer_acl(['/usr/bin/setfacl', '-P', '-R', '-m', 'u:www-data:rX', '--', str(public)])
+    developer_acl(['/usr/bin/find', '-P', str(public), '-type', 'd', '-exec',
+                   '/usr/bin/setfacl', '-d', '-m', 'u:www-data:rX', '--', '{}', '+'])
 
 
 def php_pool(slug: str, user: str) -> str:
@@ -490,16 +512,24 @@ def mariadb_execute(sql: str) -> None:
         raise RuntimeError('MariaDB nie wykonala operacji. Sprawdz log serwera.') from None
 
 
-def create_db(slug: str) -> tuple[str, str, str]:
+def create_db(slug: str, *, password: str | None = None) -> tuple[str, str, str]:
     name, user = db_identifiers(slug)
-    password = secrets.token_urlsafe(36)
+    password = password if password is not None else secrets.token_urlsafe(36)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', password):
+        raise RuntimeError('Nieprawidlowe haslo generowanej bazy.')
+    # Do not adopt an existing database or drop a pre-existing account if
+    # CREATE USER fails. Roll back only resources we know we created.
+    created_user = False
     mariadb_execute(f'CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;')
     try:
         mariadb_execute(f"CREATE USER '{user}'@'127.0.0.1' IDENTIFIED BY '{password}';")
+        created_user = True
         mariadb_execute(f"GRANT ALL PRIVILEGES ON `{name}`.* TO '{user}'@'127.0.0.1';")
     except Exception:
         try:
-            drop_db(name, user)
+            mariadb_execute(f"DROP DATABASE IF EXISTS `{name}`;")
+            if created_user:
+                mariadb_execute(f"DROP USER IF EXISTS '{user}'@'127.0.0.1';")
         except Exception:
             print('Failed database cleanup for ' + slug, file=sys.stderr)
         raise
@@ -513,13 +543,15 @@ def drop_db(name: str, user: str) -> None:
     mariadb_execute(f"DROP DATABASE IF EXISTS `{name}`; DROP USER IF EXISTS '{user}'@'127.0.0.1';")
 
 
-def create(data: dict[str, Any]) -> dict[str, str]:
+def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str] | None = None) -> dict[str, str]:
     cfg = config()
     slug = check_slug(data.get('slug'))
     name = check_name(data.get('name'))
     domain = check_domain(data.get('domain'))
     webroot = check_webroot(data.get('webroot'))
     database = data.get('database') is True
+    if prepared_db is not None and (not database or prepared_db[:2] != db_identifiers(slug)):
+        raise RuntimeError('Niespojna rezerwacja MariaDB.')
     https = data.get('https') is True
     state = read_json(STATE_FILE)
     secrets_state = read_json(SECRET_FILE)
@@ -538,7 +570,7 @@ def create(data: dict[str, Any]) -> dict[str, str]:
         public = ensure_project_paths(root, webroot, cfg['dev_user'])
         grant_public_access(root, public, cfg['dev_user'])
         if database:
-            db_info = create_db(slug)
+            db_info = prepared_db if prepared_db is not None else create_db(slug)
         if https:
             generated = mkcert_for(slug, domain)
         pool_file.write_text(php_pool(slug, cfg['dev_user']), encoding='utf-8')
@@ -560,6 +592,8 @@ def create(data: dict[str, Any]) -> dict[str, str]:
             'db_user': db_info[1] if db_info else '',
             'overrides': '', 'extra_locations': '',
         }
+        if data.get('engine', 'none') != 'none':
+            state[slug].update(engine=data['engine'], starter_kit=data['starter_kit'], engine_status='configuring')
         if db_info:
             secrets_state[slug] = {'password': db_info[2]}
         write_json_atomic(SECRET_FILE, secrets_state)
@@ -573,7 +607,7 @@ def create(data: dict[str, Any]) -> dict[str, str]:
             pool_file.unlink(missing_ok=True)
         for file in generated:
             file.unlink(missing_ok=True)
-        if db_info:
+        if db_info and prepared_db is None:
             try:
                 drop_db(db_info[0], db_info[1])
             except Exception:
@@ -642,6 +676,7 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
     A MariaDB project requires explicit acknowledgement of permanent database
     removal. Staged Nginx/PHP configs are restored if a pre-commit step fails.
     """
+    ensure_engine_idle()
     if set(data) != {'slug', 'confirmation', 'delete_database'}:
         raise InputError('Nieprawidlowe dane usuwania projektu.')
     slug = check_slug(data.get('slug'))
@@ -813,7 +848,410 @@ def update_full_config(data: dict[str, Any]) -> dict[str, str]:
     return {**outcome, **validated}
 
 
+
+# The request handler is intentionally short. Only the developer-identity
+# process runs in a worker thread; all privileged provisioning and JSON state
+# mutations remain serialized on the daemon's main thread.
+def engine_catalog() -> dict[str, Any]:
+    # This catalog is deployed with the root-owned application; the browser
+    # supplies only a registered identifier, never a module or executable.
+    return read_json(ENGINE_CATALOG_FILE)
+
+
+def engine_definition(engine: Any) -> dict[str, Any]:
+    if not isinstance(engine, str) or not SLUG.fullmatch(engine):
+        raise InputError('Nieobslugiwany silnik projektu.')
+    definition = engine_catalog().get(engine)
+    if not isinstance(definition, dict):
+        raise InputError('Nieobslugiwany silnik projektu.')
+    return definition
+
+
+def engine_job() -> dict[str, Any]:
+    return read_json(ENGINE_JOB_FILE) if ENGINE_JOB_FILE.exists() else {}
+
+
+def engine_busy() -> bool:
+    return engine_job().get('state') in ENGINE_ACTIVE
+
+
+def ensure_engine_idle() -> None:
+    if engine_busy():
+        raise InputError('Trwa operacja instalatora. Zaczekaj na jej zakonczenie.')
+
+
+def public_engine_job() -> dict[str, Any] | None:
+    job = engine_job()
+    if not job:
+        return None
+    # Never return private request state or a database credential.
+    return {key: job[key] for key in
+            ('id', 'engine', 'action', 'state', 'message', 'slug', 'log', 'tool')
+            if key in job}
+
+
+def engine_identity() -> tuple[str, str]:
+    cfg = config()
+    user = cfg['dev_user']
+    account = pwd.getpwnam(user)
+    home = '/home/' + user
+    if account.pw_uid == 0 or user == 'devstackweb' or account.pw_dir != home:
+        raise RuntimeError('Nieprawidlowe konto instalatora.')
+    return user, home
+
+
+def engine_unit_args(unit: str, action: str, args: list[str], timeout: int,
+                     engine: str = 'laravel') -> list[str]:
+    engine_definition(engine)
+    if not ENGINE_UNIT.fullmatch(unit):
+        raise RuntimeError('Nieprawidlowa jednostka instalatora.')
+    user, home = engine_identity()
+    # systemd, not the root daemon, switches identity. No shell or inherited
+    # root HOME/PATH. Third-party scripts cannot use sudo or write system files.
+    return [
+        '/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+        '--unit=' + unit, '--uid=' + user, '--working-directory=' + home,
+        '--setenv=HOME=' + home,
+        '--setenv=PATH=' + home + '/.local/bin:/usr/local/bin:/usr/bin:/bin',
+        '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
+        '--property=PrivateDevices=yes', '--property=ProtectSystem=strict',
+        '--property=ReadWritePaths=' + home,
+        '--property=InaccessiblePaths=-/mnt/c -/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack',
+        # Keep /mnt/wsl accessible: WSL may use it for the generated DNS resolver.
+        '--property=ProtectKernelTunables=yes', '--property=ProtectKernelModules=yes',
+        '--property=ProtectControlGroups=yes', '--property=RestrictSUIDSGID=yes',
+        '--property=KillMode=control-group', '--property=UMask=0077',
+        '--property=PartOf=devstackd.service',
+        '--property=RuntimeMaxSec=' + str(timeout) + 's',
+        '/usr/bin/python3', '-I', ENGINE_RUNNER, engine, action, *args,
+    ]
+
+
+def stop_engine_unit(unit: Any) -> bool:
+    if not isinstance(unit, str) or not ENGINE_UNIT.fullmatch(unit):
+        return False
+    try:
+        stopped = subprocess.run(['/usr/bin/systemctl', 'stop', unit + '.service'],
+                                 capture_output=True, timeout=10, check=False)
+        if stopped.returncode == 0:
+            return True
+        state = subprocess.run(['/usr/bin/systemctl', 'show', '-p', 'ActiveState',
+                                '--value', unit + '.service'], capture_output=True,
+                               text=True, timeout=5, check=False)
+        return state.returncode == 0 and state.stdout.strip() in ('inactive', 'failed')
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def sanitize_tool_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not isinstance(value.get('composer'), bool):
+        raise RuntimeError('Nieprawidlowy wynik instalatora.')
+    result = {'composer': value['composer']}
+    for key in ('installed', 'latest'):
+        if key not in value and key == 'latest':
+            continue
+        item = value.get(key)
+        if item is not None and (not isinstance(item, str) or not ENGINE_VERSION.fullmatch(item)):
+            raise RuntimeError('Nieprawidlowa wersja instalatora.')
+        result[key] = item
+    return result
+
+
+ENGINE_FAILURE_MESSAGES = {
+    'frontend_node': 'Laravel wymaga Node.js 20.19+ (20.x) lub 22.12+. Sprawdz Node.js w Ubuntu.',
+    'frontend_npm': 'Laravel w DevStack wymaga npm 11+. Zaktualizuj npm w Ubuntu przed utworzeniem projektu.',
+}
+
+
+def adapter_call(unit: str, action: str, args: list[str],
+                 settings: dict[str, str] | None = None, timeout: int = 950,
+                 engine: str = 'laravel') -> dict[str, Any]:
+    try:
+        proc = subprocess.run(engine_unit_args(unit, action, args, timeout, engine),
+                              input=json.dumps(settings) if settings is not None else '',
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, timeout=timeout + 5, check=False, close_fds=True)
+        if len(proc.stdout) > 8192:
+            raise ValueError('oversized response')
+        envelope = json.loads(proc.stdout)
+        if not isinstance(envelope, dict):
+            raise ValueError('invalid response')
+        if proc.returncode == 0 and envelope.get('ok') is True and isinstance(envelope.get('result'), dict):
+            return {'ok': True, 'result': envelope['result']}
+        log = envelope.get('log')
+        code = envelope.get('code')
+        return {'ok': False, 'log': log if isinstance(log, str) and
+                re.fullmatch(re.escape(engine) + r'-[A-Za-z0-9_-]+\.log', log) else None,
+                'code': code if isinstance(code, str) and code in ENGINE_FAILURE_MESSAGES else None}
+    except subprocess.TimeoutExpired:
+        if not stop_engine_unit(unit):
+            return {'ok': False, 'keep_db': True}
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return {'ok': False}
+
+
+def engine_access_allowed() -> bool:
+    # The web peer still enforces the authenticated session/CSRF boundary.
+    # Only a root-owned explicit policy can enable the passwordless exception.
+    try:
+        mode = AUTH_MODE_FILE.read_text(encoding='utf-8').strip()
+    except FileNotFoundError:
+        return True  # Same as PHP: missing auth.mode requires login.
+    except (OSError, UnicodeError):
+        return False
+    if mode != 'disabled':
+        return True
+    try:
+        return ENGINE_ACCESS_FILE.read_text(encoding='utf-8').strip() == 'allow-passwordless'
+    except (OSError, UnicodeError):
+        return False
+
+
+def require_engine_auth() -> None:
+    if not engine_access_allowed():
+        raise InputError('Instalatory wymagaja logowania lub jednorazowej zgody administratora na prace bez hasla.')
+
+
+def reserve_engine_database(job: dict[str, Any]) -> tuple[str, str, str]:
+    if ENGINE_DB_FILE.exists():
+        raise InputError('Poprzednia rezerwacja MariaDB wymaga sprawdzenia przez administratora.')
+    slug = job['slug']
+    name, user = db_identifiers(slug)
+    password = secrets.token_urlsafe(36)
+    # Private root-owned reservation, separate from the publicly projected job.
+    # A crash in the preparing phase is uncertain: do not delete any resource
+    # based only on a guessed name. An administrator must reconcile it.
+    record = {'id': job['id'], 'slug': slug, 'name': name, 'user': user,
+              'password': password, 'phase': 'preparing'}
+    write_json_atomic(ENGINE_DB_FILE, record)
+    result = create_db(slug, password=password)
+    if result != (name, user, password):
+        raise RuntimeError('Niespojna rezerwacja MariaDB.')
+    record['phase'] = 'ready'
+    write_json_atomic(ENGINE_DB_FILE, record)
+    return result
+
+
+def engine_database_record(job: dict[str, Any]) -> dict[str, Any]:
+    record = read_json(ENGINE_DB_FILE)
+    if not record or record.get('id') != job.get('id'):
+        return {}
+    slug = check_slug(job.get('slug'))
+    if (record.get('slug') != slug
+            or (record.get('name'), record.get('user')) != db_identifiers(slug)
+            or not isinstance(record.get('password'), str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', record['password'])):
+        raise RuntimeError('Niespojna rezerwacja MariaDB.')
+    return record
+
+
+def prepared_engine_database(job: dict[str, Any]) -> tuple[str, str, str]:
+    record = engine_database_record(job)
+    if record.get('phase') != 'ready':
+        raise RuntimeError('Brak zakonczonej rezerwacji MariaDB.')
+    return record['name'], record['user'], record['password']
+
+
+def release_engine_database(job: dict[str, Any], *, allow_cleanup: bool) -> str:
+    """Keep the registered database, or roll back only a known fresh reservation."""
+    try:
+        record = engine_database_record(job)
+        if not record:
+            return ''
+        slug = job['slug']
+        state = read_json(STATE_FILE)
+        secret_state = read_json(SECRET_FILE)
+        project = state.get(slug)
+        credential = secret_state.get(slug)
+        if isinstance(project, dict):
+            if (project.get('db_name'), project.get('db_user')) != (record['name'], record['user']) or credential != {'password': record['password']}:
+                raise RuntimeError('Niespojna rezerwacja MariaDB.')
+            ENGINE_DB_FILE.unlink(missing_ok=True)
+            return ''
+        if not allow_cleanup or record.get('phase') != 'ready':
+            return ' Rezerwacja MariaDB wymaga sprawdzenia przez administratora.'
+        if credential is not None and credential != {'password': record['password']}:
+            raise RuntimeError('Niespojna rezerwacja MariaDB.')
+        drop_db(record['name'], record['user'])
+        if credential is not None:
+            secret_state.pop(slug)
+            write_json_atomic(SECRET_FILE, secret_state)
+        ENGINE_DB_FILE.unlink(missing_ok=True)
+        return ' Niezarejestrowana baza testowa instalatora zostala wycofana.'
+    except Exception:
+        return ' Rezerwacja MariaDB wymaga sprawdzenia przez administratora.'
+
+
+def engine_tool_status(data: dict[str, Any]) -> dict[str, Any]:
+    require_engine_auth()
+    if set(data) != {'engine'}:
+        raise InputError('Nieobslugiwany instalator.')
+    engine = data.get('engine')
+    engine_definition(engine)
+    ensure_engine_idle()
+    result = adapter_call('devstack-engine-' + secrets.token_hex(16) + '-status',
+                          'status', [], timeout=20, engine=engine)
+    if not result.get('ok'):
+        raise RuntimeError('Nie udalo sie odczytac wersji instalatora.')
+    return sanitize_tool_result(result['result'])
+
+
+def start_engine_phase(job: dict[str, Any], state: str, action: str, args: list[str],
+                       message: str, settings: dict[str, str] | None = None) -> None:
+    unit = 'devstack-engine-' + job['id'] + '-' + action
+    job.update(state=state, unit=unit, message=message)
+    write_json_atomic(ENGINE_JOB_FILE, job)
+    # The thread receives only a validated argument vector and, for configure,
+    # the credentials through private stdin. It never writes root-owned state.
+    job_id = job['id']
+    engine = job['engine']
+    def worker():
+        try:
+            result = adapter_call(unit, action, args, settings, engine=engine)
+        except Exception:
+            result = {'ok': False}
+        ENGINE_RESULTS.put((job_id, unit, action, result))
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def create(data: dict[str, Any]) -> dict[str, Any]:
+    ensure_engine_idle()
+    engine = data.get('engine', 'none')
+    if engine == 'none':
+        return create_environment(data)
+    require_engine_auth()
+    definition = engine_definition(engine)
+    slug = check_slug(data.get('slug'))
+    name = check_name(data.get('name'))
+    domain = check_domain(data.get('domain'))
+    options = {item['id'] for item in definition['options']}
+    kit = data.get('starter_kit')
+    if data.get('webroot') != definition['webroot'] or not isinstance(kit, str) or kit not in options:
+        raise InputError('Nieprawidlowy katalog publiczny lub wariant instalacji.')
+    if not isinstance(data.get('database'), bool) or not isinstance(data.get('https'), bool):
+        raise InputError('Nieprawidlowe ustawienia projektu.')
+    cfg = config()
+    state = read_json(STATE_FILE)
+    if slug in state or any(p.get('domain') == domain for p in state.values()):
+        raise InputError('Projekt lub domena juz istnieje.')
+    root = pathlib.Path(cfg['projects_dir']) / slug
+    if root.exists() or root.is_symlink():
+        raise InputError('Katalog juz istnieje. Instalator nie nadpisuje plikow.')
+    if any(p.exists() or p.is_symlink() for p in (site_path(slug), site_link_path(slug), pool_path(slug))):
+        raise InputError('Istnieje konfiguracja serwera dla tego projektu.')
+    # Root-owned reservation (one operation at a time) precedes any install.
+    request = {'slug': slug, 'name': name, 'domain': domain, 'webroot': definition['webroot'],
+               'database': data['database'], 'https': data['https'],
+               'engine': engine, 'starter_kit': kit}
+    job = {'id': secrets.token_hex(16), 'action': 'create', 'engine': engine,
+           'slug': slug, 'request': request}
+    if request['database'] and ENGINE_DB_FILE.exists():
+        raise InputError('Poprzednia rezerwacja MariaDB wymaga sprawdzenia przez administratora.')
+    driver = 'mariadb' if request['database'] else 'sqlite'
+    settings = {'url': ('https://' if request['https'] else 'http://') + domain}
+    job.update(state='preparing', message='Przygotowywanie zasobow instalatora...')
+    write_json_atomic(ENGINE_JOB_FILE, job)
+    try:
+        if request['database']:
+            db_name, db_user, db_password = reserve_engine_database(job)
+            settings.update(db_name=db_name, db_user=db_user, db_password=db_password)
+        start_engine_phase(job, 'scaffolding', 'scaffold', [slug, request['starter_kit'], driver],
+                           'Instalowanie ' + definition['label'] + ' (' + driver + ') i budowanie zasobow...', settings)
+    except Exception:
+        finish_engine_job(job, success=False, message='Nie udalo sie przygotowac instalacji.')
+        raise InputError(engine_job().get('message', 'Nie udalo sie przygotowac instalacji.')) from None
+    return {'message': job['message'], 'job_id': job['id']}
+
+
+def engine_tool_action(data: dict[str, Any]) -> dict[str, Any]:
+    require_engine_auth()
+    ensure_engine_idle()
+    if set(data) != {'engine', 'action'}:
+        raise InputError('Nieobslugiwany instalator.')
+    engine = data.get('engine')
+    definition = engine_definition(engine)
+    actions = {'check': ('checking', 'Sprawdzanie aktualizacji...'),
+               'install-tool': ('installing', 'Instalowanie ' + definition['tool'] + '...'),
+               'update-tool': ('updating', 'Aktualizowanie ' + definition['tool'] + '...')}
+    action = data.get('action')
+    if not isinstance(action, str) or action not in actions:
+        raise InputError('Nieobslugiwana operacja instalatora.')
+    state, message = actions[action]
+    job = {'id': secrets.token_hex(16), 'action': action, 'engine': engine}
+    start_engine_phase(job, state, action, [], message)
+    return {'message': message, 'job_id': job['id']}
+
+
+def finish_engine_job(job: dict[str, Any], *, success: bool, message: str,
+                      log: str | None = None, allow_db_cleanup: bool = True) -> None:
+    if job.get('action') == 'create':
+        slug = job['slug']
+        state = read_json(STATE_FILE)
+        project = state.get(slug)
+        if isinstance(project, dict) and project.get('engine') == job.get('engine'):
+            project['engine_status'] = 'ready' if success else 'failed'
+            write_json_atomic(STATE_FILE, state)
+        message += release_engine_database(job, allow_cleanup=allow_db_cleanup)
+    job.update(state='succeeded' if success else 'failed', message=message)
+    if log:
+        job['log'] = log
+    job.pop('unit', None)
+    job.pop('request', None)
+    write_json_atomic(ENGINE_JOB_FILE, job)
+
+
+def poll_engine_results() -> None:
+    while True:
+        try:
+            job_id, unit, action, outcome = ENGINE_RESULTS.get_nowait()
+        except queue.Empty:
+            return
+        job = engine_job()
+        if job.get('id') != job_id or job.get('unit') != unit or job.get('state') not in ENGINE_ACTIVE:
+            continue
+        if not outcome.get('ok'):
+            finish_engine_job(job, success=False,
+                              message=ENGINE_FAILURE_MESSAGES.get(outcome.get('code'),
+                                  'Operacja nie powiodla sie. Istniejace pliki pozostawiono bez usuwania.'),
+                              log=outcome.get('log'), allow_db_cleanup=not outcome.get('keep_db', False))
+            continue
+        try:
+            result = outcome['result']
+            if action == 'scaffold':
+                request = job['request']
+                driver = 'mariadb' if request['database'] else 'sqlite'
+                if result.get('scaffolded') is not True or result.get('driver') != driver:
+                    raise RuntimeError('Invalid scaffold result')
+                # The official installer already completed the default migrations
+                # and persisted .env. Publish hosting only after that success.
+                prepared = prepared_engine_database(job) if request['database'] else None
+                create_environment(request, prepared_db=prepared)
+                finish_engine_job(job, success=True,
+                                  message=engine_definition(job['engine'])['label'] + ' zainstalowany (' + driver + '). Srodowisko gotowe.')
+            elif action in ('check', 'install-tool', 'update-tool'):
+                job['tool'] = sanitize_tool_result(result)
+                if action != 'check' and job['tool']['installed'] is None:
+                    raise RuntimeError('Missing installed version')
+                finish_engine_job(job, success=True, message='Operacja instalatora zakonczona.')
+            else:
+                raise RuntimeError('Unknown job phase')
+        except Exception:
+            # Do not leak database settings or arbitrary command output.
+            finish_engine_job(job, success=False,
+                              message='Nie zakonczono konfiguracji. Pliki i ewentualny utworzony projekt zachowano.')
+
+
+def recover_engine_job() -> None:
+    job = engine_job()
+    if job.get('state') in ENGINE_ACTIVE:
+        stopped = stop_engine_unit(job['unit']) if job.get('unit') else job.get('state') == 'preparing'
+        finish_engine_job(job, success=False, allow_db_cleanup=stopped,
+                          message='Operacja przerwana przez restart DevStack. Nie zostala automatycznie ponowiona.')
+
+
 OPS = {'status': status, 'create': create, 'reveal': reveal,
+       'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,
        'set_preferences': set_ui_preferences, 'get_preferences': preferences,
@@ -841,6 +1279,7 @@ def handle(raw: bytes) -> bytes:
 
 def serve() -> None:
     config()
+    recover_engine_job()
     uid = pwd.getpwnam('devstackweb').pw_uid
     gid = pwd.getpwnam('devstackweb').pw_gid
     SOCKET_FILE.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
@@ -857,7 +1296,12 @@ def serve() -> None:
     request_windows_hosts_sync()
     print('DevStack local helper listening', flush=True)
     while True:
-        conn, _ = server.accept()
+        poll_engine_results()
+        server.settimeout(1 if engine_busy() else None)
+        try:
+            conn, _ = server.accept()
+        except socket.timeout:
+            continue
         with conn:
             conn.settimeout(30)
             pid, peer_uid, peer_gid = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))

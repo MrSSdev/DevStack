@@ -43,6 +43,17 @@ function devstack_password_required(?string $modeFile = null): bool
     return !is_string($mode) || trim($mode) !== 'disabled';
 }
 
+/** The caller must still pass the normal session and CSRF checks.
+ * Passwordless framework operations require separate administrator consent.
+ * Missing, unreadable or invalid opt-in files never grant this permission.
+ */
+function devstack_engine_access_allowed(?string $modeFile = null, ?string $allowFile = null): bool
+{
+    if (devstack_password_required($modeFile)) return true;
+    $mode = @file_get_contents($allowFile ?? '/etc/devstack/engine-access.mode');
+    return is_string($mode) && trim($mode) === 'allow-passwordless';
+}
+
 function devstack_is_authenticated(?bool $passwordRequired = null): bool
 {
     if (($passwordRequired ?? devstack_password_required()) === false) return true;
