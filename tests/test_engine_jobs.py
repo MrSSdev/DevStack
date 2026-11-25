@@ -96,7 +96,8 @@ class EngineJobTests(unittest.TestCase):
                 payload = {"slug":"demo","name":"Demo","domain":"demo.test",
                            "database":False,"https":True,"engine":"laravel","starter_kit":"livewire"}
                 for extra in ({"webroot":"."}, {"webroot":"other"}, {"installer_options":{"teams":"--force"}},
-                              {"starter_kit":"none","installer_options":{"teams":"yes"}}):
+                              {"starter_kit":"none","installer_options":{"teams":"yes"}},
+                              {"starter_kit":"blank-livewire"}):
                     with self.assertRaises(d.InputError):
                         d.create({**payload, **extra})
                 reserve.assert_not_called()

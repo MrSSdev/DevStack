@@ -59,7 +59,7 @@ Create a project in the dashboard, choose its local domain, source directory, do
 
 ## Framework installers
 
-When creating a project, select no framework or Laravel, then choose a starter kit from the currently installed official installer's reported capabilities (including supported blank variants). Choose the conditional official installer options (authentication, Livewire component style, teams, testing, Boost and npm build where applicable). The public directory is set automatically by the chosen framework. In Settings, manage the official installer (requires
+When creating a project, select no framework or Laravel, then choose a frontend technology from the currently installed official installer's reported capabilities. Choose the conditional official installer options (built-in authentication, no authentication or WorkOS where supported, Livewire component style, teams, testing, Boost and npm build where applicable). The public directory is set automatically by the chosen framework. In Settings, manage the official installer (requires
 Composer, PHP, Node.js 20.19+ on 20.x or 22.12+, and npm 11+ for Laravel). Installers require panel authentication or a separate, explicit administrator opt-in for passwordless local use (see [Security](SECURITY.md)). The
 installer creates a fresh directory before DevStack configures hosting. Select SQLite or MariaDB; the official installer runs its normal initial migrations on that database, and DevStack stores the generated MariaDB connection in the private .env. DevStack never runs extra migrations. Existing source directories are never overwritten. Long operations continue independently
 of the web request, and interrupted jobs retain files for review. See the

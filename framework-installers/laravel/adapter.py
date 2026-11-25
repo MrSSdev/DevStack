@@ -111,14 +111,10 @@ def discover_capabilities(raw: str) -> tuple[dict[str, dict[str, Any]], list[dic
     if not found or len(found) > 16:
         raise AdapterError("Unable to discover starter kits from the official installer.", "starter_kits")
 
-    result: dict[str, dict[str, Any]] = {"none": {"label": "Blade (bez starter kitu)", "flags": []}}
+    # One entry per frontend technology. Authentication belongs to the
+    # conditional options, not to synthetic duplicate starter-kit IDs.
+    result: dict[str, dict[str, Any]] = {"none": {"label": "Blade", "flags": []}}
     result.update(found)
-    if switch("no-authentication", options.get("no-authentication")):
-        for name, item in found.items():
-            result["blank-" + name] = {
-                "label": item["label"] + " (bez logowania aplikacji)",
-                "flags": [*item["flags"], "--no-authentication"],
-            }
     # CLI help gives available switches, not the interactive dependency graph.
     # The graph below mirrors reviewed upstream Laravel prompts. New frontend
     # kits still appear automatically; advanced branch-specific settings are
@@ -135,11 +131,15 @@ def discover_capabilities(raw: str) -> tuple[dict[str, dict[str, Any]], list[dic
                        "kits": kits or [], "when": when or {}})
 
     auth_when = {}
-    if authenticated and available("workos"):
-        field("auth-provider", "Uwierzytelnianie aplikacji", "laravel",
-              [("laravel", "Wbudowane Laravel"), ("workos", "WorkOS (wymaga konta)")],
-              authenticated)
-        auth_when = {"auth-provider": ["laravel", ""]}
+    auth_choices = [("laravel", "Wbudowane Laravel")]
+    if available("no-authentication"):
+        auth_choices.append(("none", "Bez logowania"))
+    if available("workos"):
+        auth_choices.append(("workos", "WorkOS (wymaga konta)"))
+    if authenticated and len(auth_choices) > 1:
+        field("auth-provider", "Logowanie w aplikacji", "laravel",
+              auth_choices, authenticated)
+        auth_when = {"auth-provider": ["laravel"]}
     team_when = dict(auth_when)
     if "livewire" in authenticated and available("livewire-class-components"):
         field("livewire-components", "Komponenty Livewire", "single-file",
@@ -183,7 +183,9 @@ def scaffold_argv(installer: str, slug: str, kit: str, driver: str = "sqlite",
             "--no-node" if options.get("assets") == "no" else "--npm",
             "--boost" if options.get("boost") == "yes" else "--no-boost",
             *choices[kit]["flags"]]
-    if options.get("auth-provider") == "workos":
+    if options.get("auth-provider") == "none":
+        args.append("--no-authentication")
+    elif options.get("auth-provider") == "workos":
         args.append("--workos")
     if options.get("livewire-components") == "class":
         args.append("--livewire-class-components")
@@ -401,6 +403,8 @@ class LaravelAdapter:
             raise AdapterError("Cannot verify installed Laravel dependencies.") from None
         if not expected <= installed:
             raise AdapterError("Requested installer dependencies are missing.", "installer_options")
+        if "--no-authentication" in argv and {"laravel/fortify", "laravel/workos"} & installed:
+            raise AdapterError("Unexpected authentication scaffolding.", "installer_options")
         if "--teams" in argv and not any((root / "database/migrations").glob("*create_teams_table.php")):
             raise AdapterError("Requested team scaffolding is missing.", "installer_options")
         if "--livewire-class-components" in argv and not (root / "app/Livewire/Settings").is_dir():

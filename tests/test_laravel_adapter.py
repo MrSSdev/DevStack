@@ -32,9 +32,10 @@ def help_fixture(kits=("react", "svelte", "vue", "livewire"), *, blank=True, ext
 class LaravelAdapterTests(unittest.TestCase):
     def test_discovery_tracks_installed_help_without_static_list(self):
         choices = discover_starter_kits(help_fixture())
-        self.assertEqual(set(choices), {"none", "react", "svelte", "vue", "livewire",
-                                         "blank-react", "blank-svelte", "blank-vue", "blank-livewire"})
-        self.assertEqual(choices["blank-vue"]["flags"], ["--vue", "--no-authentication"])
+        self.assertEqual(set(choices), {"none", "react", "svelte", "vue", "livewire"})
+        self.assertEqual([item["label"] for item in choices.values()],
+                         ["Blade", "React", "Svelte", "Vue", "Livewire"])
+        self.assertEqual(choices["vue"]["flags"], ["--vue"])
         changed = discover_starter_kits(help_fixture(("future-kit", "react"), blank=False))
         self.assertEqual(set(changed), {"none", "future-kit", "react"})
         self.assertIn("--future-kit", scaffold_argv("laravel", "demo", "future-kit", choices=changed))
@@ -56,6 +57,30 @@ class LaravelAdapterTests(unittest.TestCase):
         self.assertIn("--teams", argv("livewire", {"teams": "yes"}))
         self.assertIn("--teams", argv("react", {"teams": "yes"}))
         self.assertIn("--workos", argv("livewire", {"auth-provider": "workos"}))
+        for kit in ("react", "svelte", "vue", "livewire"):
+            with self.subTest(kit=kit):
+                command = argv(kit, {"auth-provider": "none"})
+                self.assertIn("--" + kit, command)
+                self.assertIn("--no-authentication", command)
+                self.assertNotIn("--workos", command)
+                self.assertNotIn("--teams", command)
+                self.assertNotIn("--livewire-class-components", command)
+                self.assertEqual(resolve_installer_options(kit, fields, {"auth-provider": "none"}),
+                                 {"auth-provider": "none", "testing": "pest", "boost": "no", "assets": "yes"})
+                self.assertNotIn("--no-authentication", argv(kit, {}))
+                with self.assertRaises(AdapterError):
+                    argv("blank-" + kit, {})
+        no_blank_kits, no_blank_fields = discover_capabilities(help_fixture(blank=False))
+        with self.assertRaises(AdapterError):
+            scaffold_argv("laravel", "demo", "livewire", choices=no_blank_kits,
+                          fields=no_blank_fields, selected={"auth-provider": "none"})
+        basic_kits, basic_fields = discover_capabilities(help_fixture(extra=False))
+        self.assertEqual(resolve_installer_options("react", basic_fields, {}), {"auth-provider": "laravel"})
+        self.assertIn("--no-authentication", scaffold_argv("laravel", "demo", "react", choices=basic_kits,
+                          fields=basic_fields, selected={"auth-provider": "none"}))
+        with self.assertRaises(AdapterError):
+            scaffold_argv("laravel", "demo", "react", choices=basic_kits,
+                          fields=basic_fields, selected={"auth-provider": "workos"})
         self.assertIn("--phpunit", argv("none", {"testing": "phpunit"}))
         self.assertIn("--boost", argv("none", {"boost": "yes"}))
         self.assertIn("--no-node", argv("none", {"assets": "no"}))
@@ -64,13 +89,16 @@ class LaravelAdapterTests(unittest.TestCase):
             ("livewire", {"livewire-components": "class", "teams": "yes"}),
             ("livewire", {"auth-provider": "workos", "teams": "yes"}),
             ("livewire", {"auth-provider": "workos", "livewire-components": "class"}),
-            ("blank-livewire", {"teams": "yes"}), ("none", {"auth-provider": "workos"}),
+            ("livewire", {"auth-provider": "none", "teams": "yes"}),
+            ("livewire", {"auth-provider": "none", "livewire-components": "class"}),
+            ("react", {"auth-provider": "none", "teams": "yes"}),
+            ("none", {"auth-provider": "none"}), ("none", {"auth-provider": "workos"}),
             ("vue", {"livewire-components": "class"}), ("react", {"testing": "--force"}),
             ("react", {"force": "yes"}), ("react", {"teams": []}),
         ):
             with self.subTest(kit=kit, selected=selected), self.assertRaises(AdapterError):
                 argv(kit, selected)
-        old_kits, old_fields = discover_capabilities(help_fixture(extra=False))
+        old_kits, old_fields = discover_capabilities(help_fixture(blank=False, extra=False))
         self.assertEqual(old_fields, [])
         with self.assertRaises(AdapterError):
             scaffold_argv("laravel", "demo", "livewire", choices=old_kits, fields=old_fields,

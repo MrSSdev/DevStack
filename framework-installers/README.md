@@ -57,7 +57,9 @@ CLI, not hardcoded conditions in the general dashboard.
 
 ## Acceptance
 
-The installer smoke workflow discovers the installed Laravel version and its starter kits, then exercises all discovered options with SQLite and the full starter kits with a real isolated MariaDB service. Representative advanced option combinations are tested using real tool runs too. It checks initial migration
+The installer smoke workflow discovers the installed Laravel version and its starter kits, then exercises the discovered technologies on SQLite and a real isolated
+MariaDB service, including supported no-authentication choices as separate
+installer option values. Representative advanced option combinations are tested using real tool runs too. It checks initial migration
 status, .env, private permissions, selected features, the expected asset build state, and refusal of existing
 directories and extra migration operations. WSL-specific web/daemon
 integration, Nginx, HTTPS, Windows domain sync and interrupted jobs also
