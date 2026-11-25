@@ -126,6 +126,7 @@ export function App() {
   const [selected,setSelected]=useState('')
   const [projectSearch,setProjectSearch]=useState('')
   const jobPresentation=useRef('')
+  const activeEngineToast=useRef('')
   const closingSession=useRef(false)
   const [busy,setBusy]=useState(false)
   const [draft,setDraft]=useState<Draft>(blank)
@@ -296,13 +297,23 @@ export function App() {
   async function logout(){
     try {const info=await request<{csrf:string}>('POST','/api/logout',csrf,{});setCsrf(info.csrf)}
     catch(e){fail(e);return}
-    closingSession.current=true;jobPresentation.current='';toast.close()
+    closingSession.current=true;jobPresentation.current='';activeEngineToast.current='';toast.close()
     setNavOpen(false);setAuthenticated(false);setDbSecret('');setProjectSearch('');setRulesDraft(null);setServer({services:{},projects:[],preferences:{theme:'light'}});setSelected('');setView('dashboard')
   }
   useEffect(()=>{
-    if(!authenticated||initializing||!engineJob||!showJobNotice(engineJob,dismissedJob))return
+    if(!authenticated||initializing)return
     const job=engineJob
-    const id='engine-'+job.id
+    const id=job?'engine-'+job.id:''
+    // The daemon exposes only the latest installer job. Retire its previous
+    // result without acknowledging it on behalf of the user or retaining
+    // a stale project action. Other independent notifications remain.
+    if(activeEngineToast.current!==id){
+      const previous=activeEngineToast.current
+      activeEngineToast.current=id
+      jobPresentation.current=''
+      if(previous)toast.close(previous)
+    }
+    if(!job||!showJobNotice(job,dismissedJob))return
     const title=job.action==='create'?'Instalacja projektu':engines[job.engine??'']?.tool??'Instalator'
     const canOpen=!engineBusy&&!!job.slug&&projects.some(p=>p.slug===job.slug)
     const description=[job.slug||'Narzędzia instalacyjne',job.message,
@@ -313,7 +324,7 @@ export function App() {
       jobPresentation.current=signature
       toast.add({id,title,description,type:engineBusy?'loading':job.state==='succeeded'?'success':'error',timeout:0,
         actionProps:canOpen?{children:'Przejdź do projektu',onClick:()=>{details(job.slug!);toast.close(id)}}:undefined,
-        onClose:()=>{if(!closingSession.current&&!engineBusy)setDismissedJob(acknowledgeJob(job))}})
+        onClose:()=>{if(!closingSession.current&&activeEngineToast.current===id&&!engineBusy)setDismissedJob(acknowledgeJob(job))}})
     }
     // Preserve acknowledgement policy: visible success is remembered across
     // reloads; a failure is remembered only when deliberately dismissed.

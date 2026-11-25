@@ -119,8 +119,10 @@ class BrowserAcceptance(unittest.TestCase):
             expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
         else:
             expect(self.page.locator('html')).not_to_have_class(re.compile(r'\bdark\b'))
-        for b in self.page.locator('[data-slot="toast"] button[aria-label="Zamknij powiadomienie"]').all():
-            if b.is_visible(): b.click()
+        # Exclude ending toasts; nth locators shift as each toast is removed.
+        close = self.page.locator('[data-slot="toast"]:not([data-ending-style]) button[aria-label="Zamknij powiadomienie"]')
+        while close.count():
+            close.first.click()
 
     def shot(self, name):
         self.page.evaluate('document.fonts.ready')
@@ -488,6 +490,12 @@ class BrowserAcceptance(unittest.TestCase):
         expect(installer.get_by_text('fixture.log',exact=False)).to_be_visible()
         self.page.reload()
         expect(installer.get_by_text('Instalacja testowa nieudana.',exact=False)).to_be_visible()
+        # A newer job replaces the previous installer toast, not other
+        # independent notices. The previous failure is not acknowledged.
+        job.update(id='c'*32,state='failed',message='Nowszy błąd instalacji.',log='new-fixture.log')
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(installer.get_by_text('Nowszy błąd instalacji.',exact=False)).to_be_visible()
+        expect(installer).to_have_count(1)
         installer.get_by_role('button',name='Zamknij powiadomienie').click()
         self.page.reload()
         expect(self.page.locator('main')).to_be_visible()
