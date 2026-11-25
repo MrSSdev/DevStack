@@ -55,8 +55,9 @@ function ToastList(){
   return <ToastPrimitive.Viewport data-slot="toast-viewport" aria-label="Powiadomienia (F6)"
     className={cn('fixed inset-x-3 bottom-3 z-[100] mx-auto flex max-h-[calc(100dvh-1.5rem)] max-w-sm flex-col-reverse gap-2 overflow-y-auto overscroll-contain rounded-xl outline-none sm:right-4 sm:bottom-4 sm:left-auto sm:mx-0 sm:w-96 sm:max-h-[calc(100dvh-2rem)] focus-visible:ring-2 focus-visible:ring-ring',
       toasts.length?'pointer-events-auto p-1':'pointer-events-none')}>
-    {toasts.map(item=><ToastPrimitive.Root key={item.id} toast={item} data-slot="toast"
-      swipeDirection={['right']} className="relative shrink-0 rounded-lg border bg-popover text-popover-foreground shadow-lg outline-none transition-[transform,opacity] duration-200 [transform:translateX(var(--toast-swipe-movement-x,0px))] data-starting-style:translate-x-6 data-starting-style:opacity-0 data-ending-style:translate-x-6 data-ending-style:opacity-0 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-ring">
+    {toasts.map(item=><ToastPrimitive.Root key={item.id} toast={item} data-slot="toast" data-toast-type={item.type}
+      swipeDirection={item.type==='loading'?[]:['right']}
+      onKeyDownCapture={e=>{if(item.type==='loading'&&e.key==='Escape'){e.preventDefault();e.stopPropagation()}}} className="relative shrink-0 rounded-lg border bg-popover text-popover-foreground shadow-lg outline-none transition-[transform,opacity] duration-200 [transform:translateX(var(--toast-swipe-movement-x,0px))] data-starting-style:translate-x-6 data-starting-style:opacity-0 data-ending-style:translate-x-6 data-ending-style:opacity-0 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-ring">
       <ToastPrimitive.Content className="flex items-start gap-2.5 p-3">
         <ToastIcon type={item.type}/>
         <div className="min-w-0 flex-1 space-y-1">
@@ -64,7 +65,7 @@ function ToastList(){
           {item.description&&<ToastPrimitive.Description className="whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground"/>}
           {item.actionProps?.children&&<ToastPrimitive.Action render={<Button variant="outline" size="sm"/>} className="mt-1 max-w-full"/>}
         </div>
-        <ToastPrimitive.Close render={<Button variant="ghost" size="icon"/>} aria-label="Zamknij powiadomienie" className="-mr-1 -mt-1 size-7 shrink-0"><X aria-hidden="true"/></ToastPrimitive.Close>
+        {item.type!=='loading'&&<ToastPrimitive.Close render={<Button variant="ghost" size="icon"/>} aria-label="Zamknij powiadomienie" className="-mr-1 -mt-1 size-7 shrink-0"><X aria-hidden="true"/></ToastPrimitive.Close>}
       </ToastPrimitive.Content>
     </ToastPrimitive.Root>)}
   </ToastPrimitive.Viewport>

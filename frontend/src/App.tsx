@@ -14,7 +14,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { toast, beginNotice, notify, fail } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
-import { acknowledgeJob, readAcknowledgedJob, rememberVisibleSuccess, showJobNotice } from '@/lib/engine-job-notice'
+import { acknowledgeJob, readAcknowledgedJob, rememberVisibleSuccess, showJobNotice, jobNoticeTimeout } from '@/lib/engine-job-notice'
 import { frameworkWebroot, resolveInstallerFields, type InstallerField, type InstallerValues } from '@/lib/installer-options'
 import { resolveProjectIdentity, projectIdentityPayload, type ProjectIdentityDraft } from '@/lib/project-identity'
 import { MailInbox } from '@/components/mail-inbox'
@@ -125,8 +125,9 @@ export function App() {
   const [server,setServer]=useState<State>({services:{},projects:[],preferences:{theme:'light'}})
   const [selected,setSelected]=useState('')
   const [projectSearch,setProjectSearch]=useState('')
-  const jobPresentation=useRef('')
-  const activeEngineToast=useRef('')
+  const jobPresentation=useRef<{signature:string;state:string}|null>(null)
+  const activeEngineToast=useRef<{jobId:string;toastId:string}|null>(null)
+  const [awaitingEngineJob,setAwaitingEngineJob]=useState('')
   const closingSession=useRef(false)
   const [busy,setBusy]=useState(false)
   const [draft,setDraft]=useState<Draft>(blank)
@@ -169,7 +170,7 @@ export function App() {
   const identity=resolveProjectIdentity(draft)
   const toolId=engines[selectedTool]?selectedTool:Object.keys(engines)[0]??''
   const toolDefinition=engines[toolId]
-  const engineBusy=!!engineJob && !['succeeded','failed'].includes(engineJob.state)
+  const engineBusy=!!awaitingEngineJob || (!!engineJob && !['succeeded','failed'].includes(engineJob.state))
   const current=projects.find(p=>p.slug===selected)
   // Display persisted rules immediately; an edit belongs to one project only.
   // Do not clear or rehydrate the editor in a post-render effect.
@@ -297,43 +298,49 @@ export function App() {
   async function logout(){
     try {const info=await request<{csrf:string}>('POST','/api/logout',csrf,{});setCsrf(info.csrf)}
     catch(e){fail(e);return}
-    closingSession.current=true;jobPresentation.current='';activeEngineToast.current='';toast.close()
+    closingSession.current=true;jobPresentation.current=null;activeEngineToast.current=null;setAwaitingEngineJob('');toast.close()
     setNavOpen(false);setAuthenticated(false);setDbSecret('');setProjectSearch('');setRulesDraft(null);setServer({services:{},projects:[],preferences:{theme:'light'}});setSelected('');setView('dashboard')
   }
   useEffect(()=>{
     if(!authenticated||initializing)return
     const job=engineJob
-    const id=job?'engine-'+job.id:''
-    // The daemon exposes only the latest installer job. Retire its previous
-    // result without acknowledging it on behalf of the user or retaining
-    // a stale project action. Other independent notifications remain.
-    if(activeEngineToast.current!==id){
+    // A GET already in flight can still contain the old job when POST returns.
+    // Keep polling the accepted ID instead of retiring the new loading toast.
+    if(awaitingEngineJob&&job?.id!==awaitingEngineJob)return
+    if(awaitingEngineJob)setAwaitingEngineJob('')
+    const jobId=job?.id??''
+    if((activeEngineToast.current?.jobId??'')!==jobId){
       const previous=activeEngineToast.current
-      activeEngineToast.current=id
-      jobPresentation.current=''
-      if(previous)toast.close(previous)
+      activeEngineToast.current=job?{jobId,toastId:'engine-'+jobId}:null
+      jobPresentation.current=null
+      if(previous)toast.close(previous.toastId)
     }
     if(!job||!showJobNotice(job,dismissedJob))return
+    const id=activeEngineToast.current!.toastId
+    const running=!['succeeded','failed'].includes(job.state)
     const title=job.action==='create'?'Instalacja projektu':engines[job.engine??'']?.tool??'Instalator'
-    const canOpen=!engineBusy&&!!job.slug&&projects.some(p=>p.slug===job.slug)
+    const canOpen=!running&&!!job.slug&&projects.some(p=>p.slug===job.slug)
     const description=[job.slug||'Narzędzia instalacyjne',job.message,
       job.log?'Prywatny log w Ubuntu: ~/.cache/devstack/engines/'+job.log:'',
       job.state==='failed'?'Nie ponawiamy instalacji automatycznie. Sprawdź stan projektu i log przed kolejną próbą.':''].filter(Boolean).join('\n')
     const signature=JSON.stringify([job.id,job.state,title,description,canOpen])
-    if(jobPresentation.current!==signature){
-      jobPresentation.current=signature
-      toast.add({id,title,description,type:engineBusy?'loading':job.state==='succeeded'?'success':'error',timeout:0,
+    if(jobPresentation.current?.signature!==signature){
+      const previousState=jobPresentation.current?.state
+      jobPresentation.current={signature,state:job.state}
+      const options={title,description,type:running?'loading':job.state==='succeeded'?'success':'error',
         actionProps:canOpen?{children:'Przejdź do projektu',onClick:()=>{details(job.slug!);toast.close(id)}}:undefined,
-        onClose:()=>{if(!closingSession.current&&activeEngineToast.current===id&&!engineBusy)setDismissedJob(acknowledgeJob(job))}})
+        onClose:()=>{if(!closingSession.current&&activeEngineToast.current?.jobId===job.id&&!running)setDismissedJob(acknowledgeJob(job))}}
+      // A new state starts its own timeout. Metadata changes within the same
+      // terminal state must not restart that timeout on every refresh.
+      if(previousState===job.state)toast.update(id,options)
+      else toast.add({id,...options,timeout:jobNoticeTimeout(job)})
     }
-    // Preserve acknowledgement policy: visible success is remembered across
-    // reloads; a failure is remembered only when deliberately dismissed.
     if(job.state!=='succeeded')return
     const remember=()=>rememberVisibleSuccess(job,document.visibilityState==='visible')
     remember()
     document.addEventListener('visibilitychange',remember)
     return ()=>document.removeEventListener('visibilitychange',remember)
-  },[authenticated,initializing,engineJob,dismissedJob,engineBusy,engines,projects])
+  },[authenticated,initializing,engineJob,dismissedJob,awaitingEngineJob,engines,projects])
   useEffect(()=>{
     if(!authenticated || !server.service_action_pending)return
     const id=window.setInterval(()=>{if(document.visibilityState==='visible')void refresh()},1500)
@@ -378,29 +385,40 @@ export function App() {
       .finally(()=>{if(!disposed)setKitLoading(false)})
     return ()=>{disposed=true}
   },[authenticated,engineAllowed,view,engineBusy,engineJob?.id,draft.engine,kitRefresh])
+  function acceptEngineJob(jobId:string,toastId:string,title:string,description:string){
+    const previous=activeEngineToast.current
+    activeEngineToast.current={jobId,toastId}
+    jobPresentation.current=null
+    if(previous&&previous.toastId!==toastId)toast.close(previous.toastId)
+    // Keep the exact same toast/DOM node from submission through polling.
+    toast.update(toastId,{title,description,type:'loading',timeout:0})
+    setAwaitingEngineJob(jobId)
+  }
   async function toolAction(action:'check'|'install-tool'|'update-tool'){
     if(busy || engineBusy || toolLoading || !toolId)return
     setBusy(true)
     const pending=beginNotice(toolDefinition?.tool??'Instalator','Zlecanie operacji…')
+    setAwaitingEngineJob('submitting')
     try{
       const result=await request<{message:string;job_id:string}>('POST','/api/engines/'+encodeURIComponent(toolId),csrf,{action})
-      toast.close(pending)
-      toast.add({id:'engine-'+result.job_id,title:toolDefinition?.tool??'Instalator',description:result.message,type:'loading',timeout:0})
+      acceptEngineJob(result.job_id,pending,toolDefinition?.tool??'Instalator',result.message)
       await refresh()
-    }catch(e){fail(e,pending)}finally{setBusy(false)}
+    }catch(e){setAwaitingEngineJob('');fail(e,pending)}finally{setBusy(false)}
   }
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault()
     if(busy||engineBusy||(!!draftEngine&&(!engineAllowed||!kitReady)))return
     setBusy(true)
     const pending=beginNotice(draftEngine?'Instalacja projektu':'Tworzenie projektu',identity.slug)
+    if(draftEngine)setAwaitingEngineJob('submitting')
     try {
       const payload={...draft,...projectIdentityPayload(draft),webroot:draftEngine?undefined:draft.webroot.trim(),installer_options:draftEngine?resolvedOptions.values:{}}
       const answer=await request<{message:string;job_id?:string}>('POST','/api/projects',csrf,payload)
-      if(answer.job_id){toast.close(pending);toast.add({id:'engine-'+answer.job_id,title:'Instalacja projektu',description:payload.slug+'\n'+answer.message,type:'loading',timeout:0})}
+      if(answer.job_id)acceptEngineJob(answer.job_id,pending,'Instalacja projektu',payload.slug+'\n'+answer.message)
+      else setAwaitingEngineJob('')
       await refresh();setDraft(blank);setInstallerChoices({})
       if(!answer.job_id){setRulesDraft(null);setSelected(payload.slug);setView('project');notify(answer.message,pending)}
-    }catch(e){fail(e,pending)}finally{setBusy(false)}
+    }catch(e){setAwaitingEngineJob('');fail(e,pending)}finally{setBusy(false)}
   }
   async function testDatabase(){
     if(!current || !current.database || busy || testingDb)return
