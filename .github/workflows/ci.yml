@@ -73,6 +73,8 @@ jobs:
           node-version: '24'
       - name: Resolve dependencies
         run: npm install --no-audit --no-fund
+      - name: Frontend notification regression tests
+        run: npm test
       - name: TypeScript and production Vite build
         run: npm run build
       - name: Validate generated files
