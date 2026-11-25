@@ -79,6 +79,8 @@ const rects=ids=>Object.fromEntries(ids.map(id=>{let r=document.getElementById(i
   await publish({phase:'running',services,integration:'not-installed'});await page.locator('#service-nginx').click();assert.equal(await page.locator('#restartServiceButton').isDisabled(),true);assert.equal(await page.locator('#restartPrompt').isVisible(),true);checks+=2;
   await publish({phase:'running',integration:'ok',canControl:true,canNavigate:true,selectionKnown:true,services:[...services.map((s,i)=>({...s,name:['Nginx','PHP-FPM','MariaDB','Redis'][i],description:'Test',probe:i<2?'https':'tcp',port:[443,443,3306,6379][i],selected:s.id!=='redis'})),{id:'mailpit',name:'Mailpit',description:'Poczta testowa',probe:'tcp',port:1025,selected:true,reachable:true,latencyMs:4,memoryBytes:12000000,unitActive:true}]});
   assert.equal(await page.locator('#service-redis').isVisible(),false);assert.equal(await page.locator('#service-mailpit').isVisible(),true);assert.match(await page.locator('#statusSub').innerText(),/4 z 4/);checks+=3;
+  // The previous Nginx details popover is still open; close it just as a user would.
+  await page.locator('#closeServiceInfo').click();assert.equal(await page.locator('#servicePopover').isVisible(),false);checks++;
   await page.locator('#service-mailpit').click();assert.match(await page.locator('#serviceInfoTitle').innerText(),/Mailpit/);assert.equal(await page.locator('#restartServiceButton').isEnabled(),true);checks+=2;
   await page.locator('#closeServiceInfo').click();
   await publish({services:await page.evaluate(()=>window.mockState.services.map(s=>({...s,selected:true})))});assert.equal(await page.locator('.services-grid').evaluate(el=>el.scrollHeight>el.clientHeight),true);checks++;
