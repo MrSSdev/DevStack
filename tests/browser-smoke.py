@@ -125,8 +125,8 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.evaluate('document.fonts.ready')
         # Wait for the navigation transition before measuring the hidden drawer.
         self.page.wait_for_timeout(200)
-        self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'), self.page.evaluate('innerWidth'), name)
         self.page.screenshot(path=str(OUT / (name+'.png')), full_page=True)
+        self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'), self.page.evaluate('innerWidth'), name)
         self.screens.append(name)
 
     def message_button(self, subject):
@@ -233,6 +233,12 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.get_by_role('button',name='Potwierdź',exact=True).click()
         expect(self.page.get_by_text('Usunięto wiadomość.',exact=True)).to_be_visible()
         self.wait_total(42)
+        self.page.get_by_role('textbox',name='Szukaj wiadomości').fill('Pagination fixture 00')
+        self.page.get_by_role('button',name='Szukaj',exact=True).click()
+        expect(self.page.get_by_text('1 wyników',exact=True)).to_be_visible()
+        self.page.get_by_role('button',name='Wyczyść wyszukiwanie',exact=True).click()
+        expect(self.page.get_by_role('textbox',name='Szukaj wiadomości')).to_have_value('')
+        expect(self.page.get_by_text('1–40 / 42',exact=True)).to_be_visible()
         self.page.get_by_role('textbox',name='Szukaj wiadomości').fill('Pagination fixture 00')
         self.page.get_by_role('button',name='Szukaj',exact=True).click()
         expect(self.page.get_by_text('1 wyników',exact=True)).to_be_visible()
@@ -359,6 +365,35 @@ class BrowserAcceptance(unittest.TestCase):
         login.get_by_role('button',name='Zaloguj się',exact=True).click()
         expect(login.get_by_role('heading',name='Przegląd',exact=True)).to_be_visible()
         self.assertTrue(login.locator('aside').evaluate('e=>e.inert'))
+
+    def test_06_mailpit_offline_and_recovery(self):
+        send('Retained through Mailpit stop')
+        self.wait_total(1)
+
+        def wait_state(state):
+            for _ in range(100):
+                value=self.context.request.get(BASE+'/api/state').json()['result']
+                if value['mailpit']==state and not value.get('service_action_pending'):return
+                time.sleep(.2)
+            self.fail('Mailpit did not reach '+state)
+
+        wait_state('active')
+        self.assertEqual(self.post('/api/services/control',{'service':'mailpit','action':'stop','confirmed':True}).status,200)
+        try:
+            wait_state('inactive')
+            self.goto('mail')
+            expect(self.page.get_by_text('Mailpit jest zatrzymany',exact=True)).to_be_visible()
+            for theme in ['light','dark']:
+                self.theme(theme)
+                self.shot('853-'+theme+'-mail-offline')
+                self.page.get_by_role('button',name='Konfiguracja poczty',exact=True).click()
+                expect(self.page.get_by_role('dialog').get_by_text('sudo systemctl start devstack-mailpit.service',exact=True)).to_be_visible()
+                self.page.get_by_role('button',name='Zamknij konfigurację',exact=True).click()
+        finally:
+            self.assertEqual(self.post('/api/services/control',{'service':'mailpit','action':'start','confirmed':True}).status,200)
+            wait_state('active')
+        self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
+        expect(self.message_button('Retained through Mailpit stop')).to_be_visible()
 
 
 if __name__=='__main__':
