@@ -73,6 +73,42 @@ class EngineJobTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 d.sanitize_tool_result({**base, "starter_kits": invalid})
 
+    def test_framework_options_and_public_root_are_checked_before_reservation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            fields = [{"id": "teams", "label": "Teams", "default": "no", "kits": ["livewire"],
+                       "when": {}, "choices": [{"id":"no","label":"No"}, {"id":"yes","label":"Yes"}]}]
+            tool = {"composer":True, "installed":"5.33.0",
+                    "starter_kits":[{"id":"none","label":"Blade"},{"id":"livewire","label":"Livewire"}],
+                    "installer_options":fields}
+            self.assertEqual(d.sanitize_tool_result(tool), tool)
+            for invalid in ([{**fields[0], "flags": ["--force"]}], [{**fields[0], "when": {"unknown": ["yes"]}}],
+                            [{**fields[0], "kits": ["missing"]}], [{**fields[0], "default": "--force"}]):
+                with self.assertRaises(RuntimeError):
+                    d.sanitize_tool_result({**tool, "installer_options":invalid})
+            with patch.object(d, "ENGINE_JOB_FILE", base / "job.json"), \
+                 patch.object(d, "STATE_FILE", base / "state.json"), \
+                 patch.object(d, "config", return_value={"projects_dir": str(base)}), \
+                 patch.object(d, "require_engine_auth"), \
+                 patch.object(d, "engine_tool_status", return_value=tool), \
+                 patch.object(d, "reserve_engine_database") as reserve, \
+                 patch.object(d, "start_engine_phase") as start:
+                payload = {"slug":"demo","name":"Demo","domain":"demo.test",
+                           "database":False,"https":True,"engine":"laravel","starter_kit":"livewire"}
+                for extra in ({"webroot":"."}, {"webroot":"other"}, {"installer_options":{"teams":"--force"}},
+                              {"starter_kit":"none","installer_options":{"teams":"yes"}}):
+                    with self.assertRaises(d.InputError):
+                        d.create({**payload, **extra})
+                reserve.assert_not_called()
+                start.assert_not_called()
+                self.assertFalse((base / "job.json").exists())
+                d.create({**payload, "installer_options":{"teams":"yes"}})
+                request = d.engine_job()["request"]
+                self.assertEqual(request["webroot"], "public")
+                self.assertEqual(request["installer_options"], {"teams":"yes"})
+                self.assertEqual(start.call_args.args[-1]["installer_options"], {"teams":"yes"})
+                reserve.assert_not_called()
+
     def test_stale_kit_is_rejected_before_database_reservation(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = pathlib.Path(tmp)

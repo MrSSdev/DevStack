@@ -18,7 +18,7 @@ DB_SECRET = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 URL = re.compile(r"https?://[a-z][a-z0-9-]{0,39}\.test\Z")
 
 
-from common import AdapterError
+from common import AdapterError, resolve_installer_options
 
 
 def version(value: Any) -> str | None:
@@ -72,7 +72,7 @@ NON_KIT_FLAGS = frozenset({
 })
 
 
-def discover_starter_kits(raw: str) -> dict[str, dict[str, Any]]:
+def discover_capabilities(raw: str) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     """Read Symfony's official JSON help, not the interactive screen or files.
 
     There is no dedicated upstream starter-kit enumeration endpoint. A
@@ -119,20 +119,77 @@ def discover_starter_kits(raw: str) -> dict[str, dict[str, Any]]:
                 "label": item["label"] + " (bez logowania aplikacji)",
                 "flags": [*item["flags"], "--no-authentication"],
             }
-    return result
+    # CLI help gives available switches, not the interactive dependency graph.
+    # The graph below mirrors reviewed upstream Laravel prompts. New frontend
+    # kits still appear automatically; advanced branch-specific settings are
+    # exposed for the first-party stacks whose combinations have been reviewed.
+    fields: list[dict[str, Any]] = []
+    authenticated = [name for name in ("react", "svelte", "vue", "livewire") if name in found]
+    def available(name: str) -> bool:
+        return switch(name, options.get(name))
+
+    def field(name: str, label: str, default: str, choices: list[tuple[str, str]],
+              kits: list[str] | None = None, when: dict[str, list[str]] | None = None) -> None:
+        fields.append({"id": name, "label": label, "default": default,
+                       "choices": [{"id": key, "label": title} for key, title in choices],
+                       "kits": kits or [], "when": when or {}})
+
+    auth_when = {}
+    if authenticated and available("workos"):
+        field("auth-provider", "Uwierzytelnianie aplikacji", "laravel",
+              [("laravel", "Wbudowane Laravel"), ("workos", "WorkOS (wymaga konta)")],
+              authenticated)
+        auth_when = {"auth-provider": ["laravel", ""]}
+    team_when = dict(auth_when)
+    if "livewire" in authenticated and available("livewire-class-components"):
+        field("livewire-components", "Komponenty Livewire", "single-file",
+              [("single-file", "Single-file components"), ("class", "Oddzielne klasy i widoki")],
+              ["livewire"], auth_when)
+        team_when["livewire-components"] = ["single-file", ""]
+    if authenticated and available("teams"):
+        field("teams", "Obsługa zespołów (Teams)", "no",
+              [("no", "Nie"), ("yes", "Tak")], authenticated, team_when)
+    if available("phpunit") and available("pest"):
+        field("testing", "Framework testów", "pest", [("pest", "Pest"), ("phpunit", "PHPUnit")])
+    if available("boost") and available("no-boost"):
+        field("boost", "Laravel Boost", "no", [("no", "Nie"), ("yes", "Tak — wsparcie AI")])
+    if available("no-node") and available("npm"):
+        field("assets", "Instalacja i budowanie zasobów npm", "yes",
+              [("yes", "Tak — przygotuj aplikację"), ("no", "Nie — zbuduję samodzielnie")])
+    return result, fields
+
+
+def discover_starter_kits(raw: str) -> dict[str, dict[str, Any]]:
+    return discover_capabilities(raw)[0]
 
 
 def scaffold_argv(installer: str, slug: str, kit: str, driver: str = "sqlite",
-                  *, choices: dict[str, dict[str, Any]]) -> list[str]:
+                  *, choices: dict[str, dict[str, Any]],
+                  fields: list[dict[str, Any]] | None = None,
+                  selected: dict[str, str] | None = None) -> list[str]:
     if not isinstance(slug, str) or not SLUG.fullmatch(slug):
         raise AdapterError("Invalid project identifier.")
     if not isinstance(kit, str) or kit not in choices:
         raise AdapterError("Starter kit is unavailable in the installed Laravel version.", "starter_kit_unavailable")
     if driver not in ("sqlite", "mariadb"):
         raise AdapterError("Unsupported Laravel database driver.")
-    return [installer, "new", slug, "--no-interaction", "--no-ansi",
-            "--database=" + driver, "--pest", "--npm", "--no-boost",
+    try:
+        options = resolve_installer_options(kit, fields or [], {} if selected is None else selected)
+    except ValueError:
+        raise AdapterError("Invalid or unavailable installer options.", "installer_options") from None
+    args = [installer, "new", slug, "--no-interaction", "--no-ansi",
+            "--database=" + driver,
+            "--phpunit" if options.get("testing") == "phpunit" else "--pest",
+            "--no-node" if options.get("assets") == "no" else "--npm",
+            "--boost" if options.get("boost") == "yes" else "--no-boost",
             *choices[kit]["flags"]]
+    if options.get("auth-provider") == "workos":
+        args.append("--workos")
+    if options.get("livewire-components") == "class":
+        args.append("--livewire-class-components")
+    if options.get("teams") == "yes":
+        args.append("--teams")
+    return args
 
 
 def tool_argv(composer: str, action: str) -> list[str]:
@@ -219,17 +276,17 @@ class LaravelAdapter:
             raise AdapterError("Laravel Installer is not installed.")
         return None
 
-    def starter_kits(self, installer: pathlib.Path) -> dict[str, dict[str, Any]]:
+    def capabilities(self, installer: pathlib.Path) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
         raw = self.command([str(installer), "help", "new", "--format=json",
                             "--no-interaction", "--no-ansi"], capture=True, timeout=12)
-        return discover_starter_kits(raw)
+        return discover_capabilities(raw)
 
     def status(self) -> dict[str, Any]:
         if not shutil.which("composer"):
-            return {"composer": False, "installed": None, "starter_kits": []}
+            return {"composer": False, "installed": None, "starter_kits": [], "installer_options": []}
         installer = self.installer(required=False)
         if installer is None:
-            return {"composer": True, "installed": None, "starter_kits": []}
+            return {"composer": True, "installed": None, "starter_kits": [], "installer_options": []}
         raw = self.command([str(installer), "--version", "--no-ansi"], capture=True, timeout=15)
         match = re.fullmatch(r"Laravel Installer (v?[0-9]+\.[0-9]+\.[0-9]+)", raw)
         if not match:
@@ -237,11 +294,12 @@ class LaravelAdapter:
         # Keep maintenance available when a new upstream help format cannot
         # be classified. Do not fall back to an old hard-coded kit list.
         try:
-            kits = [{"id": name, "label": item["label"]}
-                    for name, item in self.starter_kits(installer).items()]
+            choices, fields = self.capabilities(installer)
+            kits = [{"id": name, "label": item["label"]} for name, item in choices.items()]
         except AdapterError:
-            kits = None
-        return {"composer": True, "installed": version(match.group(1)), "starter_kits": kits}
+            kits = fields = None
+        return {"composer": True, "installed": version(match.group(1)),
+                "starter_kits": kits, "installer_options": fields}
 
     def check(self) -> dict[str, Any]:
         current = self.status()
@@ -290,13 +348,20 @@ class LaravelAdapter:
     def scaffold(self, slug: str, kit: str, driver: str,
                  settings: dict[str, Any]) -> dict[str, Any]:
         root = project_path(self.projects, slug, exists=False)
+        if not isinstance(settings, dict):
+            raise AdapterError("Invalid application configuration.")
+        settings = dict(settings)
+        selected = settings.pop("installer_options", {})
+        if not isinstance(selected, dict):
+            raise AdapterError("Invalid installer options.", "installer_options")
         values = environment_values(settings)
         if driver not in ("sqlite", "mariadb") or ("db_name" in settings) != (driver == "mariadb"):
             raise AdapterError("Database choice does not match the supplied configuration.")
-        self.require_frontend_tools()
         binary = self.installer()
-        choices = self.starter_kits(binary)
-        argv = scaffold_argv(str(binary), slug, kit, driver, choices=choices)
+        choices, fields = self.capabilities(binary)
+        argv = scaffold_argv(str(binary), slug, kit, driver, choices=choices, fields=fields, selected=selected)
+        if "--no-node" not in argv:
+            self.require_frontend_tools()
         # Laravel's own installer and its Composer hooks perform their normal
         # migrations. PHP's dotenv loader preserves process environment values.
         # Override the connection for the whole installer process, including
@@ -311,11 +376,35 @@ class LaravelAdapter:
         public = root / "public"
         if public.is_symlink() or not public.is_dir():
             raise AdapterError("Laravel public directory is missing or unsafe.")
-        for rel in ("artisan", "composer.json", "public/index.php",
-                    "vendor/autoload.php", "public/build/manifest.json"):
+        required_files = ["artisan", "composer.json", "public/index.php", "vendor/autoload.php"]
+        if "--no-node" not in argv:
+            required_files.append("public/build/manifest.json")
+        for rel in required_files:
             target = root / rel
             if target.is_symlink() or not target.is_file():
                 raise AdapterError("Expected Laravel application or built assets are missing.")
+        # The upstream installer may return success even if an optional
+        # Composer step failed. Check requested feature dependencies without
+        # re-running Composer or changing the generated application.
+        expected = {"phpunit/phpunit" if "--phpunit" in argv else "pestphp/pest"}
+        if "--boost" in argv:
+            expected.add("laravel/boost")
+        if "--workos" in argv:
+            expected.add("laravel/workos")
+        try:
+            lock = root / "composer.lock"
+            if lock.is_symlink() or lock.stat().st_size > 8 * 1024 * 1024:
+                raise ValueError("unsafe composer lock")
+            packages = json.loads(lock.read_text(encoding="utf-8"))
+            installed = {p["name"] for p in packages.get("packages", []) + packages.get("packages-dev", [])}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise AdapterError("Cannot verify installed Laravel dependencies.") from None
+        if not expected <= installed:
+            raise AdapterError("Requested installer dependencies are missing.", "installer_options")
+        if "--teams" in argv and not any((root / "database/migrations").glob("*create_teams_table.php")):
+            raise AdapterError("Requested team scaffolding is missing.", "installer_options")
+        if "--livewire-class-components" in argv and not (root / "app/Livewire/Settings").is_dir():
+            raise AdapterError("Requested Livewire class components are missing.", "installer_options")
         # Persist the generated connection in .env after the official tool
         # finishes. Verify the normal migrations against the actual saved
         # configuration, without executing any additional migrations.
@@ -327,7 +416,8 @@ class LaravelAdapter:
                               cwd=root, env=clean_env, capture=True)
         if not re.search(r"\bRan\s*$", status, re.MULTILINE) or re.search(r"\bPending\s*$", status, re.MULTILINE):
             raise AdapterError("The official installer did not complete its default migrations.")
-        return {"scaffolded": True, "driver": driver}
+        return {"scaffolded": True, "driver": driver, "webroot": "public",
+                "installer_options": resolve_installer_options(kit, fields, selected)}
 
     def configure(self, slug: str, settings: dict[str, Any]) -> dict[str, Any]:
         values = environment_values(settings)

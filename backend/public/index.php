@@ -145,6 +145,8 @@ try {
             'https' => $body['https'] ?? true,
             'engine' => $engine,
             'starter_kit' => $body['starter_kit'] ?? 'none',
+            'installer_options' => is_array($body['installer_options'] ?? []) && empty($body['installer_options'])
+                ? (object) [] : ($body['installer_options'] ?? (object) []),
         ])]);
     }
     if ($method === 'POST' && $path === '/api/projects/test-db') {

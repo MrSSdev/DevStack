@@ -38,12 +38,27 @@ See [Security](../SECURITY.md) for the one-time opt-in/revocation commands. Tool
 credentials into .env.example or public logs. Partial sources are retained
 after failures; a fresh, known unregistered database reservation may be
 rolled back. An uncertain reservation is retained for administrator review.
-The original no-framework workflow remains unchanged in the form. The status action returns installed version and sanitized starter-kit IDs/labels (null if discovery is unavailable). Re-read capabilities before reservation and in the scaffold worker; never accept browser-provided command flags.
+The no-framework workflow remains unchanged, including a manually chosen webroot.
+For frameworks, the root-owned catalog defines the hosting webroot; the browser
+shows the automatic value, the server derives it and the scaffold result must
+confirm it. Do not let a browser override that path.
+
+The status action returns the installed version, starter-kit IDs/labels and
+ordered installer option definitions (null when discovery is unavailable).
+Each field has an ID, label, default, typed choices, kit applicability and
+dependencies on preceding fields. A generic form renders only active fields.
+The common resolver rejects unknown, invalid or hidden values; the daemon
+validates before reserving resources and the unprivileged adapter repeats
+discovery and validation before launching the official command. Pass only
+typed selections through private stdin; never accept browser-provided flags.
+Store the chosen values and display labels with the project. A new framework
+supplies its own compatibility rules and reviewed mapping to its official
+CLI, not hardcoded conditions in the general dashboard.
 
 ## Acceptance
 
-The installer smoke workflow discovers the installed Laravel version and its starter kits, then exercises all discovered options with SQLite and the full starter kits with a real isolated MariaDB service. It checks initial migration
-status, .env, private permissions, built assets, and refusal of existing
+The installer smoke workflow discovers the installed Laravel version and its starter kits, then exercises all discovered options with SQLite and the full starter kits with a real isolated MariaDB service. Representative advanced option combinations are tested using real tool runs too. It checks initial migration
+status, .env, private permissions, selected features, the expected asset build state, and refusal of existing
 directories and extra migration operations. WSL-specific web/daemon
 integration, Nginx, HTTPS, Windows domain sync and interrupted jobs also
 require local verification.

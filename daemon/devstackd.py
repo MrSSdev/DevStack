@@ -7,6 +7,7 @@ Supported operations are intentionally small and typed.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -34,6 +35,12 @@ AUTH_MODE_FILE = pathlib.Path('/etc/devstack/auth.mode')
 ENGINE_ACCESS_FILE = pathlib.Path('/etc/devstack/engine-access.mode')
 ENGINE_RUNNER = '/opt/devstack/framework-installers/runner.py'
 ENGINE_CATALOG_FILE = pathlib.Path(__file__).resolve().parents[1] / 'framework-installers/catalog.json'
+# Load only the small shared, deployed root-owned validation module. Never
+# import an adapter or a module from the developer home into the root daemon.
+_options_spec = importlib.util.spec_from_file_location('devstack_installer_common', ENGINE_CATALOG_FILE.with_name('common.py'))
+_installer_common = importlib.util.module_from_spec(_options_spec)
+_options_spec.loader.exec_module(_installer_common)
+resolve_installer_options = _installer_common.resolve_installer_options
 ENGINE_RESULTS = queue.SimpleQueue()
 ENGINE_ACTIVE = {'preparing', 'scaffolding', 'configuring', 'migrating', 'checking', 'installing', 'updating'}
 ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
@@ -595,6 +602,8 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
         if data.get('engine', 'none') != 'none':
             state[slug].update(engine=data['engine'], starter_kit=data['starter_kit'],
                                starter_kit_label=data.get('starter_kit_label', data['starter_kit']),
+                               installer_options=data.get('installer_options', {}),
+                               installer_option_labels=data.get('installer_option_labels', []),
                                engine_status='configuring')
         if db_info:
             secrets_state[slug] = {'password': db_info[2]}
@@ -945,6 +954,39 @@ def stop_engine_unit(unit: Any) -> bool:
         return False
 
 
+def sanitize_installer_fields(fields: Any, kit_ids: set[str]) -> list[dict[str, Any]]:
+    """Bound the worker's presentation-only schema; flags never cross the RPC."""
+    if not isinstance(fields, list) or len(fields) > 12:
+        raise RuntimeError('Nieprawidlowe opcje instalatora.')
+    known: dict[str, set[str]] = {}
+    def token(value: Any) -> bool:
+        return isinstance(value, str) and SLUG.fullmatch(value) is not None
+    def label(value: Any) -> bool:
+        return isinstance(value, str) and 1 <= len(value) <= 100 and value.isprintable()
+    for field in fields:
+        if (not isinstance(field, dict) or set(field) != {'id', 'label', 'default', 'choices', 'kits', 'when'}
+                or not token(field['id']) or field['id'] in known or not label(field['label'])
+                or not isinstance(field['choices'], list) or not 1 <= len(field['choices']) <= 8
+                or not isinstance(field['kits'], list) or len(field['kits']) > 33
+                or any(not token(kit) or kit not in kit_ids for kit in field['kits'])
+                or not isinstance(field['when'], dict)):
+            raise RuntimeError('Nieprawidlowa definicja opcji instalatora.')
+        choices = set()
+        for choice in field['choices']:
+            if (not isinstance(choice, dict) or set(choice) != {'id', 'label'}
+                    or not token(choice['id']) or choice['id'] in choices or not label(choice['label'])):
+                raise RuntimeError('Nieprawidlowa wartosc opcji instalatora.')
+            choices.add(choice['id'])
+        if not token(field['default']) or field['default'] not in choices:
+            raise RuntimeError('Nieprawidlowa domyslna opcja instalatora.')
+        for key, allowed in field['when'].items():
+            if (key not in known or not isinstance(allowed, list) or not 1 <= len(allowed) <= 9
+                    or any(not isinstance(v, str) or v not in known[key] | {''} for v in allowed)):
+                raise RuntimeError('Nieprawidlowa zaleznosc opcji instalatora.')
+        known[field['id']] = choices
+    return fields
+
+
 def sanitize_tool_result(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or not isinstance(value.get('composer'), bool):
         raise RuntimeError('Nieprawidlowy wynik instalatora.')
@@ -973,10 +1015,22 @@ def sanitize_tool_result(value: Any) -> dict[str, Any]:
                     or result['installed'] is None and kits):
                 raise RuntimeError('Niespojna lista starter kitow.')
         result['starter_kits'] = kits
+    if 'installer_options' in value:
+        fields = value['installer_options']
+        kits = result.get('starter_kits')
+        if fields is None:
+            if kits:
+                raise RuntimeError('Brak definicji opcji instalatora.')
+        else:
+            fields = sanitize_installer_fields(fields, {kit['id'] for kit in kits or []})
+            if not kits and fields:
+                raise RuntimeError('Niespojne opcje instalatora.')
+        result['installer_options'] = fields
     return result
 
 
 ENGINE_FAILURE_MESSAGES = {
+    'installer_options': 'Wybrane opcje instalatora sa niedostepne lub nie zostaly poprawnie wykonane. Sprawdz formularz i prywatny log.',
     'starter_kits': 'Nie mozna odczytac starter kitow z aktualnego instalatora. Sprawdz jego wersje.',
     'starter_kit_unavailable': 'Wybrany starter kit nie jest juz dostepny. Odswiez formularz i wybierz ponownie.',
     'frontend_node': 'Laravel wymaga Node.js 20.19+ (20.x) lub 22.12+. Sprawdz Node.js w Ubuntu.',
@@ -985,14 +1039,14 @@ ENGINE_FAILURE_MESSAGES = {
 
 
 def adapter_call(unit: str, action: str, args: list[str],
-                 settings: dict[str, str] | None = None, timeout: int = 950,
+                 settings: dict[str, Any] | None = None, timeout: int = 950,
                  engine: str = 'laravel') -> dict[str, Any]:
     try:
         proc = subprocess.run(engine_unit_args(unit, action, args, timeout, engine),
                               input=json.dumps(settings) if settings is not None else '',
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, timeout=timeout + 5, check=False, close_fds=True)
-        if len(proc.stdout) > 8192:
+        if len(proc.stdout) > 16384:
             raise ValueError('oversized response')
         envelope = json.loads(proc.stdout)
         if not isinstance(envelope, dict):
@@ -1119,7 +1173,7 @@ def engine_tool_status(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def start_engine_phase(job: dict[str, Any], state: str, action: str, args: list[str],
-                       message: str, settings: dict[str, str] | None = None) -> None:
+                       message: str, settings: dict[str, Any] | None = None) -> None:
     unit = 'devstack-engine-' + job['id'] + '-' + action
     job.update(state=state, unit=unit, message=message)
     write_json_atomic(ENGINE_JOB_FILE, job)
@@ -1147,8 +1201,9 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
     name = check_name(data.get('name'))
     domain = check_domain(data.get('domain'))
     kit = data.get('starter_kit')
-    if data.get('webroot') != definition['webroot'] or not isinstance(kit, str) or not SLUG.fullmatch(kit):
-        raise InputError('Nieprawidlowy katalog publiczny lub wariant instalacji.')
+    webroot = check_webroot(definition['webroot'])
+    if data.get('webroot') not in (None, webroot) or not isinstance(kit, str) or not SLUG.fullmatch(kit):
+        raise InputError('Katalog publiczny wynika z frameworka; nieprawidlowy katalog lub wariant instalacji.')
     if not isinstance(data.get('database'), bool) or not isinstance(data.get('https'), bool):
         raise InputError('Nieprawidlowe ustawienia projektu.')
     cfg = config()
@@ -1171,16 +1226,28 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
     choices = {item['id']: item['label'] for item in tool['starter_kits']}
     if kit not in choices:
         raise InputError('Wybrany starter kit nie jest juz dostepny. Odswiez liste.')
+    fields = tool.get('installer_options')
+    if not isinstance(fields, list):
+        raise InputError('Nie mozna odczytac opcji instalatora.')
+    try:
+        selected = resolve_installer_options(kit, fields, data.get('installer_options', {}))
+    except ValueError:
+        raise InputError('Wybrane opcje instalatora sa niedostepne lub niezgodne. Odswiez formularz.') from None
+    labels = {field['id']: {'label': field['label'],
+              'value': next(choice['label'] for choice in field['choices'] if choice['id'] == selected[field['id']])}
+              for field in fields if field['id'] in selected}
     # Root-owned reservation (one operation at a time) precedes any install.
-    request = {'slug': slug, 'name': name, 'domain': domain, 'webroot': definition['webroot'],
+    request = {'slug': slug, 'name': name, 'domain': domain, 'webroot': webroot,
                'database': data['database'], 'https': data['https'],
-               'engine': engine, 'starter_kit': kit, 'starter_kit_label': choices[kit]}
+               'engine': engine, 'starter_kit': kit, 'starter_kit_label': choices[kit],
+               'installer_options': selected, 'installer_option_labels': list(labels.values())}
     job = {'id': secrets.token_hex(16), 'action': 'create', 'engine': engine,
            'slug': slug, 'request': request}
     if request['database'] and ENGINE_DB_FILE.exists():
         raise InputError('Poprzednia rezerwacja MariaDB wymaga sprawdzenia przez administratora.')
     driver = 'mariadb' if request['database'] else 'sqlite'
-    settings = {'url': ('https://' if request['https'] else 'http://') + domain}
+    settings = {'url': ('https://' if request['https'] else 'http://') + domain,
+                'installer_options': selected}
     job.update(state='preparing', message='Przygotowywanie zasobow instalatora...')
     write_json_atomic(ENGINE_JOB_FILE, job)
     try:
@@ -1188,7 +1255,7 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
             db_name, db_user, db_password = reserve_engine_database(job)
             settings.update(db_name=db_name, db_user=db_user, db_password=db_password)
         start_engine_phase(job, 'scaffolding', 'scaffold', [slug, request['starter_kit'], driver],
-                           'Instalowanie ' + definition['label'] + ' (' + driver + ') i budowanie zasobow...', settings)
+                           'Instalowanie ' + definition['label'] + ' (' + driver + ')...', settings)
     except Exception:
         finish_engine_job(job, success=False, message='Nie udalo sie przygotowac instalacji.')
         raise InputError(engine_job().get('message', 'Nie udalo sie przygotowac instalacji.')) from None
@@ -1252,14 +1319,18 @@ def poll_engine_results() -> None:
             if action == 'scaffold':
                 request = job['request']
                 driver = 'mariadb' if request['database'] else 'sqlite'
-                if result.get('scaffolded') is not True or result.get('driver') != driver:
+                if (result.get('scaffolded') is not True or result.get('driver') != driver
+                        or result.get('webroot') != request['webroot']
+                        or result.get('installer_options') != request['installer_options']):
                     raise RuntimeError('Invalid scaffold result')
                 # The official installer already completed the default migrations
                 # and persisted .env. Publish hosting only after that success.
                 prepared = prepared_engine_database(job) if request['database'] else None
                 create_environment(request, prepared_db=prepared)
-                finish_engine_job(job, success=True,
-                                  message=engine_definition(job['engine'])['label'] + ' zainstalowany (' + driver + '). Srodowisko gotowe.')
+                message = engine_definition(job['engine'])['label'] + ' zainstalowany (' + driver + '). Srodowisko gotowe.'
+                if request['installer_options'].get('assets') == 'no':
+                    message += ' Zgodnie z wyborem pominieto budowanie zasobow; zbuduj je przed otwarciem aplikacji.'
+                finish_engine_job(job, success=True, message=message)
             elif action in ('check', 'install-tool', 'update-tool'):
                 job['tool'] = sanitize_tool_result(result)
                 if action != 'check' and job['tool']['installed'] is None:

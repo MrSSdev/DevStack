@@ -41,9 +41,42 @@ starter-kit schema. If the option metadata changes incompatibly, discovery
 fails closed while the installer version and maintenance remain available.
 Do not forward arbitrary flags or package URLs. Community starter kits
 (`--using`) are unbounded external package choices and are not automatically
-listed. WorkOS, teams and component style are separate installer settings, not
-additional frontend stacks; this form keeps the standard authenticated
-starter kit defaults unless a blank variant is chosen.
+listed.
+
+## Installer options
+
+The adapter publishes conditional fields only when the installed CLI exposes
+the corresponding switches. Symfony's help does not describe interactive
+dependencies, so the Laravel adapter mirrors the reviewed upstream rules
+(v5.33.0); it never parses terminal screens or patches vendor code.
+
+- Authenticated React/Svelte/Vue/Livewire: built-in Laravel authentication
+  (default) or WorkOS (`--workos`, requires a separate WorkOS account and
+  configuration for functional sign-in).
+- Livewire with built-in authentication: single-file components (default)
+  or stand-alone classes (`--livewire-class-components`).
+- Built-in authenticated kits with single-file components when applicable:
+  optional Teams (`--teams`). The official interactive installer does not
+  ask for Teams with WorkOS, blank kits or class-based Livewire.
+- Testing: Pest (default) or PHPUnit.
+- Laravel Boost: optional, off by default.
+- Install/build npm dependencies: on by default, optional skip
+  (`--no-node`); when skipped the environment is registered but the developer
+  must build assets before using pages that require them. Other package
+  managers are not managed by this adapter. No external repository creation,
+  arbitrary community packages or development-release flags are exposed.
+
+A newly discovered frontend kit is listed automatically; advanced
+branch-specific capabilities are restricted to reviewed compatible stacks.
+New interactive dependencies may require an adapter update. The original
+Laravel CLI handles all selected steps. The adapter checks requested
+dependencies, team migration files/class components where applicable, actual
+migration status and the asset manifest when the build was requested. No
+extra Composer installation or migration is added by DevStack.
+
+The public webroot is always `public` for Laravel, supplied by the
+root-owned framework catalog and verified after scaffolding. The panel
+does not let users override the framework's public directory.
 
 ## Standard migrations
 
