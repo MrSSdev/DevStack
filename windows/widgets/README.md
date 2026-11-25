@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Widget installation failed.' }
 Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' | Select-Object Name, Version, Status
 ```
 
-The installer verifies the signature and registers the package. Press **Win + W → +** to add **Ubuntu** and **DevStack** separately.
+The installer verifies the signature and registers the package. Follow its first-open instructions: open **Win + W**, add **Ubuntu** and **DevStack** separately if needed, close the panel, and press Enter in PowerShell. The finalizer resets the widget processes once more after that first initialization. Reopen Win + W.
 
 ### 2. Ubuntu resource readings
 
@@ -50,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-DevStackWi
 if ($LASTEXITCODE -ne 0) { throw 'Service setup failed.' }
 ```
 
-This installs authenticated service readings and restart controls. Setup also updates the bundled static dashboard frontend for project links, keeping a previous-index backup. Use `-SkipFrontend` if the installed frontend already supports the project routes.
+This installs authenticated service readings and restart controls. The default `-SkipFrontend` preserves the existing dashboard; request static frontend replacement only deliberately with `-SkipFrontend:$false`. For a combined package and service integration update, use `Install-Widgets.ps1 -UpdateServiceIntegration` instead of running the two installers separately.
 
 Reopen **Win + W**.
 
@@ -72,7 +72,15 @@ Both cards refresh when visible. Opening the panel preserves the current Ubuntu 
 
 ## Updating
 
-Extract a complete new matching bundle and repeat step 1. The installer verifies deployment and automatically attempts to reset `WidgetBoard` and `DevStack.Widgets` after success. Keep the existing Linux integrations; repeat their setup only if required by a release.
+Extract a complete matching bundle. The installer resets the host/provider before and immediately after verified package deployment. A second, guided post-initialization reset is now part of the normal update: open Win+W once, let the cards begin loading, close the panel, and press Enter. It resets only the current Windows session and exits. No fixed delay, background watcher, task or WSL restart is used.
+
+For a package-only update, repeat step 1. If the release requires a service integration update, first update DevStack in Ubuntu and keep Ubuntu running, then run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-Widgets.ps1" -UpdateServiceIntegration
+```
+
+The integration runs with `-SkipFrontend` before the guided final reset. Existing WSL telemetry stays untouched. If you need to complete setup separately or use a noninteractive installation, pass `-DeferFirstOpenReset` and run `Complete-WidgetUpdate.ps1` explicitly after setup. The finalizer can also be rerun without redeploying the MSIX. Verify both cards after reopening; CI cannot confirm the actual Windows shell lifecycle on your machine.
 
 ## Diagnostics
 

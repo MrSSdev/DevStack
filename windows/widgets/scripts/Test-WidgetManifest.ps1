@@ -43,11 +43,20 @@ if ($deploy.Count -ne 1 -or $resets.Count -ne 2 -or
     throw 'Expected a reset before deployment and another after deployment'
 }
 $tail = [scriptblock]::Create((Get-Content -LiteralPath $installer -Raw).Substring($deploy[0].Extent.StartOffset))
-foreach ($scenario in @('ok','deployment-error','wrong-version','bad-status','missing-package')) {
+foreach ($scenario in @('ok','with-integration','deferred','integration-error','deployment-error','wrong-version','bad-status','missing-package')) {
     & {
         $calls = [System.Collections.Generic.List[string]]::new()
         $msix = 'mock.msix'
         $manifest = $doc
+        $UpdateServiceIntegration = $scenario -in @('with-integration','integration-error')
+        $DeferFirstOpenReset = $scenario -eq 'deferred'
+        $integration = {
+            param([switch]$SkipFrontend)
+            if (!$SkipFrontend) { throw 'Unexpected frontend replacement' }
+            $calls.Add('integration')
+            if ($scenario -eq 'integration-error') { throw 'Mock integration failure' }
+        }
+        $complete = { $calls.Add('first-open') }
         function Add-AppxPackage {
             [CmdletBinding()]
             param([string]$Path)
@@ -81,13 +90,89 @@ foreach ($scenario in @('ok','deployment-error','wrong-version','bad-status','mi
         $failed = $false
         try { & $tail | Out-Null } catch { $failed = $true }
         $expected = switch ($scenario) {
-            'ok' { 'deploy,verify,get-process,reset' }
+            'ok' { 'deploy,verify,get-process,reset,first-open' }
+            'with-integration' { 'deploy,verify,get-process,reset,integration,first-open' }
+            'deferred' { 'deploy,verify,get-process,reset' }
+            'integration-error' { 'deploy,verify,get-process,reset,integration' }
             'deployment-error' { 'deploy' }
             default { 'deploy,verify' }
         }
-        if (($calls -join ',') -ne $expected -or $failed -ne ($scenario -ne 'ok')) {
+        if (($calls -join ',') -ne $expected -or $failed -ne ($scenario -notin @('ok','with-integration','deferred'))) {
             throw "Installer post-update reset test failed: $scenario ($($calls -join ','))"
         }
     }
 }
 Write-Host 'PASS: post-update reset after verified installation only (mocked commands)'
+
+# Execute the actual finalizer with mocked package, user input and process
+# commands. Assert the first-open confirmation precedes the scoped reset.
+$finalizer = Join-Path $PSScriptRoot 'Complete-WidgetUpdate.ps1'
+$tokens = $null
+$parseErrors = $null
+$finalizerAst = [System.Management.Automation.Language.Parser]::ParseFile($finalizer, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count -gt 0) { throw 'First-open finalizer syntax failed' }
+$forbidden = @($finalizerAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -in @('wsl','wsl.exe','Start-Job','Register-ScheduledTask','schtasks','schtasks.exe','Start-Process','Start-Sleep')
+}, $true))
+if ($forbidden.Count) { throw 'First-open reset must not start WSL, a watcher, a task, or a guessed delay.' }
+foreach ($scenario in @('confirmed','skip','no-process','wrong-session','missing-package','bad-status','reset-error')) {
+    & {
+        $calls = [System.Collections.Generic.List[string]]::new()
+        function Get-AppxPackage {
+            [CmdletBinding()]
+            param([string]$Name)
+            if ($Name -ne 'MrSSdev.DevStack.Widgets') { throw 'Wrong package' }
+            $calls.Add('verify')
+            if ($scenario -eq 'missing-package') { return }
+            $status = if ($scenario -eq 'bad-status') { 'Error' } else { 'Ok' }
+            [pscustomobject]@{ Name=$Name; Status=$status }
+        }
+        function Read-Host {
+            param([string]$Prompt)
+            $calls.Add('first-open-confirmed')
+            if ($scenario -eq 'skip') { return 'SKIP' }
+            return ''
+        }
+        function Get-Process {
+            [CmdletBinding()]
+            param([int]$Id,[string[]]$Name)
+            if ($PSBoundParameters.ContainsKey('Id')) {
+                if ($Id -ne $PID) { throw 'Must read current session' }
+                $calls.Add('session')
+                return [pscustomobject]@{SessionId=7}
+            }
+            if (($Name -join ',') -ne 'WidgetBoard,DevStack.Widgets') { throw 'Unexpected process targets' }
+            $calls.Add('get-process')
+            if ($scenario -eq 'no-process') { return }
+            [pscustomobject]@{Name='WidgetBoard';SessionId=8}
+            if ($scenario -eq 'wrong-session') { return }
+            [pscustomobject]@{Name='WidgetBoard';SessionId=7}
+            [pscustomobject]@{Name='DevStack.Widgets';SessionId=7}
+        }
+        function Stop-Process {
+            [CmdletBinding()]
+            param([Parameter(ValueFromPipeline=$true)]$InputObject,[switch]$Force)
+            process {
+                if (!$Force -or $InputObject.SessionId -ne 7) { throw 'Wrong session or missing force' }
+                $calls.Add('reset-'+$InputObject.Name)
+                if ($scenario -eq 'reset-error') { Write-Error 'Mock process reset failure' }
+            }
+        }
+        $failed = $false
+        try { & $finalizer | Out-Null } catch { $failed = $true }
+        $expected = switch ($scenario) {
+            'confirmed' {'verify,first-open-confirmed,session,get-process,reset-WidgetBoard,reset-DevStack.Widgets'}
+            'reset-error' {'verify,first-open-confirmed,session,get-process,reset-WidgetBoard,reset-DevStack.Widgets'}
+            'skip' {'verify,first-open-confirmed'}
+            'no-process' {'verify,first-open-confirmed,session,get-process'}
+            'wrong-session' {'verify,first-open-confirmed,session,get-process'}
+            default {'verify'}
+        }
+        if (($calls -join ',') -ne $expected -or $failed -ne ($scenario -in @('missing-package','bad-status','reset-error'))) {
+            throw "First-open reset test failed: $scenario ($($calls -join ',')); failure=$failed"
+        }
+    }
+}
+Write-Host 'PASS: one-time reset after first-open confirmation, optional integration order, deferral, session isolation and failure handling (mocked commands)'

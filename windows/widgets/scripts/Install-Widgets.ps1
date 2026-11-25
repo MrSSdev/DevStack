@@ -1,11 +1,22 @@
 # Run from the extracted artifact as the Windows account that owns WSL.
 [CmdletBinding()]
-param()
+param(
+    [switch]$UpdateServiceIntegration,
+    [switch]$DeferFirstOpenReset
+)
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Open PowerShell as administrator using your usual Windows account.'
+}
+$complete = Join-Path $PSScriptRoot 'Complete-WidgetUpdate.ps1'
+$integration = Join-Path $PSScriptRoot 'Install-DevStackWidget.ps1'
+if (!$DeferFirstOpenReset -and !(Test-Path -LiteralPath $complete -PathType Leaf)) {
+    throw 'Missing Complete-WidgetUpdate.ps1 from the matching bundle.'
+}
+if ($UpdateServiceIntegration -and !(Test-Path -LiteralPath $integration -PathType Leaf)) {
+    throw 'Missing Install-DevStackWidget.ps1 from the matching bundle.'
 }
 $msix = Join-Path $PSScriptRoot 'DevStack-Widgets-x64.msix'
 $cer = Join-Path $PSScriptRoot 'DevStack-Widgets-Dev.cer'
@@ -22,7 +33,7 @@ try {
 } finally { $zip.Dispose() }
 if ($manifest.Package.Identity.Name -ne 'MrSSdev.DevStack.Widgets' -or
     $manifest.Package.Identity.Publisher -ne 'CN=DevStack Widgets Development' -or
-    $manifest.Package.Identity.Version -ne '0.5.0.0') { throw 'Expected DevStack Widgets 0.5.0.0.' }
+    $manifest.Package.Identity.Version -ne '0.5.1.0') { throw 'Expected DevStack Widgets 0.5.1.0.' }
 $cert = Get-PfxCertificate -FilePath $cer
 if ($cert.Subject -ne 'CN=DevStack Widgets Development') { throw 'Unexpected signer.' }
 $before = Get-AuthenticodeSignature -FilePath $msix
@@ -54,10 +65,21 @@ Get-Process -Name "WidgetBoard", "DevStack.Widgets" `
 if ($resetErrors.Count -gt 0) {
     Write-Warning 'Package updated, but the post-update widget process reset reported an error.'
 } else {
-    Write-Host 'Post-update widget process reset completed. Reopen Win+W.'
+    Write-Host 'Immediate post-deployment widget process reset completed.'
 }
 
 $packages | Select-Object Name, Version, Status
-Write-Host 'Widgets updated to 0.5.0.0. Approved WSL appearance and controls are preserved.'
+Write-Host 'Widgets updated to 0.5.1.0. Approved WSL appearance and controls are preserved.'
 Write-Host 'Existing Ubuntu telemetry setup is retained. Do not reinstall WSL telemetry.'
-Write-Host 'Update the DevStack service integration once with Install-DevStackWidget.ps1 -SkipFrontend (Ubuntu must already be running).'
+if ($UpdateServiceIntegration) {
+    # Explicit opt-in only; the integration script checks that Ubuntu is
+    # already running. Do not replace the web dashboard or WSL telemetry.
+    & $integration -SkipFrontend
+} else {
+    Write-Host 'Keep the existing Linux integrations unless the release requires an update.'
+}
+if ($DeferFirstOpenReset) {
+    Write-Host 'First-open reset deferred. After any required integration setup, run Complete-WidgetUpdate.ps1.'
+} else {
+    & $complete
+}

@@ -47,7 +47,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Widget update failed.' }
 Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' | Select-Object Name, Version, Status
 ```
 
-The installer verifies the matching signature and package, updates in place and resets the Windows widget processes after successful deployment verification. Reopen **Win + W**. Keep existing Linux telemetry and service integration settings; run their setup scripts only when the release instructions require it.
+The installer verifies the matching signature and package and updates in place. Follow its prompt: open **Win + W** once, wait until the cards begin loading or show content, close the panel, then press Enter. It performs the final process reset automatically. Reopen Win+W and verify both cards. The additional reset is deliberately tied to first initialization, not a guessed delay.
+
+If a release also requires a service integration update, use `Install-Widgets.ps1 -UpdateServiceIntegration` while Ubuntu is already running. This invokes the bridge installer with `-SkipFrontend` before the final reset; existing WSL telemetry is unchanged. For deferred or noninteractive setup, use `-DeferFirstOpenReset`, then run `Complete-WidgetUpdate.ps1` once in the interactive Windows session. Keep existing Linux integration settings otherwise.
 
 For installation and setup, see the [widget guide](../windows/widgets/README.md).
 
