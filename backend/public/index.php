@@ -102,6 +102,26 @@ try {
     if ($method === 'GET' && $path === '/api/state') {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('status', [])]);
     }
+    // These routes run after the existing session and POST CSRF checks.
+    // Email bodies are returned as JSON, never active same-origin HTML.
+    if ($method === 'GET' && $path === '/api/mail/messages') {
+        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('list', $_GET)]);
+    }
+    if ($method === 'GET' && preg_match('~^/api/mail/message/([A-Za-z0-9]{22})$~D', $path, $mailMatch)) {
+        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('message', ['id' => $mailMatch[1]])]);
+    }
+    if ($method === 'GET' && preg_match('~^/api/mail/message/([A-Za-z0-9]{22})/part/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$~D', $path, $mailMatch)) {
+        $attachment = devstack_mailpit_request('attachment', ['id' => $mailMatch[1], 'part' => $mailMatch[2]]);
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment');
+        header('Content-Length: ' . strlen($attachment));
+        echo $attachment;
+        exit;
+    }
+    if ($method === 'POST' && $path === '/api/mail/delete') {
+        if (count($body) !== 1) throw new InvalidArgumentException('Wybierz jedną wiadomość do usunięcia.');
+        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('delete', $body)]);
+    }
     if ($method === 'POST' && $path === '/api/preferences') {
         $theme = $body['theme'] ?? null;
         if (!is_string($theme) || !in_array($theme, ['light', 'dark'], true) || count($body) !== 1) {
@@ -143,6 +163,7 @@ try {
             'webroot' => $body['webroot'] ?? null,
             'database' => $body['database'] ?? false,
             'https' => $body['https'] ?? true,
+            'local_mail' => $body['local_mail'] ?? false,
             'engine' => $engine,
             'starter_kit' => $body['starter_kit'] ?? 'none',
             'installer_options' => is_array($body['installer_options'] ?? []) && empty($body['installer_options'])
