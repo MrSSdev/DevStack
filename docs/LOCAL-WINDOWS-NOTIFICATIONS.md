@@ -1,4 +1,6 @@
-# Test lokalnych powiadomień Windows na ASUS-ie
+# Lokalne powiadomienia Windows (WinRT)
+
+**Docelowy transport DevStack: lokalny WinRT, bez Web Push/WNS i bez Internetu.** Nie trzeba instalować python3-pywebpush, tworzyć subskrypcji przeglądarki, konfigurować VAPID ani zmieniać polityki Edge. PWA jest opcjonalna. Dawny transport przeglądarkowy jest zachowany w kodzie tylko dla zgodności i świadomego wycofania; znacznik lokalnego transportu go omija. Nie jest częścią docelowej konfiguracji.
 
 DevStack używa istniejącego kolektora i jednej rezerwacji w SQLite.
 Mały program GUI uruchamia Windows PowerShell 5.1 z CreateNoWindow,
@@ -178,7 +180,10 @@ istniejącego opt-in albo jawnej flagi. Zintegrowana aktualizacja:
 Przy ponownym włączeniu istniejący znacznik zachowuje czas opt-in,
 aby nie wysyłać starego backlogu ani nie odrzucać nowych zdarzeń przy
 zwykłej aktualizacji. Jedno zdarzenie używa jednej ścieżki dostarczenia.
-Nie usuwa się subskrypcji WNS; pozostaje dostępna do wycofania.
+Istniejąca subskrypcja WNS może pozostać zapisana wyłącznie dla zgodności
+ze starszą wersją. Aktywny WinRT jej nie używa. Nie tworzyć nowej subskrypcji
+ani nie włączać Web Push. Jej sprzątnięcie i uporządkowanie ustawień to
+odrębna zmiana, a nie warunek działania WinRT.
 Nie zmienia się interwału poll (5 s) ani kolektora (8 s).
 
 Jeśli normalne konto Windows nie może utworzyć C:\DevStack, aktualizator
@@ -260,7 +265,14 @@ zwraca failed, sprawdź Interop procesu systemd i sesję zalogowanego
 użytkownika. Nie uruchamiaj notyfikatora z uprawnieniami roota ani
 nie osłabiaj zabezpieczeń jednostek systemd.
 
-## Pełne wycofanie pierwszego testu (powrót do WNS)
+## Wycofanie lokalnego komponentu (tylko świadomy rollback)
+
+Poniższa procedura służy odtworzeniu poprzedniej wersji, nie konfiguracji
+docelowej. Web Push/WNS nie jest zalecanym transportem. Jeżeli zachowano
+starą subskrypcję WNS, usunięcie znacznika może dopuścić jej ponowne użycie.
+Nie stosuj tej procedury jako globalnego wyłącznika powiadomień. Jeżeli
+celem jest brak dostarczania systemowego, wyłącz kategorie albo
+powiadomienia aplikacji w ustawieniach Windows.
 
 1. Wyłącz lokalny transport w Ubuntu:
 

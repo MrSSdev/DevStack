@@ -56,7 +56,9 @@ reload, recovery after deliberately dropping both document transports, navigatio
 to `about:blank` without a successor poll, and closing one of two Chromium tabs
 while the other tab retains its lease. It checks only the fixture client IDs
 in the isolated database. Use an installed Edge PWA on the physical Windows
-device to validate window closure, background throttling, and WNS delivery.
+device to validate window closure, background throttling, local WinRT
+delivery and PWA activation. Legacy fake-subscription coverage does not
+make browser Web Push a requirement for local delivery.
 
 The failed run at `533b962` showed the navigation's leave request without
 an HTTP response in the Playwright trace. An isolated Nginx/PHP 8.5

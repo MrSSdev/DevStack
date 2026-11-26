@@ -67,9 +67,14 @@ entries or clear all without touching projects or Mailpit. Toasts continue
 to show operation progress; new mail and service failures also appear when
 the panel is open. See [Notifications and PWA](docs/NOTIFICATIONS.md).
 
-Optional browser Web Push requires `sudo apt install python3-pywebpush`
-on Ubuntu 26.04 and explicit activation in Settings → Notifications.
-No subscription or Internet delivery is enabled by default.
+For system notifications after the last panel window closes, use the
+[local Windows (WinRT) transport](docs/LOCAL-WINDOWS-NOTIFICATIONS.md).
+It is an explicit one-time opt-in via `bash scripts/update.sh --windows-local-notifications`;
+subsequent ordinary updates preserve it. No Internet connection, Web Push,
+browser subscription or external notification provider is required.
+A registered DevStack PWA is preferred when opening a Windows notification;
+otherwise the local HTTPS panel opens in the default browser.
+Without opt-in, the local history and panel toasts remain available.
 
 ## Local test email (optional)
 
