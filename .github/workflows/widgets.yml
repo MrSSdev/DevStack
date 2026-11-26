@@ -164,7 +164,19 @@ jobs:
           Copy-Item windows/widgets/telemetry/collector.py, windows/widgets/telemetry/devstack-widget-metrics.socket, windows/widgets/telemetry/devstack-widget-metrics@.service 'widgets-packages/install/telemetry/'
           New-Item -ItemType Directory -Force -Path 'widgets-packages/install/services' | Out-Null
           Copy-Item windows/widgets/services/bridge.py, windows/widgets/services/setup.py, windows/widgets/services/*.socket, windows/widgets/services/*.service 'widgets-packages/install/services/'
-          Copy-Item windows/widgets/scripts/Install-DevStackWidget.ps1 'widgets-packages/install/'
+          Copy-Item windows/widgets/scripts/Install-DevStackWidget.ps1, windows/widgets/scripts/Widget-Layout.ps1, windows/widgets/scripts/Migrate-WidgetLayout.ps1, windows/widgets/scripts/Migrate-DevStackWindows.ps1 'widgets-packages/install/'
+          Copy-Item windows/windows-layout.ps1 'widgets-packages/install/'
+          New-Item -ItemType Directory -Force -Path 'widgets-packages/install/layout' | Out-Null
+          $layoutFiles = @(
+            'windows-layout.ps1','initialize-windows-layout.ps1','windows-layout-migration.ps1',
+            'layout-directory-identity.cs','notification-layout-copy.ps1','migrate-notification-layout.ps1',
+            'stage-windows-notifications.ps1','install-hosts-sync.ps1','hosts-layout.ps1',
+            'watch-hosts.ps1','hosts-lib.ps1'
+          )
+          foreach ($name in $layoutFiles) {
+            Copy-Item -LiteralPath (Join-Path 'windows' $name) -Destination 'widgets-packages/install/layout/'
+          }
+          Copy-Item docs/WINDOWS-COMPONENT-LAYOUT.md 'widgets-packages/install/'
           Copy-Item DevStack-Frontend.zip 'widgets-packages/install/'
           Copy-Item windows/widgets/DEVSTACK-0.4.md 'widgets-packages/install/READ-ME-FIRST.md'
           $parseErrors = $null
@@ -174,9 +186,49 @@ jobs:
           $public = Get-PfxCertificate 'widgets-packages/install/DevStack-Widgets-Dev.cer'
           if (!$sig.SignerCertificate -or $sig.SignerCertificate.Thumbprint -ne $public.Thumbprint) { throw 'Published signer pair mismatch' }
 
+      - name: Verify complete migration bundle before publishing
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = (Resolve-Path 'widgets-packages/install').Path
+          $entry = Join-Path $bundle 'Migrate-DevStackWindows.ps1'
+          Set-Content -LiteralPath (Join-Path $bundle 'COMMIT.txt') -Value $env:GITHUB_SHA -Encoding Ascii
+          $hashes = Get-ChildItem -LiteralPath $bundle -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $relative = $_.FullName.Substring($bundle.Length + 1).Replace('\','/')
+            '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relative
+          }
+          Set-Content -LiteralPath (Join-Path $bundle 'SHA256SUMS.txt') -Value $hashes -Encoding Ascii
+          foreach ($file in Get-ChildItem -LiteralPath $bundle -Recurse -File -Filter '*.ps1') {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | Format-List; throw "Invalid bundled script: $($file.Name)" }
+          }
+          & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly
+          $missing = Join-Path $bundle 'layout\install-hosts-sync.ps1'
+          $temporary = Join-Path $env:RUNNER_TEMP ('bundle-test-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+          Move-Item -LiteralPath $missing -Destination $temporary
+          try {
+            $rejected = $false
+            try { & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly | Out-Null } catch { $rejected = $true }
+            if (-not $rejected) { throw 'Verifier accepted a missing migration file.' }
+          } finally { Move-Item -LiteralPath $temporary -Destination $missing }
+          $manifestPath = Join-Path $bundle 'SHA256SUMS.txt'
+          $saved = [IO.File]::ReadAllBytes($manifestPath)
+          try {
+            $lines = @(Get-Content -LiteralPath $manifestPath | Where-Object { $_ -notmatch '  layout/install-hosts-sync\.ps1
+ })
+            Set-Content -LiteralPath $manifestPath -Value $lines -Encoding Ascii
+            $rejected = $false
+            try { & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly | Out-Null } catch { $rejected = $true }
+            if (-not $rejected) { throw 'Verifier accepted an incomplete manifest.' }
+          } finally { [IO.File]::WriteAllBytes($manifestPath,$saved) }
+          & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly
+          Write-Host 'PASS: complete actual bundle, all scripts parse, missing file and incomplete manifest rejected.'
+
       - uses: actions/upload-artifact@v4
         with:
-          name: DevStack-Windows-Widgets-x64
-          path: widgets-packages/install/*
+          name: DevStack-Windows-Widgets-0.5.2.0-migration
+          path: widgets-packages/install/
           retention-days: 14
           if-no-files-found: error

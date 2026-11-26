@@ -11,7 +11,7 @@ Windows 11 x64 with a compatible Web Widgets host and Windows App Runtime 2.7. S
 
 ## Download
 
-From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-x64** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
+From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-0.5.2.0-migration** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
 
 Keep the MSIX, CER, installers, frontend ZIP, and `telemetry/` and `services/` directories from the same build together.
 

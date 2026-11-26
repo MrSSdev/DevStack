@@ -175,3 +175,19 @@ artifacts before physical acceptance. Cleanup requires a separate explicit
 review of actual task paths, retained history and all legacy references.
 CI does not replace live WinRT, S4U execution, ordinary-token access,
 MSIX deployment or widget lifecycle acceptance on ASUS.
+
+## Bundle completeness gate
+
+The original 6a76b62 MSIX artifact was incomplete: workflow packaging did
+not include the migration entry point, shared helpers or hash manifest.
+Do not use that artifact for migration. The corrected workflow copies
+all required scripts and data and runs the shipped migration entry point
+with -VerifyOnly in Windows PowerShell 5.1 against the final assembled
+bundle before upload. It additionally rejects a removed dependency and
+an incomplete manifest, restores the fixtures, and verifies again.
+The replacement artifact is named DevStack-Windows-Widgets-0.5.2.0-migration.
+The read-only VerifyOnly mode checks the expected commit, all listed
+hashes, required files and MSIX identity/version without running migration
+or requiring elevation. A genuine artifact must be obtained from the
+reviewed GitHub Actions run; self-contained hashes are not a signature
+of the source bundle.
