@@ -1,3 +1,7 @@
+## Version 0.5.1.0 update — first-open reset
+
+This maintenance release changes the Windows installation sequence, not the widget UI or provider behavior. If the release requires service integration, use `Install-Widgets.ps1 -UpdateServiceIntegration` after updating DevStack in Ubuntu and while Ubuntu is already running. The script preserves the dashboard and WSL telemetry. For a package-only update, omit the switch. After deployment and any integration setup, follow the prompt: open Win+W, wait for the cards to begin loading or display content, close the panel, then press Enter. The installer resets the widget processes again and exits. Reopen Win+W and verify both cards. To finish manually deferred setup, run `Complete-WidgetUpdate.ps1` with the same process-scoped PowerShell execution policy. No scheduled task or background process is created. No need to reinstall a working 0.5.0.0 solely to exercise this maintenance change.
+
 ## Version 0.5.0.0 update
 
 Update DevStack in Ubuntu first (`bash scripts/update.sh`), then install the matching MSIX/certificate with `Install-Widgets.ps1`. While Ubuntu is already running, update the service integration using `Install-DevStackWidget.ps1 -SkipFrontend`. Do not overwrite the current dashboard with an older static frontend ZIP. Existing read/control credentials are preserved. Select services in the dashboard settings; changes arrive on the next visible widget refresh. The original WSL widget is unchanged. The following historical 0.4 instructions describe the previous release.
@@ -25,7 +29,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-DevStackWi
 if ($LASTEXITCODE -ne 0) { throw 'Service setup failed.' }
 ```
 
-Open **Win + W**, add Ubuntu and DevStack separately. For package updates, run only the matching `Install-Widgets.ps1` unless the release requires a Linux integration update. The installer verifies deployment and attempts a final reset of the Windows widget processes.
+Open **Win + W**, add Ubuntu and DevStack separately. For package updates, run only the matching `Install-Widgets.ps1` unless the release requires a Linux integration update. The installer verifies deployment and includes the guided first-open reset described above.
 
 [Complete widget guide](https://github.com/MrSSdev/DevStack/tree/main/windows/widgets#readme)
 

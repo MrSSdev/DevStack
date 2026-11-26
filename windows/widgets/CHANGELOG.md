@@ -1,3 +1,9 @@
+## 0.5.1.0 — widget update finalization
+
+- Keep immediate verified deployment reset, and perform a second reset after the first actual Win+W initialization, guided by an explicit user confirmation.
+- Optional `Install-Widgets.ps1 -UpdateServiceIntegration` updates the service bridge before finalizing; preserves the web dashboard, WSL telemetry and lifecycle.
+- Standalone `Complete-WidgetUpdate.ps1` can finish deferred setup without reinstalling. No persistent watcher or guessed delay. Widget UI and provider logic unchanged; local shell acceptance remains necessary.
+
 ## 0.5.0.0 — managed service selection
 
 - Dashboard lists all installed registered services; Start / Stop / Restart are web controls.
