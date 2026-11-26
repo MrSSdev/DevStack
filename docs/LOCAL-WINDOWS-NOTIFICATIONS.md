@@ -40,13 +40,16 @@ w dziecku zabezpieczonej usługi została odrzucona przez jądro na WSL
 (EPERM), dlatego nie wolno wracać do subprocess.run(user=..., group=...).
 Jednostka ma limit czasu, nie jest utrzymywana w spoczynku i nie zmienia
 zabezpieczeń devstackd. Jednostka Type=oneshot czeka na zakończenie
-programu, a stały wrapper działający jako deweloper emituje krótki znacznik
-potwierdzenia wyłącznie po kodzie wyjścia 0. Sam kod wyjścia systemd-run
-nie wystarcza: CI ujawnił fałszywy sukces błyskawicznie kończącej się
-jednostki Type=exec. Limit 10 s dotyczy całej operacji. Nie zapisujemy
-treści powiadomienia ani surowego wyjścia programu. CI sprawdza rzeczywisty
-RPC i systemd z izolowanym linuksowym programem testowym (sukces, błąd,
-limit czasu); Windows i WSL Interop wymagają odbioru na urządzeniu.
+programu. RemainAfterExit zachowuje jedynie stan zakończenia (nie proces),
+a pomocnik odczytuje Result, ExecMainCode, ExecMainStatus i stan jednostki
+bezpośrednio od systemd. Następnie zatrzymuje i czyści tę jednostkę, także
+po błędzie lub timeout; PartOf wiąże jej życie z devstackd. CI ujawnił
+niejednoznaczne wyniki systemd-run z --wait/--pipe/--collect, dlatego
+nie używamy tych opcji ani tekstowych potwierdzeń ze stdout. Limit 10 s
+dotyczy uruchomienia i zakończenia launchera. Nie zapisujemy treści
+powiadomień ani surowego wyjścia programu. CI sprawdza rzeczywisty RPC,
+UID/GID, sukces, błąd, timeout oraz sprzątanie; Windows i WSL Interop
+wymagają odbioru na urządzeniu.
 
 ## Zintegrowana aktualizacja testowa
 

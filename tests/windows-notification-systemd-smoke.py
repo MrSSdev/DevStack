@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import pwd
 import subprocess
+import time
 
 if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.geteuid() != 0
         or 'microsoft' in Path('/proc/sys/kernel/osrelease').read_text().lower()):
@@ -44,8 +45,7 @@ data = json.loads(base64.b64decode(sys.argv[1]))
 assert data in ({event!r}, {{**{event!r}, 'kind': 'error'}}, {{**{event!r}, 'kind': 'success'}})
 with Path({str(observed)!r}).open('a') as f:
     f.write(data['kind'] + '\\n')
-# Even this identical stdout line must not be treated as the completion
-# marker if the launcher fails: the fixed wrapper discards launcher output.
+# Arbitrary launcher stdout must not turn a failing exit into success.
 print('DEVSTACK_NOTIFICATION_ACCEPTED', flush=True)
 if data['kind'] == 'error':
     sys.exit(23)
@@ -102,7 +102,22 @@ try:
     assert rpc({**event, 'kind': 'success'}) == {'accepted': False}, 'Timed-out worker reported success.'
     expected.append('success')
     assert observed.read_text().splitlines() == expected, 'Timeout fixture did not run.'
-    print('PASS: actual restricted RPC, developer identity, repeated completion, failed/spoofed output and timeout handling.')
+    # PID 1 collects inactive transient units asynchronously.
+    for _ in range(20):
+        units = ctl('list-units', '--all', '--plain', '--no-legend',
+                    'devstack-windows-notification-*.service').stdout.strip()
+        if not units:
+            break
+        time.sleep(0.1)
+    assert not units, 'Transient notification units were left behind: ' + units
+    print('PASS: actual restricted RPC, developer identity, repeated completion, failed output, timeout and unit cleanup.')
+except Exception:
+    # Independent invocation evidence and PID 1's unit logs are essential:
+    # a failure before execution must not be mistaken for a launcher error.
+    print('Observed fixture invocations:', observed.read_text() if observed.exists() else '(not created)', flush=True)
+    subprocess.run(['/usr/bin/journalctl', '-u', 'devstack-windows-notification-*.service',
+                    '--no-pager', '-n', '150'], check=False, timeout=15)
+    raise
 finally:
     if marker_created:
         marker.unlink()

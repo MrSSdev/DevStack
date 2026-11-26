@@ -1529,6 +1529,7 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
         raise InputError('Nieprawidlowe powiadomienie Windows.')
     if not WINDOWS_NOTIFICATION_MODE.is_file():
         return {'accepted': False}
+    unit = None
     try:
         raw_path = WINDOWS_NOTIFICATION_MODE.read_text(encoding='utf-8').rstrip('\n')
         launcher = pathlib.Path(raw_path)
@@ -1550,15 +1551,14 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
         if account.pw_uid == 0 or account.pw_gid == 0:
             return {'accepted': False}
         encoded = base64.b64encode(json.dumps(data, ensure_ascii=True).encode('ascii')).decode('ascii')
-        unit = 'devstack-windows-notification-' + secrets.token_hex(8)
-        # Wait for the whole one-shot operation, not merely successful execve.
-        # In CI an immediately failing Type=exec unit returned zero from
-        # systemd-run. Require both a successful job and an explicit completion
-        # marker written by a fixed, unprivileged wrapper AFTER the launcher
-        # returns zero. The launcher cannot accidentally supply that marker
-        # through stdout. No event data is interpreted as shell source.
+        unit = 'devstack-windows-notification-' + secrets.token_hex(8) + '.service'
+        # Let PID 1 retain the exit status until we have checked it. A
+        # synchronous Type=oneshot start waits for ExecStart to finish;
+        # RemainAfterExit retains only unit state, not a running process.
+        # Avoid --pipe/--wait/--collect: CI saw ambiguous completion when
+        # the transient unit disappeared before its status was observed.
         result = subprocess.run(
-            ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+            ['/usr/bin/systemd-run', '--system', '--quiet',
              '--service-type=oneshot', '--unit=' + unit,
              '--uid=' + str(account.pw_uid), '--gid=' + str(account.pw_gid),
              '--working-directory=' + str(launcher.parent),
@@ -1567,28 +1567,53 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
              '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
              '--property=ProtectKernelModules=yes', '--property=ProtectControlGroups=yes',
              '--property=PartOf=devstackd.service',
+             '--property=RemainAfterExit=yes', '--property=CollectMode=inactive',
              '--property=TimeoutStartSec=10s', '--property=TimeoutStopSec=2s',
-             '--property=UMask=0077',
+             '--property=StandardInput=null', '--property=StandardOutput=null',
+             '--property=StandardError=null', '--property=UMask=0077',
              '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8',
-             '/bin/sh', '-c', r'"$@" >/dev/null 2>&1 && printf "%s\n" DEVSTACK_NOTIFICATION_ACCEPTED',
-             'devstack-notification', str(launcher), encoded],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            timeout=18, close_fds=True,
+             str(launcher), encoded],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=15, close_fds=True,
         )
-        if result.returncode != 0:
-            print('Windows notification worker failed: exit ' + str(result.returncode),
+        expected = {'LoadState': 'loaded', 'ActiveState': 'active',
+                    'SubState': 'exited', 'Result': 'success',
+                    'ExecMainCode': '1', 'ExecMainStatus': '0'}
+        state = subprocess.run(
+            ['/usr/bin/systemctl', '--system', 'show', '--no-pager',
+             *('--property=' + key for key in expected), '--', unit],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, timeout=3, close_fds=True,
+        )
+        properties = dict(line.split('=', 1) for line in state.stdout.splitlines() if '=' in line)
+        accepted = (result.returncode == 0 and state.returncode == 0
+                    and all(properties.get(key) == value for key, value in expected.items()))
+        if not accepted:
+            # Only fixed property names and short, safe status tokens.
+            detail = ' '.join(key + '=' + (value if re.fullmatch(r'[a-zA-Z0-9_-]{1,40}', value) else 'unknown')
+                              for key in expected for value in [properties.get(key, 'missing')])
+            print(f'Windows notification worker failed: start={result.returncode} query={state.returncode} {detail}',
                   file=sys.stderr, flush=True)
-            return {'accepted': False}
-        if result.stdout != b'DEVSTACK_NOTIFICATION_ACCEPTED\n':
-            print('Windows notification worker failed: missing completion marker',
-                  file=sys.stderr, flush=True)
-            return {'accepted': False}
-        return {'accepted': True}
+        return {'accepted': accepted}
     except (KeyError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         # Never log event content, raw child output, or local account paths.
         print('Windows notification worker unavailable: ' + type(exc).__name__,
               file=sys.stderr, flush=True)
         return {'accepted': False}
+    finally:
+        # Even a start timeout or a failed unit must not leave a retained
+        # transient service. PartOf also ties its lifetime to the daemon.
+        if unit is not None:
+            for action, timeout in (('stop', 4), ('reset-failed', 3)):
+                try:
+                    subprocess.run(
+                        ['/usr/bin/systemctl', '--system', action, '--', unit],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=timeout, close_fds=True,
+                    )
+                except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                    print('Windows notification worker cleanup unavailable: ' + action + ' ' + type(exc).__name__,
+                          file=sys.stderr, flush=True)
 
 
 OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notification': show_windows_notification,
