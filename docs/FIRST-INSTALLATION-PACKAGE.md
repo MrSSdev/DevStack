@@ -32,8 +32,8 @@ sudo apt update
 sudo apt install -y git ca-certificates
 mkdir -p ~/projects
 package='/mnt/c/Users/<windows-user>/Downloads/DevStack-First-Installation-x64'
-git clone --branch main "$package/DevStack-Source.bundle" ~/projects/devstack-source
-cd ~/projects/devstack-source
+git clone --branch main "$package/DevStack-Source.bundle" ~/projects/devstack-source &&
+cd ~/projects/devstack-source &&
 test "$(git rev-parse HEAD)" = "$(tr -d '\r\n' < "$package/COMMIT.txt")" &&
 git remote set-url origin https://github.com/MrSSdev/DevStack.git &&
 bash scripts/bootstrap-ubuntu.sh

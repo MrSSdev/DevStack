@@ -75,11 +75,8 @@ Copy-BundleFile (Join-Path $root 'docs/FIRST-INSTALLATION-PACKAGE.md') 'START-HE
 # A real Git bundle retains the main history and exact build revision. A ZIP
 # of the source tree cannot be used by scripts/update.sh as a Git checkout.
 # For PR validation only, use the tested synthetic merge as the bundle main.
-$main = & git -C $root rev-parse --verify refs/heads/main 2>$null
-if ($LASTEXITCODE -ne 0 -or ([string]$main).Trim() -cne $commit) {
-    & git -C $root update-ref refs/heads/main $commit
-    if ($LASTEXITCODE -ne 0) { throw 'Could not create package main ref.' }
-}
+& git -C $root update-ref refs/heads/main $commit
+if ($LASTEXITCODE -ne 0) { throw 'Could not create package main ref.' }
 $bundle = Join-Path $output 'DevStack-Source.bundle'
 & git -C $root bundle create $bundle refs/heads/main
 if ($LASTEXITCODE -ne 0) { throw 'Source bundle creation failed.' }
