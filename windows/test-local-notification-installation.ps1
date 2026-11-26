@@ -87,7 +87,15 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $legacy)) 'Legacy component not cleaned up'
     Assert-True (Test-Path -LiteralPath (Join-Path $fixtureWidgets 'keep.txt')) 'Widget data lost'
     Assert-True (Test-Path -LiteralPath $registration) 'Cleanup removed registration'
-    Assert-True (@(Get-ChildItem -LiteralPath $root -Directory -Filter 'LocalNotifications.*').Count -eq 0) 'Abandoned staging or backup folder'
+    # Win32 wildcard matching for "name.*" may include "name" with no
+    # extension. Check exact allowed children, including unexpected files,
+    # and report actual leftovers rather than relying on provider filtering.
+    $leftovers = @(Get-ChildItem -LiteralPath $root -Force | Where-Object {
+        $_.Name -notin @('LocalNotifications', 'Config')
+    })
+    if ($leftovers.Count -ne 0) {
+        throw ('Abandoned staging or backup entries: ' + (($leftovers | Select-Object -ExpandProperty Name) -join ', '))
+    }
     & $installer -Mode Uninstall
     & $installer -Mode Uninstall
     Assert-True (-not (Test-Path -LiteralPath $component)) 'Component not removed'
