@@ -70,6 +70,37 @@ Both cards refresh when visible. Opening the panel preserves the current Ubuntu 
 | MariaDB / Redis response | TCP connection establishment time. |
 | Service RAM / CPU | systemd cgroup memory including cache and short CPU delta. 100% CPU represents one logical processor. |
 
+## Extending the managed service catalog
+
+The shared, administrator-controlled [service catalog](../../daemon/service-catalog.json) is the allowlist for the dashboard and the v2 widget bridge. Widget settings select which registered services to display; they do not register arbitrary systemd units. A catalog entry for an already installed, supported service can be deployed through the normal Linux update without rebuilding the current Windows package.
+
+For example, if Memcached were installed and listening on its default TCP port, a maintainer could add this entry to the catalog (this is an example, not an installed dependency):
+
+```json
+{
+  "id": "memcached",
+  "unit": "memcached.service",
+  "name": "Memcached",
+  "description": "Pamięć podręczna",
+  "probe": "tcp",
+  "port": 11211,
+  "widget_default": false,
+  "panel_dependency": false
+}
+```
+
+Use unique IDs and systemd service names. The schema allows up to 24 entries and requires the exact fields shown above; IDs and unit names are validated by [managed_services.py](../../daemon/managed_services.py). Mark panel dependencies accurately. The installed registry must remain root-owned, non-symlinked and not group/world writable. Never accept an arbitrary unit name or shell command from the dashboard or widget.
+
+The bridge resolves the service ID against this catalog, checks that the unit is loaded, blocks conflicting installer/service operations and invokes a bounded `systemctl --no-ask-password restart <unit>` (12-second subprocess timeout, no automatic retry). The widget verifies a fresh post-command snapshot: the unit must be active and the selected service must pass its configured probe. Successful verification is displayed in the widget itself for 30 seconds, without a second PWA toast. Recovery after an error or unconfirmed command is not proof that the restart succeeded.
+
+| Probe | Meaning and limitation |
+| --- | --- |
+| `tcp` | Windows connects to the configured port on 127.0.0.1; this measures reachability, not application-level health or process identity. Requires the service to be reachable through WSL networking. |
+| `unit` | Systemd active state only; use port 0 when no network probe is applicable. |
+| `https` | Shared fixed DevStack HTTPS session endpoint, not a general configurable URL or independent HTTP health check for a new service. Nginx and PHP-FPM retain their dedicated interpretation of that response. |
+
+Test any new catalog entry with real systemd status, selection persistence, metrics, successful and failed restart verification, and the existing no-WSL-wake behavior. Slow-starting services or services requiring application-specific readiness checks may need additional implementation. Keep the legacy v1 bridge behavior intact where required.
+
 ## Updating
 
 Extract a complete matching bundle. The installer resets the host/provider before and immediately after verified package deployment. A second, guided post-initialization reset is now part of the normal update: open Win+W once, let the cards begin loading, close the panel, and press Enter. It resets only the current Windows session and exits. No fixed delay, background watcher, task or WSL restart is used.
