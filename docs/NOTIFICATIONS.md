@@ -72,11 +72,11 @@ event ID open over HTTPS in the default browser.
 - Ubuntu stopped: no collection and no automatic startup.
 
 The category switches in Settings → Notifications control system delivery
-for new mail, projects/configuration, installers and services. The existing
-Web Push-specific button still manages only the legacy browser subscription,
-not the local transport marker. It is not necessary for WinRT. The user
-interface labels will be aligned separately; do not enable Web Push to
-activate the local launcher.
+for new mail, projects/configuration, installers and services. The panel
+reports whether the protected local opt-in marker is configured. This
+status does not guarantee that a banner is displayed. Windows notification
+settings remain authoritative. History and panel toasts do not depend on
+the system-delivery categories or opt-in.
 
 Only the existing five-second authenticated notification poll renews a
 page's 90-second presence lease; ordinary state requests and operation
@@ -130,24 +130,23 @@ execution and expected service state for commands initiated through the
 DevStack panel; see the local Windows guide. Widget controls keep their own
 existing inline feedback.
 
-### Legacy browser push (not the selected transport)
+### Retired browser push
 
-Earlier releases tested an optional Web Push/WNS implementation. It remains
-in the current code for compatibility and deliberate rollback, but is
-bypassed while the local WinRT marker is active. No new browser subscription,
-`python3-pywebpush` package, VAPID setup or Edge push policy is required or
-recommended for the local configuration. Do not remove the marker as a way
-to disable all notifications: an existing legacy subscription could become
-eligible again. Use system-delivery categories or Windows notification
-settings; removal of the legacy implementation and a dedicated local
-transport switch are separate changes.
+Local WinRT is the only system delivery transport. Without a valid protected
+opt-in marker, events remain in history and in-app toasts; there is no browser
+or network fallback. Old subscription creation endpoints return 410.
+The collector removes the obsolete subscription metadata without clearing
+history, categories or active client leases. A browser profile visiting the
+updated panel attempts to unsubscribe its old DevStack registration on a
+best-effort basis. Previously displayed notifications can still open their
+local history route. No new browser push event handler is registered.
 
-An earlier troubleshooting test used the global Edge
-`ForceBuiltInPushMessagingClient` policy. It is not a DevStack requirement
-and is not installed by DevStack. Review any existing legacy subscription
-and user-created policy separately before removing them; ordinary updates
-preserve existing settings. Documentation changes do not remove those
-settings or the compatibility code.
+The update removes the old deployed Web Push helper code. Old VAPID files
+remain private until separately reviewed; no global Edge policy or distro
+package is silently changed. An earlier troubleshooting test used
+ForceBuiltInPushMessagingClient. It is not a DevStack requirement.
+See [local Windows notifications](LOCAL-WINDOWS-NOTIFICATIONS.md) for the
+optional legacy-state audit.
 
 ## Maintenance
 
@@ -170,5 +169,6 @@ sessions, or VAPID key. A symlink or non-directory at that location is
 rejected. Do not run the collector manually as root.
 
 Do not copy the private journal or any legacy subscription endpoints and
-VAPID private keys to a public repository. The update preserves this data and does not
-change Mailpit, application projects or Windows widgets.
+VAPID private keys to a public repository. The retired subscription is removed from the live journal; private keys
+and historical backups must remain private. The update does not change
+Mailpit or application projects.

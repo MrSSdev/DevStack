@@ -1,6 +1,6 @@
 # Lokalne powiadomienia Windows (WinRT)
 
-**Docelowy transport DevStack: lokalny WinRT, bez Web Push/WNS i bez Internetu.** Nie trzeba instalować python3-pywebpush, tworzyć subskrypcji przeglądarki, konfigurować VAPID ani zmieniać polityki Edge. PWA jest opcjonalna. Dawny transport przeglądarkowy jest zachowany w kodzie tylko dla zgodności i świadomego wycofania; znacznik lokalnego transportu go omija. Nie jest częścią docelowej konfiguracji.
+**Docelowy transport DevStack: lokalny WinRT, bez Web Push/WNS i bez Internetu.** Nie trzeba instalować python3-pywebpush, tworzyć subskrypcji przeglądarki, konfigurować VAPID ani zmieniać polityki Edge. PWA jest opcjonalna. Dawny transport przeglądarkowy został wycofany. Brak poprawnego znacznika oznacza wyłącznie historię i toasty w panelu, bez dostarczenia systemowego.
 
 DevStack używa istniejącego kolektora i jednej rezerwacji w SQLite.
 Mały program GUI uruchamia Windows PowerShell 5.1 z CreateNoWindow,
@@ -93,8 +93,8 @@ poprzedniego komponentu są usuwane po udanej wymianie. Nie zastępuje
 nieznanych plików i odrzuca dowiązania/reparse points, nieoczekiwanego
 właściciela lub uprawnienia zapisu dla niezaufanych kont. LocalNotifications jest dostępny do zapisu dla instalującego
 użytkownika, SYSTEM i administratorów. Nie wolno umieszczać w tym prywatnym
-komponencie skryptów wykonywanych z podwyższonymi uprawnieniami. Chronione zadanie hosts pozostaje w ProgramData; MSIX oraz
-ustawienia widżetów pozostają w ich dotychczasowych lokalizacjach.
+komponencie skryptów wykonywanych z podwyższonymi uprawnieniami. Chronione skrypty zadania hosts są w C:\DevStack\Hosts,
+a prywatna konfiguracja widżetów w C:\DevStack\Widgets.
 Instalator nie zmienia systemowej polityki uruchamiania skryptów ani
 ustawień powiadomień użytkownika. Windows nadal decyduje, czy pokaże dymek.
 
@@ -181,10 +181,12 @@ istniejącego opt-in albo jawnej flagi. Zintegrowana aktualizacja:
 Przy ponownym włączeniu istniejący znacznik zachowuje czas opt-in,
 aby nie wysyłać starego backlogu ani nie odrzucać nowych zdarzeń przy
 zwykłej aktualizacji. Jedno zdarzenie używa jednej ścieżki dostarczenia.
-Istniejąca subskrypcja WNS może pozostać zapisana wyłącznie dla zgodności
-ze starszą wersją. Aktywny WinRT jej nie używa. Nie tworzyć nowej subskrypcji
-ani nie włączać Web Push. Jej sprzątnięcie i uporządkowanie ustawień to
-odrębna zmiana, a nie warunek działania WinRT.
+Kolektor usuwa wyłącznie stary rekord subskrypcji Web Push, zachowując
+historię, kategorie i dzierżawy klientów. Po odwiedzeniu nowej wersji panelu
+przeglądarka podejmuje próbę usunięcia starej subskrypcji danego profilu.
+Nie tworzy nowej subskrypcji ani nie prosi o zgodę przeglądarki.
+Ustawienia pokazują stan konfiguracji lokalnego opt-in, nie gwarancję
+wyświetlenia dymka.
 Nie zmienia się interwału poll (5 s) ani kolektora (8 s).
 
 Przed pierwszą instalacją na nowym komputerze odczytaj SID w zwykłym
@@ -292,11 +294,9 @@ nie osłabiaj zabezpieczeń jednostek systemd.
 ## Wycofanie lokalnego komponentu (tylko świadomy rollback)
 
 Poniższa procedura służy odtworzeniu poprzedniej wersji, nie konfiguracji
-docelowej. Web Push/WNS nie jest zalecanym transportem. Jeżeli zachowano
-starą subskrypcję WNS, usunięcie znacznika może dopuścić jej ponowne użycie.
-Nie stosuj tej procedury jako globalnego wyłącznika powiadomień. Jeżeli
-celem jest brak dostarczania systemowego, wyłącz kategorie albo
-powiadomienia aplikacji w ustawieniach Windows.
+docelowej. W obecnej wersji bez znacznika nie ma dostarczenia systemowego
+ani fallbacku Web Push. Do zwykłego wyłączenia dymków użyj kategorii lub
+ustawień Windows zamiast odinstalowywania działającego komponentu.
 
 1. Wyłącz lokalny transport w Ubuntu:
 
@@ -317,7 +317,7 @@ powiadomienia aplikacji w ustawieniach Windows.
    nazwy gałęzi backup) i ponownie zainstaluj jego kod:
 
        cd ~/projects/devstack-source
-       git switch --detach backup/before-local-notifications
+       git switch --detach <reviewed-previous-commit>
        bash scripts/build-frontend.sh
        sudo bash scripts/apply-update.sh
        git rev-parse HEAD
@@ -327,3 +327,26 @@ powiadomienia aplikacji w ustawieniach Windows.
    ani dziennika. Przy wycofywaniu późniejszej aktualizacji z już włączonym
    transportem lokalnym przywróć pasujący poprzedni komponent Windows
    i jego znacznik zamiast bezwarunkowo usuwać tożsamość aplikacji.
+
+## Audyt pozostałości starszej konfiguracji
+
+Aktualizacja nie usuwa automatycznie pakietów systemowych, globalnych
+polityk Edge ani prywatnych plików klucza. Najpierw sprawdź metadane,
+bez wypisywania treści klucza lub tokenów:
+
+    dpkg-query -W python3-pywebpush 2>/dev/null || true
+    sudo find /var/lib/devstack-web -maxdepth 1 -type f -name '*notification-vapid*' -printf '%f %u %m\n'
+    sudo apt-get -s remove python3-pywebpush
+
+W Windows PowerShell odczytaj wyłącznie wartość dawnej polityki:
+
+    foreach ($path in 'HKCU:\SOFTWARE\Policies\Microsoft\Edge','HKLM:\SOFTWARE\Policies\Microsoft\Edge') {
+        Get-ItemProperty -LiteralPath $path -Name ForceBuiltInPushMessagingClient -ErrorAction SilentlyContinue |
+            Select-Object PSPath,ForceBuiltInPushMessagingClient
+    }
+
+Usuń wyłącznie potwierdzone pozostałości własnego eksperymentu, po
+sprawdzeniu zależności pakietu i własności polityki. Nie usuwaj całego
+klucza Edge, dziennika SQLite, sesji ani certyfikatów. Zapisz lokalnie
+prywatną kopię starego klucza, jeżeli potrzebujesz możliwości przywrócenia
+historycznej wersji. Nie przywracaj starej subskrypcji.

@@ -66,6 +66,14 @@ def transport_helper(*args, check=True):
     return subprocess.run(['/usr/bin/bash', str(script), *args], check=check,
                           capture_output=True, text=True, timeout=10)
 
+def php_opt_in():
+    # Read exactly the same fixed, root-owned marker as the web/worker.
+    result = subprocess.check_output(['runuser','-u','devstackweb','--','/usr/bin/php','-r',
+        'require "/opt/devstack/notifications.php"; echo json_encode(devstack_windows_notification_since());'],
+        text=True, timeout=10)
+    return json.loads(result)
+
+
 def compare_workdir_dependencies():
     """Contrast systemd's implicit mount requirements with post-UID chdir.
 
@@ -146,6 +154,7 @@ try:
     ctl('is-active', 'devstackd.service')
     assert transport_helper('--status').stdout.strip() == 'disabled'
     assert not marker.exists() and not marker.is_symlink(), 'Status unexpectedly opted in.'
+    assert php_opt_in() is None
     mount.mkdir(mode=0o755)
     mount_created = True
     launcher.parent.mkdir(parents=True, mode=0o755)
@@ -169,6 +178,7 @@ try:
     assert transport_helper('--status').stdout.strip() == 'enabled'
     assert marker.read_text() == str(launcher) + '\n'
     assert marker.stat().st_mtime_ns == before
+    assert php_opt_in() == 1_700_000_000
     # Existing consent also survives a missing Windows binary.
     launcher.rename(launcher.with_suffix('.fixture'))
     try:
@@ -176,11 +186,13 @@ try:
     finally:
         launcher.with_suffix('.fixture').rename(launcher)
     marker.chmod(0o666)
+    assert php_opt_in() is None
     assert transport_helper('--status', check=False).returncode != 0
     assert transport_helper(check=False).returncode != 0
     marker.chmod(0o644)
     marker.unlink()
     marker.symlink_to(launcher)
+    assert php_opt_in() is None
     assert transport_helper('--status', check=False).returncode != 0
     assert transport_helper(check=False).returncode != 0
     marker.unlink()

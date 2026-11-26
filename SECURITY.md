@@ -61,17 +61,20 @@ are informational, not a security or integrity attestation.
 The ordinary dashboard keeps its restrictive CSP, with frame sources limited
 to the dedicated mail-message path prefix. All ordinary API/HTML responses
 remain non-frameable. An authenticated preview response alone is frameable
-by the dashboard and has CSP sandbox plus an iframe sandbox with no allow
-tokens (opaque origin, no scripts, same-origin access, forms or popups).
-The HTML5 renderer reconstructs passive elements and attributes, strips
-active links, refresh/base tags and nested frames, bounds input/nesting and
+by the dashboard and has CSP sandbox plus an iframe sandbox limited to
+allow-popups and allow-popups-to-escape-sandbox. The preview retains an
+opaque origin, no scripts, same-origin access, forms or top navigation.
+The HTML5 renderer reconstructs elements and attributes, validates absolute
+HTTP(S) links and forces a separate browsing context without opener or
+referrer. No sender-supplied target, ping or download attribute is retained.
+It strips refresh/base tags and nested frames, bounds input/nesting and
 inlines only bounded raster attachments. CSS is permitted only in the
 preview document. By default its CSP prevents external network resources,
 including CSS URLs. Enabling external images for the selected message allows
 HTTPS image requests in the browser, including CSS background images; it
 does not authorize PHP to fetch remote URLs. Such requests can disclose
 message opening to a sender or tracker. No referrer is sent. External
-stylesheets, fonts, scripts and active links remain blocked; ordinary
+stylesheets, fonts, scripts and non-HTTP(S) links remain blocked; ordinary
 attachment downloads retain their attachment disposition.
 
 ### Notification journal and PWA
@@ -93,11 +96,11 @@ executed by an elevated scheduled task. Native notification delivery
 respects Windows settings. Presence leases and single-event delivery
 claims reduce duplicate notifications; closed-window detection is
 best-effort, not an authorization boundary.
-Legacy browser Web Push code remains for compatibility/rollback in this
-revision but is not the selected delivery path while the WinRT marker is
-active. Do not enable it for the local configuration. Existing legacy
-VAPID keys and subscription credentials remain private; preserving these
-during updates does not mean they are used.
+The legacy browser Web Push sender and subscription creation API are
+retired; no valid WinRT marker means no system delivery. Only the old
+subscription metadata is removed from the live journal. Browser-side
+unsubscribe is best effort. Old VAPID files and historical backups remain
+private and inert; no global browser or distro settings are changed.
 
 ## Windows integration and widgets
 

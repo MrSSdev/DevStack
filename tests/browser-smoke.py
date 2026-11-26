@@ -523,7 +523,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.get_by_role('button',name='Źródło HTML',exact=True).click()
         source=article.get_by_role('textbox',name='Kod źródłowy HTML wiadomości')
         expect(source).to_have_attribute('readonly','')
-        expect(source).to_have_value(message['HTML'])
+        expect(source).to_have_value(message['HTML'].replace('\r\n','\n').replace('\r','\n'))
         source.click()
         source.press('Control+a')
         self.assertTrue(source.evaluate('e=>e.selectionStart===0&&e.selectionEnd===e.value.length&&document.activeElement===e'))
@@ -782,6 +782,23 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.wait_for_function("navigator.serviceWorker.controller !== null")
         self.assertTrue(self.page.evaluate("navigator.serviceWorker.getRegistration('/').then(r=>!!r?.active)"))
         self.assertEqual(self.page.evaluate('caches.keys()'),[])
+        # The widget's two fixed launch destinations use the same manifest
+        # mapping as the native notification transport, with no notice ID.
+        for route,title in [('new','Nowy projekt'),('projects','Projekty')]:
+            uri='web+devstack://open/'+route
+            self.page.goto(BASE+info['protocol_handlers'][0]['url'].replace('%s',urllib.parse.quote(uri,safe='')))
+            expect(self.page.get_by_role('heading',name=title,exact=True)).to_be_visible()
+            expect(self.page).to_have_url(BASE+'/#/'+route)
+        self.goto('settings')
+        self.page.locator('main').get_by_role('button',name='Powiadomienia',exact=True).click()
+        settings=self.page.get_by_role('region',name='Powiadomienia',exact=True)
+        expect(settings.get_by_text('Powiadomienia systemowe Windows',exact=True)).to_be_visible()
+        expect(settings.get_by_text('Transport nie jest jeszcze włączony w Ubuntu.',exact=True)).to_be_visible()
+        expect(settings.get_by_role('button',name='Włącz Web Push',exact=True)).to_have_count(0)
+        expect(settings.get_by_role('switch',name='Systemowe: Nowa poczta')).to_be_checked()
+        for endpoint in ['push-key','subscribe']:
+            self.assertEqual(self.post('/api/notifications/'+endpoint,{}).status,410)
+        self.goto('dashboard')
         # Establish the empty-mailbox baseline and finish any prior worker
         # pass before clearing the independent event history.
         self.wait_notification_cycle()

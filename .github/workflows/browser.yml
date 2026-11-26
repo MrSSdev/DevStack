@@ -78,6 +78,10 @@ jobs:
           sudo systemctl stop devstack-notifications.timer
           sudo systemctl stop devstack-notifications.service
           sudo -u devstackweb /usr/bin/php -r 'require "/opt/devstack/notifications.php"; $db = new DevStackNotices(); $db->setCategories(["mail"]);'
+          # Fixture of the obsolete metadata and old installed helper files.
+          # No real endpoint, private key or sender is ever executed.
+          sudo -u devstackweb /usr/bin/php -r '$db=new PDO("sqlite:/var/lib/devstack-web/notifications.sqlite3"); $db->prepare("INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)")->execute(["subscription","legacy fixture"]);'
+          sudo touch /opt/devstack/push-helper.php /opt/devstack/scripts/notification-push.py
           # Reproduce the existing-workstation failure without deleting any
           # database content. This runner is a disposable installation.
           sudo chown root:root /var/lib/devstack-web
@@ -90,6 +94,9 @@ jobs:
           test "$(systemctl show -p ExecMainStatus --value devstack-notifications.service)" = 0
           systemctl is-active --quiet devstack-notifications.timer
           sudo -u devstackweb /usr/bin/php -r 'require "/opt/devstack/notifications.php"; $db = new DevStackNotices(); if ($db->categories() !== ["mail"]) { exit(1); } $db->setCategories(DevStackNotices::CATEGORIES);'
+          sudo -u devstackweb /usr/bin/php -r '$db=new PDO("sqlite:/var/lib/devstack-web/notifications.sqlite3"); if ((int)$db->query("SELECT COUNT(*) FROM metadata WHERE key=char(115,117,98,115,99,114,105,112,116,105,111,110)")->fetchColumn() !== 0) exit(1);'
+          test ! -e /opt/devstack/push-helper.php
+          test ! -e /opt/devstack/scripts/notification-push.py
       - name: Exercise the Windows notification RPC through real restricted systemd
         run: sudo env GITHUB_ACTIONS=true python3 tests/windows-notification-systemd-smoke.py
       - name: Install browser tooling
