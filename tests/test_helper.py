@@ -546,8 +546,11 @@ class ValidationTests(unittest.TestCase):
                                'RemainAfterExit=yes', 'CollectMode=inactive',
                                'StandardOutput=null', 'StandardError=null', 'StandardInput=null'):
                     self.assertIn('--property=' + option, arguments)
-                self.assertIn('--working-directory=' + str(exe.parent), arguments)
-                self.assertEqual(arguments[-6:-1], ['/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', str(exe)])
+                self.assertIn('--working-directory=/', arguments)
+                self.assertNotIn('--working-directory=' + str(exe.parent), arguments)
+                self.assertIn('--description=DevStack local Windows notification', arguments)
+                self.assertEqual(arguments[-7:-1], ['/usr/bin/env', '-i', '--chdir=' + str(exe.parent),
+                                                      'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', str(exe)])
                 self.assertEqual(json.loads(base64.b64decode(arguments[-1])), event)
                 unit = next(arg.split('=', 1)[1] for arg in arguments if arg.startswith('--unit='))
                 self.assertRegex(unit, r'^devstack-windows-notification-[a-f0-9]{16}\.service$')
@@ -565,6 +568,7 @@ class ValidationTests(unittest.TestCase):
                 mode.write_text(str(legacy) + '\n')
                 self.assertTrue(d.show_windows_notification(event)['accepted'])
                 self.assertEqual(run.call_args_list[0].args[0][-2], str(legacy))
+                self.assertIn('--chdir=' + str(legacy.parent), run.call_args_list[0].args[0])
                 run.reset_mock()
                 mode.write_text('/mnt/d/DevStack/LocalNotifications/DevStack.Notifications.exe\n')
                 self.assertFalse(d.show_windows_notification(event)['accepted'])

@@ -1555,13 +1555,17 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
         # Let PID 1 retain the exit status until we have checked it. A
         # synchronous Type=oneshot start waits for ExecStart to finish;
         # RemainAfterExit retains only unit state, not a running process.
-        # Avoid --pipe/--wait/--collect: CI saw ambiguous completion when
-        # the transient unit disappeared before its status was observed.
+        # Avoid --pipe/--wait/--collect: CI saw ambiguous completion.
+        # WorkingDirectory=/mnt/c would add a hard dependency on every
+        # ancestor mount, including an optional, absent Azure /mnt disk
+        # on CI. Only enter the already validated launcher directory after
+        # PID 1 has applied the developer identity; missing paths still fail.
         result = subprocess.run(
             ['/usr/bin/systemd-run', '--system', '--quiet',
              '--service-type=oneshot', '--unit=' + unit,
+             '--description=DevStack local Windows notification',
              '--uid=' + str(account.pw_uid), '--gid=' + str(account.pw_gid),
-             '--working-directory=' + str(launcher.parent),
+             '--working-directory=/',
              '--expand-environment=no',
              '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
              '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
@@ -1571,8 +1575,8 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
              '--property=TimeoutStartSec=10s', '--property=TimeoutStopSec=2s',
              '--property=StandardInput=null', '--property=StandardOutput=null',
              '--property=StandardError=null', '--property=UMask=0077',
-             '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8',
-             str(launcher), encoded],
+             '/usr/bin/env', '-i', '--chdir=' + str(launcher.parent),
+             'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', str(launcher), encoded],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, timeout=15, close_fds=True,
         )

@@ -46,7 +46,13 @@ bezpośrednio od systemd. Następnie zatrzymuje i czyści tę jednostkę, także
 po błędzie lub timeout; PartOf wiąże jej życie z devstackd. CI ujawnił
 niejednoznaczne wyniki systemd-run z --wait/--pipe/--collect, dlatego
 nie używamy tych opcji ani tekstowych potwierdzeń ze stdout. Limit 10 s
-dotyczy uruchomienia i zakończenia launchera. Nie zapisujemy treści
+dotyczy uruchomienia i zakończenia launchera. Systemd uruchamia usługę
+z katalogu `/`, a `/usr/bin/env --chdir` wchodzi do katalogu launchera
+już z uprawnieniami dewelopera. Nie dodaje to twardej zależności
+WorkingDirectory od opcjonalnego montowania `/mnt` (obrazy Azure CI
+mogą mieć wpis dla nieistniejącego dysku). Nie montujemy niczego na siłę;
+brak katalogu lub pliku nadal powoduje błąd. CI porównuje oba warianty
+na aktualnym runnerze i loguje stan `/mnt.mount`. Nie zapisujemy treści
 powiadomień ani surowego wyjścia programu. CI sprawdza rzeczywisty RPC,
 UID/GID, sukces, błąd, timeout oraz sprzątanie; Windows i WSL Interop
 wymagają odbioru na urządzeniu.

@@ -36,6 +36,7 @@ import time
 
 assert os.geteuid() == {account.pw_uid}
 assert os.getegid() == {account.pw_gid}
+assert Path.cwd() == Path({str(launcher.parent)!r})
 assert len(sys.argv) == 2
 assert os.environ['PATH'] == '/usr/bin:/bin'
 assert os.environ['LANG'] == 'C.UTF-8'
@@ -57,6 +58,67 @@ if data['kind'] == 'success':
 def ctl(*args):
     return subprocess.run(['/usr/bin/systemctl', *args], check=True,
                           capture_output=True, text=True, timeout=30)
+
+def compare_workdir_dependencies():
+    """Contrast systemd's implicit mount requirements with post-UID chdir.
+
+    Do not edit fstab, mask mounts, or fake a successful fixture run. Some
+    Azure runner images have an optional /mnt resource disk configured even
+    when no such device is present. The current runner may have a real disk.
+    """
+    print('Runner filesystem and optional /mnt unit:', flush=True)
+    subprocess.run(['/usr/bin/findmnt', '-T', str(launcher.parent),
+                    '-o', 'TARGET,SOURCE,FSTYPE'], check=True, timeout=5)
+    subprocess.run(['/usr/bin/systemctl', 'show', 'mnt.mount',
+                    '-p', 'LoadState', '-p', 'ActiveState', '-p', 'SubState',
+                    '-p', 'Result', '-p', 'What', '-p', 'FragmentPath',
+                    '-p', 'Requires', '-p', 'After'], check=False, timeout=5)
+
+    def probe(name, working_directory, command):
+        unit = 'devstack-ci-notification-workdir-' + name + '.service'
+        try:
+            result = subprocess.run(
+                ['/usr/bin/systemd-run', '--system', '--quiet',
+                 '--service-type=oneshot', '--unit=' + unit,
+                 '--description=DevStack CI mount dependency probe',
+                 '--uid=' + str(account.pw_uid), '--gid=' + str(account.pw_gid),
+                 '--working-directory=' + working_directory,
+                 '--expand-environment=no', '--property=RemainAfterExit=yes',
+                 '--property=JobTimeoutSec=6s', '--property=TimeoutStartSec=3s',
+                 '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
+                 '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
+                 '--property=ProtectKernelModules=yes', '--property=ProtectControlGroups=yes',
+                 *command],
+                capture_output=True, text=True, timeout=10,
+            )
+            query = subprocess.run(
+                ['/usr/bin/systemctl', 'show', '--no-pager',
+                 '-p', 'ActiveState', '-p', 'SubState', '-p', 'ExecMainCode',
+                 '-p', 'ExecMainStatus', '-p', 'Result', '-p', 'RequiresMountsFor',
+                 '-p', 'Requires', '-p', 'After', unit],
+                capture_output=True, text=True, timeout=5,
+            )
+            state = query.stdout
+            print(f'Workdir probe {name}: exit={result.returncode}\n{state}', flush=True)
+            if result.stderr:
+                print(result.stderr, flush=True)
+            return (result.returncode == 0 and query.returncode == 0
+                    and 'ActiveState=active\n' in state and 'SubState=exited\n' in state
+                    and 'ExecMainCode=1\n' in state and 'ExecMainStatus=0\n' in state)
+        finally:
+            for action in ('stop', 'reset-failed'):
+                subprocess.run(['/usr/bin/systemctl', action, unit], capture_output=True, timeout=5)
+
+    original = probe('original', str(launcher.parent), ['/usr/bin/test', '-x', str(launcher)])
+    revised = probe('revised', '/', ['/usr/bin/env', '-i', '--chdir=' + str(launcher.parent),
+                                     'PATH=/usr/bin:/bin', '/usr/bin/test', '-x', str(launcher)])
+    print(f'Workdir comparison: original={original} revised={revised}', flush=True)
+    if not original:
+        subprocess.run(['/usr/bin/journalctl', '-b', '-u', 'mnt.mount',
+                        '-u', 'devstack-ci-notification-workdir-original.service',
+                        '--no-pager', '-n', '40'], check=False, timeout=10)
+    assert revised, 'Revised workdir could not access the actual launcher path.'
+
 
 def rpc(data):
     wire = json.dumps(data)
@@ -90,6 +152,7 @@ try:
         marker_created = True
         f.write(str(launcher) + '\n')
     marker.chmod(0o644)
+    compare_workdir_dependencies()
     expected = []
     # Repeated fast exits exercise the race that was missed by the mocked
     # unit test. Check independently that the fixture actually ran.
