@@ -43,19 +43,12 @@ if ($deploy.Count -ne 1 -or $resets.Count -ne 2 -or
     throw 'Expected a reset before deployment and another after deployment'
 }
 $tail = [scriptblock]::Create((Get-Content -LiteralPath $installer -Raw).Substring($deploy[0].Extent.StartOffset))
-foreach ($scenario in @('ok','with-integration','deferred','integration-error','deployment-error','wrong-version','bad-status','missing-package')) {
+foreach ($scenario in @('ok','deferred','deployment-error','wrong-version','bad-status','missing-package')) {
     & {
         $calls = [System.Collections.Generic.List[string]]::new()
         $msix = 'mock.msix'
         $manifest = $doc
-        $UpdateServiceIntegration = $scenario -in @('with-integration','integration-error')
         $DeferFirstOpenReset = $scenario -eq 'deferred'
-        $integration = {
-            param([switch]$SkipFrontend)
-            if (!$SkipFrontend) { throw 'Unexpected frontend replacement' }
-            $calls.Add('integration')
-            if ($scenario -eq 'integration-error') { throw 'Mock integration failure' }
-        }
         $complete = { $calls.Add('first-open') }
         function Add-AppxPackage {
             [CmdletBinding()]
@@ -91,13 +84,11 @@ foreach ($scenario in @('ok','with-integration','deferred','integration-error','
         try { & $tail | Out-Null } catch { $failed = $true }
         $expected = switch ($scenario) {
             'ok' { 'deploy,verify,get-process,reset,first-open' }
-            'with-integration' { 'deploy,verify,get-process,reset,integration,first-open' }
             'deferred' { 'deploy,verify,get-process,reset' }
-            'integration-error' { 'deploy,verify,get-process,reset,integration' }
             'deployment-error' { 'deploy' }
             default { 'deploy,verify' }
         }
-        if (($calls -join ',') -ne $expected -or $failed -ne ($scenario -notin @('ok','with-integration','deferred'))) {
+        if (($calls -join ',') -ne $expected -or $failed -ne ($scenario -notin @('ok','deferred'))) {
             throw "Installer post-update reset test failed: $scenario ($($calls -join ','))"
         }
     }

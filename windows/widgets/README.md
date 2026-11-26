@@ -11,7 +11,7 @@ Windows 11 x64 with a compatible Web Widgets host and Windows App Runtime 2.7. S
 
 ## Download
 
-From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-x64** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
+From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-0.5.2.0-migration** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
 
 Keep the MSIX, CER, installers, frontend ZIP, and `telemetry/` and `services/` directories from the same build together.
 
@@ -19,11 +19,11 @@ Keep the MSIX, CER, installers, frontend ZIP, and `telemetry/` and `services/` d
 
 ### 1. Windows package
 
-Run Windows PowerShell as Administrator, under the account that owns Ubuntu:
+For a fresh installation, first record your SID in ordinary Windows PowerShell (`[Security.Principal.WindowsIdentity]::GetCurrent().User.Value`). Run Windows PowerShell 5.1 as Administrator under the same account and substitute that SID below. For an existing legacy installation, use the complete migration bundle described in `WINDOWS-COMPONENT-LAYOUT.md` before installing this MSIX.
 
 ```powershell
 $dir = "$env:USERPROFILE\Downloads\DevStack-Windows-Widgets-x64"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-Widgets.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-Widgets.ps1" -ExpectedUserSid 'S-1-5-21-...'
 if ($LASTEXITCODE -ne 0) { throw 'Widget installation failed.' }
 Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' | Select-Object Name, Version, Status
 ```
@@ -50,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-DevStackWi
 if ($LASTEXITCODE -ne 0) { throw 'Service setup failed.' }
 ```
 
-This installs authenticated service readings and restart controls. The default `-SkipFrontend` preserves the existing dashboard; request static frontend replacement only deliberately with `-SkipFrontend:$false`. For a combined package and service integration update, use `Install-Widgets.ps1 -UpdateServiceIntegration` instead of running the two installers separately.
+This installs authenticated service readings and restart controls. The default `-SkipFrontend` preserves the existing dashboard; request static frontend replacement only deliberately with `-SkipFrontend:$false`. Run integration setup separately in ordinary Windows PowerShell; it does not require the elevated MSIX installer.
 
 Reopen **Win + W**.
 
@@ -74,13 +74,13 @@ Both cards refresh when visible. Opening the panel preserves the current Ubuntu 
 
 Extract a complete matching bundle. The installer resets the host/provider before and immediately after verified package deployment. A second, guided post-initialization reset is now part of the normal update: open Win+W once, let the cards begin loading, close the panel, and press Enter. It resets only the current Windows session and exits. No fixed delay, background watcher, task or WSL restart is used.
 
-For a package-only update, repeat step 1. If the release requires a service integration update, first update DevStack in Ubuntu and keep Ubuntu running, then run:
+For a package-only update on the protected layout, repeat step 1. The layout migration preserves the existing Linux integrations and credentials. If a later release explicitly requires service integration, update DevStack in Ubuntu and keep Ubuntu running. Run this separately in ordinary Windows PowerShell:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-Widgets.ps1" -UpdateServiceIntegration
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir\Install-DevStackWidget.ps1" -SkipFrontend
 ```
 
-The integration runs with `-SkipFrontend` before the guided final reset. Existing WSL telemetry stays untouched. If you need to complete setup separately or use a noninteractive installation, pass `-DeferFirstOpenReset` and run `Complete-WidgetUpdate.ps1` explicitly after setup. The finalizer can also be rerun without redeploying the MSIX. Verify both cards after reopening; CI cannot confirm the actual Windows shell lifecycle on your machine.
+The separate integration uses `-SkipFrontend`. Existing WSL telemetry stays untouched. If you need to complete setup separately or use a noninteractive installation, pass `-DeferFirstOpenReset` and run `Complete-WidgetUpdate.ps1` explicitly after setup. The finalizer can also be rerun without redeploying the MSIX. Verify both cards after reopening; CI cannot confirm the actual Windows shell lifecycle on your machine.
 
 ## Diagnostics
 
@@ -89,7 +89,7 @@ Windows PowerShell:
 ```powershell
 Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' | Select-Object Name, Version, Status
 wsl.exe --list --running
-$settings = Join-Path $env:LOCALAPPDATA 'DevStack\Widgets'
+$settings = 'C:\DevStack\Widgets'
 Test-Path (Join-Path $settings 'telemetry.json')
 Test-Path (Join-Path $settings 'services.json')
 $log = Join-Path $settings 'wsl-bridge.log'

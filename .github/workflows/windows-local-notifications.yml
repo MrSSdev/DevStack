@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - test/windows-local-notifications
+      - test/windows-component-layout
 
 permissions:
   contents: read
@@ -22,6 +23,7 @@ jobs:
         run: |
           $files = @(
               'windows/install-local-notifications.ps1',
+              'windows/windows-layout.ps1',
               'windows/test-local-notification-launcher.ps1',
               'windows/test-local-notification-installation.ps1',
               'scripts/windows-local-notification.ps1'
@@ -45,8 +47,16 @@ jobs:
           $paths = @(
               'windows/local-notification-launcher.cs',
               'windows/install-local-notifications.ps1',
+              'windows/windows-layout.ps1',
               'windows/test-local-notification-launcher.ps1',
+              'windows/notification-layout-copy.ps1',
+              'windows/stage-windows-notifications.ps1',
+              'windows/windows-layout-migration.ps1',
+              'windows/layout-directory-identity.cs',
+              'windows/migrate-notification-layout.ps1',
+              'windows/initialize-windows-layout.ps1',
               'scripts/windows-local-notification.ps1',
+              'docs/WINDOWS-COMPONENT-LAYOUT.md',
               'docs/LOCAL-WINDOWS-NOTIFICATIONS.md'
           )
           foreach ($path in $paths) {

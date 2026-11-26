@@ -14,7 +14,7 @@ if (-not $admin) { throw 'DevStack hosts watcher must run elevated.' }
 
 $wsl = Join-Path $env:WINDIR 'System32\wsl.exe'
 $hosts = Join-Path $env:WINDIR 'System32\drivers\etc\hosts'
-$backup = Join-Path $env:ProgramData 'DevStack\hosts-before-last-sync.bak'
+$backup = 'C:\DevStack\Hosts\hosts-before-last-sync.bak'
 
 function Invoke-DevStackHostsSync {
     $rawDomains = @(& $wsl -d Ubuntu-26.04 -u root -- python3 /opt/devstack/scripts/list-domains.py)

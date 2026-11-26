@@ -1,3 +1,9 @@
+## 0.5.2.0 — protected Windows layout
+
+- Move configuration, cache and diagnostics to the administrator-provisioned private Widgets directory; no legacy path fallback.
+- Preserve existing credentials and data through ordinary-user migration; retain old trees until acceptance.
+- Bundle the root/Hosts migration and versioned MSIX installer. No change to widget visuals or Linux integrations.
+
 ## 0.5.1.0 — widget update finalization
 
 - Keep immediate verified deployment reset, and perform a second reset after the first actual Win+W initialization, guided by an explicit user confirmation.

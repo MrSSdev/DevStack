@@ -33,8 +33,8 @@ internal static class WslResources
     {
         if (running != true) return Empty(running == false ? "offline" : "unavailable");
         cancellationToken.ThrowIfCancellationRequested();
-        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DevStack", "Widgets", "telemetry.json");
+        if (!WidgetPaths.Available) return Empty("not-installed");
+        var path = Path.Combine(WidgetPaths.DirectoryPath, "telemetry.json");
         if (!File.Exists(path)) return Empty("not-installed");
         try
         {

@@ -2,7 +2,7 @@ name: DevStack CI
 
 on:
   push:
-    branches: [main, test/windows-local-notifications]
+    branches: [main, test/windows-local-notifications, test/windows-component-layout]
   pull_request:
     branches: [main]
   workflow_dispatch:

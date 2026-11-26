@@ -13,6 +13,32 @@ function Assert-Rejected([scriptblock]$Action, [string]$Label) {
 function Assert-True([bool]$Condition, [string]$Label) {
     if (-not $Condition) { throw $Label }
 }
+# Compare the actual security properties, not NTFS's representation of
+# descriptor control flags (e.g. auto-inheritance) in a raw SDDL string.
+# Get-Acl after Set-Acl also observes any normalization by Windows.
+function Get-AclSignature([System.Security.AccessControl.FileSystemSecurity]$Acl) {
+    $sidType = [Security.Principal.SecurityIdentifier]
+    $rules = @($Acl.GetAccessRules($true, $true, $sidType) | ForEach-Object {
+        '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.IdentityReference.Value,
+            [int]$_.FileSystemRights, $_.AccessControlType,
+            $_.InheritanceFlags, $_.PropagationFlags, $_.IsInherited
+    } | Sort-Object)
+    return (@(
+        $Acl.GetOwner($sidType).Value
+        $Acl.GetGroup($sidType).Value
+        [string]$Acl.AreAccessRulesProtected
+        [string]$Acl.AreAccessRulesCanonical
+    ) + $rules) -join ';'
+}
+function Assert-UnchangedAcl([string]$Path, [System.Security.AccessControl.FileSystemSecurity]$Before, [string]$Label) {
+    $after = Get-Acl -LiteralPath $Path
+    if ((Get-AclSignature $Before) -cne (Get-AclSignature $after)) {
+        throw "$Label. Before: $($Before.Sddl); after: $($after.Sddl)"
+    }
+    if ($Before.Sddl -cne $after.Sddl) {
+        Write-Output "ACL rules, owner, group and inheritance unchanged; descriptor normalized for $Path. Before: $($Before.Sddl); after: $($after.Sddl)"
+    }
+}
 
 # Exercise the actual permission-check function without sending notifications
 # to an unattended desktop. The real first toast is a workstation test.
@@ -151,6 +177,9 @@ $fixtureConfig = Join-Path $root 'Config'
 $fixtureWidgets = Join-Path $legacyRoot 'Widgets'
 $unexpected = Join-Path $component 'unexpected.txt'
 try {
+    $signedInSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    Assert-Rejected { & $installer } 'Ordinary install must not create root'
+    & $installer -Mode PrepareDirectory -ExpectedUserSid $signedInSid
     & $installer
     Assert-True (Test-Path -LiteralPath $launcher -PathType Leaf) 'Missing compiled launcher'
     Assert-True ((Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $installedScript).Hash) 'Incorrect WinRT script'
@@ -173,8 +202,60 @@ try {
     } finally {
         Move-Item -LiteralPath $savedBuilt -Destination $built
     }
+    # Deny writes at the parent itself, even to the runner's elevated
+    # account, but leave the existing private component writable.
+    # Actual NTFS access test; not a claim of medium-token UAC coverage.
+    $savedRootAcl = Get-Acl -LiteralPath $root
+    $restrictedRootAcl = Get-Acl -LiteralPath $root
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $deniedRights = [Security.AccessControl.FileSystemRights]::CreateDirectories -bor
+        [Security.AccessControl.FileSystemRights]::CreateFiles -bor
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [Security.AccessControl.FileSystemRights]::Delete
+    $deny = [Security.AccessControl.FileSystemAccessRule]::new(
+        $sid, $deniedRights, [Security.AccessControl.AccessControlType]::Deny)
+    $restrictedRootAcl.AddAccessRule($deny)
+    $denyProbe = Join-Path $root 'root-write-probe'
+    $componentBeforeRestriction = Get-Acl -LiteralPath $component
+    try {
+        Set-Acl -LiteralPath $root -AclObject $restrictedRootAcl
+        Assert-Rejected { New-Item -ItemType Directory -Path $denyProbe -ErrorAction Stop } 'Root must reject new children'
+        # Separate the fixture's Set-Acl from the installer's behavior.
+        Assert-UnchangedAcl $component $componentBeforeRestriction 'Restricting parent changed private component permissions'
+        $componentAcl = Get-Acl -LiteralPath $component
+        $rootAcl = Get-Acl -LiteralPath $root
+        Assert-True $componentAcl.AreAccessRulesProtected 'Private component inherited parent ACL'
+        & $packageInstaller -UseBuiltLauncher
+        Assert-UnchangedAcl $component $componentAcl 'Update changed stable component ACL'
+        Assert-UnchangedAcl $root $rootAcl 'Update changed protected root ACL'
+        Assert-True ((Get-FileHash -LiteralPath $launcher).Hash -eq (Get-FileHash -LiteralPath $built).Hash) 'Read-only parent update failed'
+        $installedHash = (Get-FileHash -LiteralPath $launcher).Hash
+        $scriptHash = (Get-FileHash -LiteralPath $installedScript).Hash
+        # Fail after both staged files have been installed.
+        $packageScript = Join-Path $PackageRoot 'scripts\windows-local-notification.ps1'
+        $savedScript = [IO.File]::ReadAllBytes($packageScript)
+        try {
+            Set-Content -LiteralPath $packageScript -Value "throw 'fixture registration failure'" -Encoding Ascii
+            Assert-Rejected { & $packageInstaller -UseBuiltLauncher } 'Registration failure'
+            Assert-True ((Get-FileHash -LiteralPath $launcher).Hash -eq $installedHash) 'Rollback changed launcher'
+            Assert-True ((Get-FileHash -LiteralPath $installedScript).Hash -eq $scriptHash) 'Rollback did not restore WinRT script'
+            Assert-True (Test-Path -LiteralPath $registration) 'Rollback removed existing registration'
+        } finally {
+            [IO.File]::WriteAllBytes($packageScript, $savedScript)
+        }
+        $remaining = @(Get-ChildItem -LiteralPath $component -Force)
+        Assert-True ($remaining.Count -eq 2 -and @($remaining | Where-Object { $_.PSIsContainer }).Count -eq 0) 'Staging/backup leftovers'
+        Assert-UnchangedAcl $component $componentAcl 'Rollback changed stable component ACL'
+        Assert-UnchangedAcl $root $rootAcl 'Rollback changed protected root ACL'
+        Assert-Rejected { New-Item -ItemType Directory -Path $denyProbe -ErrorAction Stop } 'Parent must still reject new children after update and rollback'
+    } finally {
+        Set-Acl -LiteralPath $root -AclObject $savedRootAcl
+        if (Test-Path -LiteralPath $denyProbe) { Remove-Item -LiteralPath $denyProbe }
+    }
+    Write-Output 'Stable component update and rollback with denied parent writes: OK.'
     # Simulate the old profile layout, including unrelated widget data.
-    [IO.Directory]::CreateDirectory($legacyRoot, (Get-Acl -LiteralPath $root)) | Out-Null
+    . (Join-Path $PSScriptRoot 'windows-layout.ps1')
+    [IO.Directory]::CreateDirectory($legacyRoot, (New-DevStackLayoutAcl -Kind LegacyRoot -UserSid $sid)) | Out-Null
     New-Item -ItemType Directory -Path $legacy, $fixtureWidgets, $fixtureConfig | Out-Null
     Copy-Item -LiteralPath $launcher, $installedScript -Destination $legacy
     Set-Content -LiteralPath (Join-Path $fixtureWidgets 'keep.txt') -Value 'widget data'

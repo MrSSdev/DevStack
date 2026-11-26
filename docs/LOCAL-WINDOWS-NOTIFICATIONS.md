@@ -86,13 +86,14 @@ blokadę współbieżności, import i trwałość odczytu historii.
             DevStack.Notifications.exe
             show-local-notification.ps1
 
-Instalator tworzy tylko potrzebne katalogi. Tymczasowa kompilacja i kopia
+Administrator przygotowuje tylko potrzebne katalogi ze wspólnej polityki
+ACL (chroniony root i prywatny komponent LocalNotifications). Zwykła
+aktualizacja nie tworzy katalogów w root. Tymczasowa kompilacja i kopia
 poprzedniego komponentu są usuwane po udanej wymianie. Nie zastępuje
 nieznanych plików i odrzuca dowiązania/reparse points, nieoczekiwanego
-właściciela lub uprawnienia zapisu dla niezaufanych kont. Katalogi są
-dostępne do zapisu dla instalującego użytkownika, SYSTEM i administratorów.
-Nie wolno umieszczać tutaj skryptów wykonywanych z podwyższonymi
-uprawnieniami. Chronione zadanie hosts pozostaje w ProgramData; MSIX oraz
+właściciela lub uprawnienia zapisu dla niezaufanych kont. LocalNotifications jest dostępny do zapisu dla instalującego
+użytkownika, SYSTEM i administratorów. Nie wolno umieszczać w tym prywatnym
+komponencie skryptów wykonywanych z podwyższonymi uprawnieniami. Chronione zadanie hosts pozostaje w ProgramData; MSIX oraz
 ustawienia widżetów pozostają w ich dotychczasowych lokalizacjach.
 Instalator nie zmienia systemowej polityki uruchamiania skryptów ani
 ustawień powiadomień użytkownika. Windows nadal decyduje, czy pokaże dymek.
@@ -186,15 +187,38 @@ ani nie włączać Web Push. Jej sprzątnięcie i uporządkowanie ustawień to
 odrębna zmiana, a nie warunek działania WinRT.
 Nie zmienia się interwału poll (5 s) ani kolektora (8 s).
 
-Jeśli normalne konto Windows nie może utworzyć C:\DevStack, aktualizator
-zakończy się błędem przed wdrożeniem Ubuntu. W takim przypadku, i tylko
-pod tym samym kontem Windows, uruchom zaufany skrypt z przejrzanego
-checkoutu w podwyższonym Windows PowerShell 5.1:
+Przed pierwszą instalacją na nowym komputerze odczytaj SID w zwykłym
+Windows PowerShell:
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode PrepareDirectory
+    [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 
-Tryb ten tworzy tylko katalog z odpowiednim ACL. Nie uruchamiaj całej
-aktualizacji w podwyższonej sesji. Ponów aktualizację z normalnego Ubuntu.
+W podwyższonym Windows PowerShell 5.1, pod tym samym kontem i z zaufanego
+checkoutu, podstaw wcześniej odczytany SID:
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode PrepareDirectory -ExpectedUserSid 'S-1-5-21-...'
+
+Tryb ten tworzy chroniony katalog nadrzędny (jeśli go nie ma) i prywatny
+katalog LocalNotifications. Odmawia przejęcia istniejącego user-owned root;
+istniejący działający notyfikator można nadal aktualizować do czasu
+odebranej migracji. Zobacz WINDOWS-COMPONENT-LAYOUT.md. Nie uruchamiaj
+całej aktualizacji w podwyższonej sesji. Ponów aktualizację z normalnego
+Ubuntu. Po usunięciu komponentu ponowne przygotowanie jego katalogu może
+wymagać UAC.
+
+Aktualizator nie zmienia ACL istniejącego katalogu komponentu ani nie
+tworzy katalogów staging obok niego. Buduje nowe pliki w tymczasowym
+podkatalogu LocalNotifications, przenosi poprzednie dwa pliki do
+podkatalogu kopii, instaluje nowe i przy błędzie przywraca poprzednie.
+Po sukcesie usuwa własne katalogi tymczasowe. Katalog nadrzędny może
+być tylko do odczytu dla zwykłego użytkownika, o ile administrator
+wcześniej przygotował prywatny katalog komponentu.
+Wymiana dwóch plików nie jest atomowa jako para; zintegrowany updater
+zatrzymuje timer i czeka na zakończenie kolektora. Przy ręcznej
+instalacji również najpierw zatrzymaj i opróżnij kolektor zgodnie z
+poniższą procedurą. W razie przerwania lub niepełnego rollbacku zachowaj
+podkatalog kopii i sprawdź jego zawartość; instalator odmawia usunięcia
+nieznanych plików. Nadal nie wolno uruchamiać uprzywilejowanego kodu
+hosts pod katalogiem należącym do zwykłego użytkownika.
 Jeśli katalog już istnieje, ale ma niebezpieczne ACL, instalator celowo
 odmawia zmiany uprawnień w ciemno.
 

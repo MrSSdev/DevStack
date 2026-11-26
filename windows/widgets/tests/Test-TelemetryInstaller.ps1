@@ -4,11 +4,15 @@
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
+if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Disposable GitHub runner required for the fixed layout fixture.' }
 $root = Split-Path -Parent $PSScriptRoot
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('DevStack installer test ' + [Guid]::NewGuid().ToString('N'))
 $oldPath = $env:PATH
 $oldLocal = $env:LOCALAPPDATA
 $utf8 = [Text.UTF8Encoding]::new($false)
+. (Join-Path $root '..\windows-layout.ps1')
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+if ($null -ne (Get-DevStackLayoutItem 'C:\DevStack')) { throw 'Existing non-fixture root.' }
 function Assert([bool]$Condition, [string]$Message) {
     if (!$Condition) { throw "FAIL: $Message" }
     Write-Host "PASS: $Message"
@@ -38,6 +42,7 @@ function Token-Hash([string]$Token) {
     finally { $hash.Dispose() }
 }
 try {
+    Initialize-DevStackLayout -UserSid $sid -Component Widgets
     New-Item -ItemType Directory -Path $temp | Out-Null
     $fakeDir = Join-Path $temp 'fake-bin'
     $bundle = Join-Path $temp 'bundle with spaces'
@@ -93,6 +98,8 @@ public static class FakeWsl {
     Assert ($resolved.Source -eq (Join-Path $fakeDir 'wsl.exe')) 'Only fake WSL can execute'
     $installer = Join-Path $bundle 'Install-WslTelemetry.ps1'
     Copy-Item (Join-Path $root 'scripts\Install-WslTelemetry.ps1') $installer
+    Copy-Item (Join-Path $root 'scripts\Widget-Layout.ps1') $bundle
+    Copy-Item (Join-Path $root '..\windows-layout.ps1') $bundle
     Copy-Item (Join-Path $root 'telemetry') (Join-Path $bundle 'telemetry') -Recurse
     $repro = Join-Path $temp 'old-pipeline.ps1'
     [IO.File]::WriteAllText($repro, "'systemctl is-active --quiet devstack-widget-metrics.socket' | wsl.exe -d Ubuntu-26.04 -u root -- /bin/sh -s`nexit `$LASTEXITCODE`n", $utf8)
@@ -106,13 +113,14 @@ public static class FakeWsl {
         $env:DS_TEST_TOKEN_HASH = Join-Path $case 'token.hash'
         $env:DS_TEST_CALLED = Join-Path $case 'called.marker'
         $env:DS_TEST_FAIL = '0'; $env:DS_TEST_STOPPED = '0'
-        $config = Join-Path $case 'DevStack\Widgets\telemetry.json'
+        $config = 'C:\DevStack\Widgets\telemetry.json'
         Write-Host "Testing $engine"
         $result = Run-Script $engine $repro
         Assert ($result.Code -eq 40) 'Original pipeline reproduces trailing CRLF corruption'
         $result = Run-Script $engine $installer
         if ($result.Code -ne 0) { Write-Host $result.Text }
         Assert ($result.Code -eq 0) 'Full fixed installer accepts exact LF stdin'
+        Assert (!(Test-Path -LiteralPath (Join-Path $case 'DevStack'))) 'Legacy AppData layout not recreated'
         $saved = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
         Assert ($saved.schema -eq 1 -and $saved.distro -eq 'Ubuntu-26.04' -and $saved.port -eq 43871) 'Expected Windows settings written'
         Assert ($saved.token -match '^[0-9a-f]{64}$') 'Valid credential format'
@@ -147,4 +155,7 @@ public static class FakeWsl {
         Remove-Item "Env:$name" -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath 'C:\DevStack\Widgets\telemetry.json') { Remove-Item -LiteralPath 'C:\DevStack\Widgets\telemetry.json' -Force }
+    if (Test-Path -LiteralPath 'C:\DevStack\Widgets') { [IO.Directory]::Delete('C:\DevStack\Widgets',$false) }
+    if (Test-Path -LiteralPath 'C:\DevStack') { [IO.Directory]::Delete('C:\DevStack',$false) }
 }
