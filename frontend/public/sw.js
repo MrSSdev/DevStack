@@ -26,7 +26,7 @@ self.addEventListener('push',event=>{
     await self.registration.showNotification(title,{
       body:data.kind==='error'?'Operacja wymaga uwagi. Otwórz DevStack.':'Otwórz DevStack, aby zobaczyć szczegóły.',
       icon:'/pwa/icon-192.png',badge:'/pwa/icon-192.png',tag:'devstack-'+id,renotify:false,
-      data:{route:routeFor(category,id)}
+      data:{route:routeFor(category,id),id}
     });
     try{await self.navigator.setAppBadge?.()}catch{}
   })());
@@ -35,7 +35,15 @@ self.addEventListener('notificationclick',event=>{
   event.notification.close();
   const route=event.notification.data?.route;
   const safe=typeof route==='string'&&/^\/#\/(?:dashboard|projects|settings|mail(?:\/[A-Za-z0-9]{22})?)$/.test(route)?route:'/#/dashboard';
-  const target=new URL(safe,self.location.origin).href;
+  // Keep the exact journal ID through startup and password login. Older
+  // notifications already carry this ID in their stable tag. The fragment
+  // stays local to the page; a normal authenticated CSRF-protected poll
+  // marks the event read. No background authentication bypass.
+  const supplied=event.notification.data?.id;
+  const oldTag=typeof event.notification.tag==='string'&&event.notification.tag.startsWith('devstack-')
+    ?event.notification.tag.slice('devstack-'.length):'';
+  const id=validId(supplied)?supplied:validId(oldTag)?oldTag:'';
+  const target=new URL(safe+(id?'?notice='+id:''),self.location.origin).href;
   event.waitUntil((async()=>{
     const windows=await self.clients.matchAll({type:'window',includeUncontrolled:true});
     const existing=windows.find(client=>new URL(client.url).origin===self.location.origin&&new URL(client.url).pathname==='/');

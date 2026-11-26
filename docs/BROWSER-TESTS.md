@@ -40,3 +40,10 @@ The installed-stack workflow also reproduces a legacy root-owned, mode-0755
 that directory ownership and permissions are repaired, the sandboxed collector
 completes successfully, the timer is active, and a previously stored SQLite
 preference survives the update. The real SMTP/browser scenarios run afterward.
+
+Notification-click coverage tests the actual service-worker handlers with
+isolated clients (cold window, focused window, old notification tag and
+unsafe data), plus the real authenticated browser URL/poll flow. Only the
+clicked record becomes read, an unrelated notification stays unread, the
+marker survives password login and is consumed after acknowledgement.
+The tests do not simulate or claim successful native Windows delivery.

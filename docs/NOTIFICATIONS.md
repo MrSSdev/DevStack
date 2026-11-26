@@ -61,10 +61,49 @@ Short TTL (30 seconds), per-event claims and stable notification tags limit
 duplicates. Unknown delivery failures are not retried automatically;
 the event remains in history. Do not treat this as a guaranteed alerting
 service. Push is not sent for history-only old events when enabled.
+Automatic mail events are eligible for Web Push in the collector cycle
+that discovers them, as long as no client lease is active and the mail
+category is enabled. They no longer wait for an additional timer cycle.
+Other events retain their existing grace period. The normal collector
+interval remains eight seconds after completion (plus timer accuracy and
+processing time); the open panel polls every five seconds. Delivery by
+the browser provider is asynchronous and outside DevStack's control.
+The collector logs category, journal age, send duration and numeric HTTP
+status (or unavailable) without message content, endpoint or key material.
+HTTP acceptance does not prove Windows displayed a banner.
 A click opens DevStack or the specific mail message if still available.
+The click carries the exact notification ID in a local URL fragment. The
+first authenticated notification poll marks only that journal entry read
+and returns the updated unread count, even after a cold launch or password
+login. Clicking a stale, deleted entry does not recreate it. The fragment
+is removed after successful acknowledgement; no GET request changes state.
 Native Windows/Edge delivery and installability must be checked on the
 actual workstation; Chromium CI uses an isolated browser and does not
 send real push messages to an external provider.
+
+### Edge registration troubleshooting (optional)
+
+If HTTPS is trusted, permission is granted, the service worker is active
+and the VAPID API works, but Edge reports `AbortError: Registration failed
+- push service error` during subscription, Microsoft documents the
+[ForceBuiltInPushMessagingClient](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/forcebuiltinpushmessagingclient)
+policy. It switches Edge to its built-in WNS client instead of the OS
+client. This is a **browser-wide** policy (not per profile or per PWA).
+Its name is fixed by Microsoft; there is no DevStack-specific equivalent.
+On a private, unmanaged Windows PC only, if explicitly desired, use an
+administrator PowerShell:
+
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v ForceBuiltInPushMessagingClient /t REG_DWORD /d 1 /f
+
+Record any pre-existing value before changing it. Restart Edge and check
+`edge://policy` for the value true, then enable Web Push again. The
+workstation test confirmed this resolves the registration error on ASUS.
+If the value did not previously exist, remove it to undo the change:
+
+    reg delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v ForceBuiltInPushMessagingClient /f
+
+Restart Edge again after restoring/removing it. DevStack never installs or
+modifies this global policy automatically.
 
 ## Maintenance
 

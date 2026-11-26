@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch'
 import { toast, fail } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
-import { disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClient, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
+import { consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
 
 export function useNotificationCenter(authenticated:boolean,csrf:string,request:NoticeRequest,navigate:(route:string)=>void){
   const [state,setState]=useState<NoticeState>(emptyNoticeState)
@@ -15,6 +15,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
   const queued=useRef(false)
   const generation=useRef(0)
   const active=useRef(false)
+  const pendingOpened=useRef(new Set<string>())
   const navigateRef=useRef(navigate)
   navigateRef.current=navigate
   const show=(item:Notice)=>{
@@ -24,12 +25,21 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
   }
   const sync=useCallback(async()=>{
     if(!active.current||!csrf)return
+    const clicked=notificationClickId()
+    if(clicked)pendingOpened.current.add(clicked)
     if(inFlight.current){queued.current=true;return}
     inFlight.current=true
     const version=generation.current
+    const opened=pendingOpened.current.values().next().value
     try{
-      const result=await request<NoticeState>('POST','/api/notifications/poll',csrf,{client:notificationClient})
+      const result=await request<NoticeState>('POST','/api/notifications/poll',csrf,{client:notificationClient,...(opened?{opened}:{})})
       if(!active.current||version!==generation.current)return
+      if(opened){
+        pendingOpened.current.delete(opened)
+        consumeNotificationClick(opened)
+        toast.close(opened)
+        if(pendingOpened.current.size)queued.current=true
+      }
       setState(result);setAvailable(true)
       for(const item of result.toast)show(item)
     }catch{
@@ -41,7 +51,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
   },[csrf,request])
   useEffect(()=>{
     active.current=authenticated
-    if(!authenticated){generation.current++;setState(emptyNoticeState);void updateAppBadge(0);return}
+    if(!authenticated){generation.current++;pendingOpened.current.clear();setState(emptyNoticeState);void updateAppBadge(0);return}
     void sync()
     const timer=window.setInterval(()=>{void sync()},5000)
     const refresh=()=>{void sync()}
@@ -50,12 +60,14 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     // falsely declaring itself closed on visibilitychange.
     window.addEventListener('focus',refresh)
     window.addEventListener('pageshow',refresh)
+    window.addEventListener('hashchange',refresh)
     window.addEventListener('pagehide',leave)
     window.addEventListener(notificationChange,refresh)
     document.addEventListener('visibilitychange',refresh)
     return ()=>{
       active.current=false;generation.current++;window.clearInterval(timer)
       window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh)
+      window.removeEventListener('hashchange',refresh)
       window.removeEventListener('pagehide',leave);window.removeEventListener(notificationChange,refresh)
       document.removeEventListener('visibilitychange',refresh)
     }

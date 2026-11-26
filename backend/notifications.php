@@ -314,10 +314,19 @@ final class DevStackNotices
         if ($client!=='') $this->execute("UPDATE notices SET delivery='toast' WHERE id=? AND owner=? AND direct=1 AND delivery='pending'",[$id,$client]);
     }
 
-    public function poll(string $client, bool $claim = true): array
+    public function poll(string $client, bool $claim = true, mixed $opened = null): array
     {
-        return $this->atomic(function () use ($client,$claim) {
+        return $this->atomic(function () use ($client,$claim,$opened) {
             $this->touch($client); $this->prune();
+            if ($opened!==null) {
+                // The clicked journal event alone is read before collecting
+                // toasts and returning the authoritative history snapshot.
+                // A stale click after deletion is a no-op, not an insert.
+                $id=self::validId($opened);
+                $this->execute("UPDATE notices SET unread=0,
+                    delivery=CASE WHEN delivery='pending' AND kind!='loading' THEN 'history' ELSE delivery END
+                    WHERE id=?",[$id]);
+            }
             $deliver=[];
             if ($client!==''&&$claim) {
                 $rows=$this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND id NOT LIKE 'job-%' ORDER BY created,id LIMIT 40")->fetchAll();
@@ -407,12 +416,18 @@ final class DevStackNotices
             if ($this->anyPresent()) return null;
             $subscription=$this->meta('subscription');
             if ($subscription===null) return null;
-            foreach ($this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND push=1 AND updated<=? ORDER BY updated,id LIMIT 200",[time()-2])->fetchAll() as $row) {
+            // Automatic mail events have no initiating operation toast to
+            // acknowledge. Once no client is present, dispatch in the same
+            // collector cycle instead of waiting for the next timer tick.
+            // Keep the existing grace period for all other events.
+            foreach ($this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND push=1
+                AND ((category='mail' AND direct=0) OR updated<=?) ORDER BY updated,id LIMIT 200",[time()-2])->fetchAll() as $row) {
                 if (!in_array($row['category'],$this->categories(),true)) continue;
                 // Claim once before the network call. Unknown delivery is not
                 // retried (avoid duplicate system notifications).
                 $this->execute("UPDATE notices SET delivery='push' WHERE id=?",[$row['id']]);
-                return ['id'=>$row['id'],'subscription'=>json_decode($subscription,true,16,JSON_THROW_ON_ERROR),
+                return ['id'=>$row['id'],'journal_age_s'=>max(0,time()-(int)$row['updated']),
+                    'subscription'=>json_decode($subscription,true,16,JSON_THROW_ON_ERROR),
                     // Generic text only. No subject, recipient, hostname,
                     // project name, secret or original daemon output in push.
                     'payload'=>['id'=>$row['id'],'category'=>$row['category'],'kind'=>$row['kind']]];

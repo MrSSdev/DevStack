@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/page-header'
+import { notificationRouteHash } from '@/lib/notification-client'
 
 type Address={Name?:string; Address?:string}
 type Attachment={PartID:string; FileName?:string; ContentType?:string; Size?:number}
@@ -85,7 +86,7 @@ export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:
   const refresh=()=>{setRevision(v=>v+1);refreshStatus()}
   function search(e:FormEvent){e.preventDefault();setChecked([]);setStart(0);setAppliedQuery(query.trim());setRevision(v=>v+1)}
   function changePage(next:number){setChecked([]);setStart(next)}
-  function back(){if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(window.location.hash))window.location.hash='/mail';setSelected('');setMessage(null);setConfirmDelete(null);setRevision(v=>v+1)}
+  function back(){if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(notificationRouteHash()))window.location.hash='/mail';setSelected('');setMessage(null);setConfirmDelete(null);setRevision(v=>v+1)}
   async function remove(){
     if(deleting||!confirmDelete)return
     const mode=confirmDelete
@@ -97,7 +98,7 @@ export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:
       if(mode==='all')await request('POST','/api/mail/clear',csrf,{confirmation:'delete-all'})
       else if(mode==='one')await request('POST','/api/mail/delete',csrf,{id:ids[0]})
       else await request('POST','/api/mail/delete-many',csrf,{ids})
-      if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(window.location.hash))window.location.hash='/mail'
+      if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(notificationRouteHash()))window.location.hash='/mail'
       setSelected('');setMessage(null);setConfirmDelete(null);setChecked([])
       if(mode==='all'){setQuery('');setAppliedQuery('');setStart(0)}
       else if(messages.every(m=>ids.includes(m.ID))&&start>0)setStart(Math.max(0,start-pageSize))

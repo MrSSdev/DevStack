@@ -48,14 +48,43 @@ $store->setCategories(['mail']);
 $store->observeMail([['ID'=>str_repeat('Z',22),'Created'=>$stamp,'Subject'=>'Never include in push']]);
 check_notice($store->claimPush()===null,'Any live client suppresses system push');
 $store->leave($a);$store->leave($b);
-sleep(2);
+// No sleep: fresh automatic mail must be eligible in this same cycle.
 $push=$store->claimPush();
-check_notice(is_array($push)&&$push['payload']['category']==='mail'&&!str_contains(json_encode($push['payload']),'Never include'),'Claim once with generic payload');
+check_notice(is_array($push)&&$push['payload']['category']==='mail'&&$push['journal_age_s']>=0&&!str_contains(json_encode($push['payload']),'Never include'),'Immediate claim once with generic payload');
 check_notice($store->claimPush()===null,'No repeated delivery');
 $store->pushFailed($push['id'],true);
 check_notice(!$store->poll($a)['subscribed'],'Expired subscription removed');
+$store->mutate('clear');
+$store->subscribe($subscription);
+$store->setCategories([]);
+$now=gmdate('c');
+$store->observeMail([['ID'=>str_repeat('P',22),'Created'=>$now],['ID'=>str_repeat('Q',22),'Created'=>$now]]);
+$store->leave($a);
+check_notice($store->claimPush()===null,'Disabled mail category suppresses push');
+$store->setCategories(['mail']);
+$group=$store->claimPush();
+check_notice(is_array($group)&&str_starts_with($group['id'],'batch-')&&$group['payload']['category']==='mail','Automatic mail batch is immediately eligible');
+check_notice($store->claimPush()===null,'No repeated grouped delivery');
 foreach (['https://127.0.0.1/x','https://evil.invalid','https://fcm.googleapis.com.evil.invalid/fcm/send/test','http://fcm.googleapis.com/fcm/send/test','https://user@fcm.googleapis.com/fcm/send/test','https://fcm.googleapis.com:123/fcm/send/test','https://fcm.googleapis.com/other'] as $url) {
     try {DevStackNotices::subscription(['endpoint'=>$url,'keys'=>$subscription['keys']]);check_notice(false,'Unsafe endpoint accepted');}
     catch(InvalidArgumentException) {}
 }
-echo "Notification journal, deletion, deduplication, presence and push policy: OK\n";
+// Clicking a system notification must update exactly one event in the same
+// authenticated poll, without replaying it as a toast or recreating a row.
+$clickStore=new DevStackNotices(':memory:');
+$clickStore->observeMail([]);
+$clickStamp=gmdate('c');
+$one='mail-'.str_repeat('U',22);$two='mail-'.str_repeat('V',22);
+$clickStore->observeMail([['ID'=>substr($one,5),'Created'=>$clickStamp,'Subject'=>'Clicked']]);
+$clickStore->observeMail([['ID'=>substr($two,5),'Created'=>$clickStamp,'Subject'=>'Unrelated']]);
+$clicked=$clickStore->poll($a,true,$one);
+$indexed=array_column($clicked['items'],null,'id');
+check_notice(!$indexed[$one]['unread']&&$indexed[$two]['unread'],'Click marks only its event read');
+check_notice(array_column($clicked['toast'],'id')===[$two],'Clicked pending event is not replayed as a toast');
+$again=array_column($clickStore->poll($b,false)['items'],null,'id');
+check_notice(!$again[$one]['unread']&&$again[$two]['unread'],'Click read state persists');
+$clickStore->mutate('delete',$one);
+check_notice(count($clickStore->poll($a,true,$one)['items'])===1,'Stale click does not restore deleted event');
+try {$clickStore->poll($a,true,'invalid');check_notice(false,'Invalid click ID accepted');}
+catch(InvalidArgumentException) {}
+echo "Notification journal, deletion, deduplication, presence, click read and push policy: OK\n";

@@ -31,8 +31,17 @@ try {
 try {
     // At most one delivery per timer cycle; subscriptions are opt-in.
     if ($claim=$store->claimPush()) {
+        $start=hrtime(true);
         $result=devstack_push_helper('send',['subscription'=>$claim['subscription'],'payload'=>$claim['payload']]);
-        if (($result['ok']??false)!==true) $store->pushFailed($claim['id'],($result['expired']??false)===true);
+        $ok=($result['ok']??false)===true;
+        $status=$result['http_status']??null;
+        $http=is_int($status)&&$status>=100&&$status<=599?(string)$status:'unavailable';
+        // Log timings and provider status only. A successful HTTP response is
+        // acceptance by the push service, not proof of a displayed OS banner.
+        error_log(sprintf('DevStack push: category=%s journal_age_s=%d send_ms=%d outcome=%s http=%s',
+            $claim['payload']['category'],$claim['journal_age_s'],
+            (int)((hrtime(true)-$start)/1000000),$ok?'accepted':'failed',$http));
+        if (!$ok) $store->pushFailed($claim['id'],($result['expired']??false)===true);
     }
 } catch (Throwable) {
     if (isset($claim)&&is_array($claim)) $store->pushFailed($claim['id'],false);
