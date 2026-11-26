@@ -97,7 +97,7 @@ class BrowserAcceptance(unittest.TestCase):
         # Independent network guard. Nothing external is allowed to leave
         # this browser context, even if the application's CSP regresses.
         # Context routing also covers requests from sandboxed child frames.
-        self.context.route(re.compile(r'^https?://(?!devstack\\.test(?:/|$))', re.I), self.guard_external_request)
+        self.context.route(re.compile(r'^https?://(?!devstack\.test(?:/|$))', re.I), self.guard_external_request)
         self.csrf = self.context.request.get(BASE + '/api/session').json()['csrf']
         login = self.post('/api/login', {'password':os.environ['DEVSTACK_E2E_PASSWORD']})
         self.assertEqual(login.status, 200, login.text())
