@@ -77,3 +77,16 @@ intercepts pointer events. The installer scenario explicitly hovers the
 frontmost card and checks the target is expanded and opaque before the
 real project click. No production changes, forced clicks, notification
 assertion removals or changes to the dedicated stack regression.
+
+The following run (`89add603`) passed 11/12 browser scenarios, including
+both previously failing ones. The stack scenario stopped before inspecting
+the first toast: the systemd journal at 18:08:50 reported "Start request
+repeated too quickly" and `start-limit-hit`. Several manual starts from
+successive tests plus the real timer exhausted systemd's start limit.
+The notification scenarios now use the installed timer exclusively, with
+bounded observation of a new successful collector execution for baseline
+and re-collection assertions. Incoming mail and service receipts are
+awaited through the real browser. No production rate limit, timer interval,
+security setting or toast assertion has been changed. The history deletion
+check additionally inspects the authenticated poll after a real subsequent
+collection.

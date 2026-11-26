@@ -151,6 +151,33 @@ class BrowserAcceptance(unittest.TestCase):
             time.sleep(.1)
         self.fail(f'Mailpit did not reach {count} messages')
 
+    def wait_notification_cycle(self):
+        # Observe a new, successful run of the installed 8-second timer.
+        # Never issue a burst of manual starts alongside that timer: systemd
+        # correctly limits those bursts, which are not a product workflow.
+        service = 'devstack-notifications.service'
+        subprocess.run(['systemctl','is-active','--quiet','devstack-notifications.timer'],check=True)
+        def snapshot():
+            output = subprocess.check_output([
+                'systemctl','show','-p','ExecMainStartTimestampMonotonic',
+                '-p','ExecMainExitTimestampMonotonic','-p','ActiveState',
+                '-p','Result','-p','ExecMainStatus',service],text=True)
+            return dict(line.split('=',1) for line in output.splitlines() if '=' in line)
+        previous = int(snapshot()['ExecMainStartTimestampMonotonic'])
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = snapshot()
+            if state['ActiveState'] == 'failed':
+                self.fail(f'Notification collector failed: {state}')
+            started = int(state['ExecMainStartTimestampMonotonic'])
+            ended = int(state['ExecMainExitTimestampMonotonic'])
+            if started > previous and ended >= started and state['ActiveState'] == 'inactive':
+                self.assertEqual(state['Result'],'success',state)
+                self.assertEqual(state['ExecMainStatus'],'0',state)
+                return
+            self.page.wait_for_timeout(200)
+        self.fail(f'No new successful timer-driven notification collection: {snapshot()}')
+
     def goto(self, route):
         target=BASE + '/#/' + route
         # An in-memory project detail deliberately retains its source hash.
@@ -720,7 +747,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(self.page.evaluate('caches.keys()'),[])
         # Establish the empty-mailbox baseline and finish any prior worker
         # pass before clearing the independent event history.
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.wait_notification_cycle()
         self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
         self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
         panel=self.page.get_by_role('region',name='Historia powiadomień')
@@ -729,7 +756,6 @@ class BrowserAcceptance(unittest.TestCase):
         # instead of an empty messages array.
         send('Notification fixture alpha')
         self.wait_total(1)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         item=panel.locator('[data-notification-id]').filter(has_text='Notification fixture alpha')
         expect(item).to_have_count(1,timeout=20000)
         expect(self.page.locator('[data-slot="toast"]').filter(has_text='Notification fixture alpha')).to_be_visible(timeout=10000)
@@ -746,12 +772,16 @@ class BrowserAcceptance(unittest.TestCase):
             expect(item).to_have_count(0)
             expect(other.locator('[data-notification-id]').filter(has_text='Notification fixture alpha')).to_have_count(0,timeout=10000)
             self.assertEqual(mailpit()['total'],1)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+            self.wait_notification_cycle()
+            # Wait for an actual authenticated poll after the completed
+            # collector cycle before asserting that deletion did not replay.
+            with self.page.expect_response(lambda response: response.url.endswith('/api/notifications/poll') and response.ok, timeout=12000) as collected:
+                self.page.wait_for_timeout(100)
+            self.assertEqual(collected.value.json()['result']['items'],[])
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
             second.close()
             send('Notification fixture beta')
             self.wait_total(2)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             item=panel.locator('[data-notification-id]').filter(has_text='Notification fixture beta')
             expect(item).to_have_count(1,timeout=20000)
             item.get_by_role('button').filter(has_text='Notification fixture beta').click()
@@ -780,13 +810,11 @@ class BrowserAcceptance(unittest.TestCase):
             # provider delivery or OS banner is claimed by this browser test.
             send('Notification fixture gamma')
             self.wait_total(3)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             gamma=panel.locator('[data-notification-id]').filter(has_text='Notification fixture gamma')
             expect(gamma).to_have_count(1,timeout=20000)
             gamma_id=gamma.get_attribute('data-notification-id')
             send('Notification fixture delta')
             self.wait_total(4)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             delta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture delta')
             expect(delta).to_have_count(1,timeout=20000)
             delta_id=delta.get_attribute('data-notification-id')
@@ -821,12 +849,10 @@ class BrowserAcceptance(unittest.TestCase):
             # whose toast was not presented to this document.
             send('Notification fixture epsilon')
             self.wait_total(5)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             epsilon=panel.locator('[data-notification-id]').filter(has_text='Notification fixture epsilon')
             expect(epsilon).to_have_count(1,timeout=20000)
             send('Notification fixture zeta')
             self.wait_total(6)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             zeta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture zeta')
             expect(zeta).to_have_count(1,timeout=20000)
             expect(panel.get_by_text('2 nowych',exact=True)).to_be_visible()
@@ -853,7 +879,6 @@ class BrowserAcceptance(unittest.TestCase):
             expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
             send('Notification fixture eta')
             self.wait_total(7)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             eta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture eta')
             expect(eta).to_have_count(1,timeout=20000)
             eta_id=eta.get_attribute('data-notification-id')
@@ -1068,7 +1093,7 @@ class BrowserAcceptance(unittest.TestCase):
 
     def test_10_visible_toast_marks_exact_history_read(self):
         self.goto('dashboard')
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.wait_notification_cycle()
         self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
         bell=self.page.get_by_role('button',name='Powiadomienia',exact=True)
         bell.click()
@@ -1078,7 +1103,6 @@ class BrowserAcceptance(unittest.TestCase):
         dot='[aria-label="Nieprzeczytane"]'
         send('Toast expiry fixture')
         self.wait_total(1)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         expiry=panel.locator('[data-notification-id]').filter(has_text='Toast expiry fixture')
         expiry_toast=toasts.filter(has_text='Toast expiry fixture')
         expect(expiry_toast).to_be_visible(timeout=20000)
@@ -1090,7 +1114,6 @@ class BrowserAcceptance(unittest.TestCase):
         # A real close button must use the same exact-event path.
         send('Toast close fixture')
         self.wait_total(2)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         manual=panel.locator('[data-notification-id]').filter(has_text='Toast close fixture')
         manual_toast=toasts.filter(has_text='Toast close fixture')
         expect(manual_toast).to_be_visible(timeout=20000)
@@ -1106,7 +1129,6 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.evaluate("Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'})")
         send('Toast hidden fixture')
         self.wait_total(3)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         hidden=panel.locator('[data-notification-id]').filter(has_text='Toast hidden fixture')
         hidden_toast=toasts.filter(has_text='Toast hidden fixture')
         expect(hidden_toast).to_be_visible(timeout=20000)
@@ -1146,7 +1168,7 @@ class BrowserAcceptance(unittest.TestCase):
         # Exercise the real installed daemon, delayed systemd unit,
         # receipt collector and browser history, not a mocked status.
         self.goto('dashboard')
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.wait_notification_cycle()
         self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
         def pid():
             return subprocess.check_output(['systemctl','show','--property=MainPID','--value','devstack-mailpit.service'],text=True).strip()
@@ -1163,20 +1185,19 @@ class BrowserAcceptance(unittest.TestCase):
             if state['mailpit']=='active' and not state['service_action_pending'] and pid()!=before:break
             self.page.wait_for_timeout(200)
         else:self.fail('Mailpit did not actually restart')
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         bell=self.page.get_by_role('button',name='Powiadomienia',exact=True)
         bell.click()
         panel=self.page.get_by_role('region',name='Historia powiadomień')
         ack=panel.locator('[data-notification-id="'+accepted['notification_id']+'"]')
         outcome=panel.locator('[data-notification-id="'+event_id+'"]')
         expect(ack.get_by_text('Polecenie usługi przyjęte',exact=True)).to_be_visible()
-        expect(outcome.get_by_text('Usługa uruchomiona ponownie',exact=True)).to_be_visible(timeout=15000)
+        expect(outcome.get_by_text('Usługa uruchomiona ponownie',exact=True)).to_be_visible(timeout=20000)
         expect(outcome.get_by_text('Mailpit — restart',exact=True)).to_be_visible()
         expect(outcome).to_have_count(1)
         # Repeated collection and deletion must not recreate the receipt.
         outcome.get_by_role('button',name='Usuń powiadomienie: Usługa uruchomiona ponownie').click()
         expect(outcome).to_have_count(0)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.wait_notification_cycle()
         self.page.reload()
         expect(self.page.locator('main')).to_be_visible()
         bell.click()
@@ -1188,7 +1209,7 @@ class BrowserAcceptance(unittest.TestCase):
         # Real mail notices, a native modal, and the real toast manager.
         self.goto('dashboard')
         self.page.set_viewport_size({'width':600,'height':850})
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.wait_notification_cycle()
         self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
         self.dismiss_visible_toasts()
         self.page.locator('main button').filter(has_text='MariaDB').click()
@@ -1198,7 +1219,6 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.mouse.move(1,1)
         send('Stack fixture first')
         self.wait_total(1)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         cards=host.locator('[data-slot="toast"]:not([data-ending-style])')
         first=cards.filter(has_text='Stack fixture first')
         expect(first).to_be_visible(timeout=20000)
@@ -1208,7 +1228,6 @@ class BrowserAcceptance(unittest.TestCase):
         expect(first).to_have_attribute('data-expanded','')
         send('Stack fixture second with a different and longer subject for height measurement')
         self.wait_total(2)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         second=cards.filter(has_text='Stack fixture second')
         expect(second).to_be_visible(timeout=20000)
         self.page.mouse.move(1,1)
