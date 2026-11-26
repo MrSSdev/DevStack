@@ -2,7 +2,7 @@ name: Widget telemetry installer
 
 on:
   push:
-    branches: [main, feature/windows-widgets]
+    branches: [main, feature/windows-widgets, test/windows-local-notifications]
     paths:
       - 'windows/widgets/scripts/Install-WslTelemetry.ps1'
       - 'windows/widgets/tests/Test-TelemetryInstaller.ps1'

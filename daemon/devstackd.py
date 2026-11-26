@@ -55,6 +55,7 @@ WINDOWS_HOSTS_TASK = 'DevStack Hosts Event Sync'
 WINDOWS_NOTIFICATION_MODE = pathlib.Path('/etc/devstack/windows-local-notifications')
 WINDOWS_NOTIFICATION_ID = re.compile(r'(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22}')
 WINDOWS_NOTIFICATION_LAUNCHER = ('DevStack', 'LocalNotifications', 'DevStack.Notifications.exe')
+WINDOWS_NOTIFICATION_TARGET = pathlib.Path('/mnt/c').joinpath(*WINDOWS_NOTIFICATION_LAUNCHER)
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 DOMAIN = re.compile(r'[a-z][a-z0-9-]{0,39}\.test\Z')
 WEBROOT = re.compile(r'[a-zA-Z0-9_][a-zA-Z0-9_/-]{0,99}\Z')
@@ -1531,9 +1532,14 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
     try:
         raw_path = WINDOWS_NOTIFICATION_MODE.read_text(encoding='utf-8').rstrip('\n')
         launcher = pathlib.Path(raw_path)
-        if (re.search(r'[\x00-\x1f\x7f]', raw_path) or len(launcher.parts) < 7
-                or launcher.parts[:2] != ('/', 'mnt') or not re.fullmatch(r'[a-z]', launcher.parts[2])
-                or '..' in launcher.parts or launcher.parts[-3:] != WINDOWS_NOTIFICATION_LAUNCHER
+        # Accept the new canonical C:\\DevStack installation, and retain
+        # the old profile layout during an explicit migration/rollback.
+        parts = launcher.parts
+        legacy = (len(parts) >= 7 and parts[:2] == ('/', 'mnt')
+                  and re.fullmatch(r'[a-z]', parts[2])
+                  and parts[-3:] == WINDOWS_NOTIFICATION_LAUNCHER)
+        if (re.search(r'[\x00-\x1f\x7f]', raw_path) or '..' in parts
+                or not (launcher == WINDOWS_NOTIFICATION_TARGET or legacy)
                 or not launcher.is_file()):
             return {'accepted': False}
         # The launcher lives in the Windows user's writable profile. Never

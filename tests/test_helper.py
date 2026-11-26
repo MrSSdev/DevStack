@@ -485,12 +485,13 @@ class ValidationTests(unittest.TestCase):
         event = {'id': 'mail-' + 'a'*22, 'category': 'mail', 'kind': 'info'}
         with tempfile.TemporaryDirectory() as tmp:
             mode = Path(tmp) / 'enabled'
-            exe = Path('/mnt/c/Users/Test User/AppData/Local/DevStack/LocalNotifications/DevStack.Notifications.exe')
+            legacy = Path('/mnt/c/Users/Test User/AppData/Local/DevStack/LocalNotifications/DevStack.Notifications.exe')
+            exe = Path('/mnt/c/DevStack/LocalNotifications/DevStack.Notifications.exe')
             is_file = Path.is_file
             account = SimpleNamespace(pw_name='fixture', pw_uid=1001, pw_gid=1001)
             with (
                 patch.object(d, 'WINDOWS_NOTIFICATION_MODE', mode),
-                patch.object(Path, 'is_file', lambda file: file == exe or is_file(file)),
+                patch.object(Path, 'is_file', lambda file: file in (exe, legacy) or is_file(file)),
                 patch.object(d, 'config', return_value={'dev_user': 'fixture'}),
                 patch.object(d.pwd, 'getpwnam', return_value=account),
                 patch.object(d.os, 'getgrouplist', return_value=[1001, 27]),
@@ -518,6 +519,12 @@ class ValidationTests(unittest.TestCase):
                 self.assertEqual(run.call_args.kwargs['group'], 1001)
                 self.assertEqual(run.call_args.kwargs['extra_groups'], [1001, 27])
                 self.assertEqual(run.call_args.kwargs['timeout'], 8)
+                mode.write_text(str(legacy) + '\n')
+                self.assertTrue(d.show_windows_notification(event)['accepted'])
+                self.assertEqual(run.call_args.args[0][0], str(legacy))
+                mode.write_text('/mnt/d/DevStack/LocalNotifications/DevStack.Notifications.exe\n')
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                mode.write_text(str(exe) + '\n')
                 run.return_value = SimpleNamespace(returncode=1)
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
 

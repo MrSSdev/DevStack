@@ -131,6 +131,19 @@ If the value did not previously exist, remove it to undo the change:
 Restart Edge again after restoring/removing it. DevStack never installs or
 modifies this global policy automatically.
 
+## Optional local Windows transport
+
+The experimental local transport uses the same notification journal and
+delivery claim. Explicit opt-in installs the short-lived GUI launcher and
+WinRT script in C:\DevStack\LocalNotifications; it publishes the root-owned
+transport marker only after the corresponding Ubuntu deployment succeeds.
+No new resident process or external push service is required. WNS remains
+configured but is not used while the local selector is enabled. See
+[LOCAL-WINDOWS-NOTIFICATIONS.md](LOCAL-WINDOWS-NOTIFICATIONS.md) for the
+integrated update, Windows ACL, first-toast HRESULT handling, migration,
+verification, and rollback. The normal updater without the opt-in flag
+does not install or enable the Windows component.
+
 ## Maintenance
 
 The standard installer/updater deploys the timer and PHP SQLite/mbstring

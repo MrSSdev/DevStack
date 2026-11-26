@@ -2,7 +2,7 @@ name: DevStack CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, test/windows-local-notifications]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -37,6 +37,7 @@ jobs:
           php -l scripts/set-password.php
           php -l scripts/configure-auth.php
           bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh scripts/backup-project-db.sh scripts/verify-project-db-backup.sh scripts/update.sh scripts/apply-update.sh scripts/install-mailpit.sh
+          bash -n scripts/enable-windows-local-notifications.sh
           python3 -m py_compile daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py
       - name: Backend unit tests
         run: |
@@ -58,6 +59,10 @@ jobs:
         run: |
           if bash scripts/update.sh; then
             echo 'Updater unexpectedly accepted a nonstandard checkout path' >&2
+            exit 1
+          fi
+          if bash scripts/enable-windows-local-notifications.sh; then
+            echo 'Local transport enable helper unexpectedly accepted an unprivileged invocation' >&2
             exit 1
           fi
           if bash scripts/apply-update.sh; then

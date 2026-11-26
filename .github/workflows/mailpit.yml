@@ -1,6 +1,8 @@
 name: Local Mailpit smoke test
 
 on:
+  push:
+    branches: [test/windows-local-notifications]
   pull_request:
     branches: [main]
     paths:

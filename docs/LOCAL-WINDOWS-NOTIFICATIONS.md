@@ -1,60 +1,112 @@
 # Test lokalnych powiadomień Windows na ASUS-ie
 
-Kolektor DevStacka wysyła zdarzenie do małego programu Windows zbudowanego
-w trybie GUI. Program uruchamia Windows PowerShell 5.1 z ustawieniem
-CreateNoWindow, przekazuje dane do WinRT i kończy działanie. Oba procesy
-powstają tylko podczas wysyłki. Rozwiązanie korzysta z .NET Framework
-wbudowanego w Windows 11 i z istniejącej usługi DevStacka w Ubuntu.
+DevStack używa istniejącego kolektora i jednej rezerwacji w SQLite.
+Mały program GUI uruchamia Windows PowerShell 5.1 z CreateNoWindow,
+wywołuje WinRT i kończy działanie. Nie wymaga internetu, zewnętrznego
+modułu, nowej usługi, zadania harmonogramu ani stale działającego procesu.
+Kliknięcie dymka otwiera lokalny adres HTTPS w domyślnej przeglądarce.
+Uwierzytelniony poll oznacza dokładnie wskazane powiadomienie jako przeczytane.
 
-Tryb lokalny jest domyślnie wyłączony. Po włączeniu kolektor używa jednej
-rezerwacji w SQLite i wysyła zakwalifikowane zdarzenia przez WinRT.
-Aktywna karta przejmuje powiadomienia w panelu. Windows otrzymuje tylko
-identyfikator zdarzenia, kategorię i poziom ważności. Kliknięcie otwiera
-adres DevStacka w domyślnej przeglądarce HTTPS. Zalogowany panel oznacza
-wskazany wpis jako przeczytany przy najbliższym uwierzytelnionym pollu.
+## Układ katalogów i bezpieczeństwo
 
-## Instalacja
+    C:\DevStack\
+        LocalNotifications\
+            DevStack.Notifications.exe
+            show-local-notification.ps1
 
-Użyj izolowanej instalacji, testowej skrzynki Mailpit i już działającej
-dystrybucji Ubuntu. W katalogu źródłowym sprawdź, czy git status nie
-pokazuje lokalnych zmian. Zapisz nazwę aktualnej gałęzi i jej commit.
-Pomocnicza gałąź zachowuje dokładny commit do wycofania.
+Instalator tworzy tylko potrzebne katalogi. Tymczasowa kompilacja i kopia
+poprzedniego komponentu są usuwane po udanej wymianie. Nie zastępuje
+nieznanych plików i odrzuca dowiązania/reparse points, nieoczekiwanego
+właściciela lub uprawnienia zapisu dla niezaufanych kont. Katalogi są
+dostępne do zapisu dla instalującego użytkownika, SYSTEM i administratorów.
+Nie wolno umieszczać tutaj skryptów wykonywanych z podwyższonymi
+uprawnieniami. Chronione zadanie hosts pozostaje w ProgramData; MSIX oraz
+ustawienia widżetów pozostają w ich dotychczasowych lokalizacjach.
+Instalator nie zmienia systemowej polityki uruchamiania skryptów ani
+ustawień powiadomień użytkownika. Windows nadal decyduje, czy pokaże dymek.
+
+Przy pierwszym Show nowa tożsamość aplikacji może jeszcze nie mieć
+ustawień (ToastNotifier.Setting zwraca 0x80070490, ERROR_NOT_FOUND).
+Ten konkretny błąd ujawniono na ASUS-ie. Reflection odczytuje rzeczywisty
+HRESULT zamiast pustej wartości; tylko przy ERROR_NOT_FOUND dopuszcza
+normalne wywołanie Show, które nadal respektuje politykę systemu.
+Wszelkie inne błędy lub jawnie wyłączone powiadomienia pozostają błędem.
+Nie ma sztucznego dymka podczas instalacji.
+
+## Zintegrowana aktualizacja testowa
+
+Użyj działającej dystrybucji Ubuntu, izolowanych danych testowych,
+zalogowanego użytkownika Windows i zwykłego terminala Ubuntu (bez sudo
+dla całego aktualizatora). Przed pierwszą próbą zapisz stan źródeł
+i punkt powrotu. Nie usuwaj wcześniej istniejących danych.
 
     cd ~/projects/devstack-source
     git status --short
     git branch --show-current
-    git rev-parse HEAD
-    git branch backup/before-windows-local-notifications HEAD
+    git log -1 --oneline
+
+Jeśli checkout jest czysty, zapisz dokładną kopię poprzedniego commita:
+
+    git branch backup/before-local-notifications HEAD
     git fetch origin refs/heads/test/windows-local-notifications:refs/remotes/origin/test/windows-local-notifications
     git switch --track origin/test/windows-local-notifications
     git rev-parse HEAD
-    bash scripts/build-frontend.sh
-    sudo bash scripts/apply-update.sh
 
-Porównaj commit po przełączeniu z SHA podanym dla testu. Następnie otwórz
-katalog tego checkoutu w zwykłym Windows PowerShell 5.1 jako zalogowany
-użytkownik Windows. Możesz użyć ścieżki UNC do już działającego Ubuntu,
-np. zastępując NAZWA_UZYTKOWNIKA swoją nazwą w poniższym przykładzie.
+Jeżeli gałąź lokalna już istnieje, przełącz się na nią i wykonaj
+git merge --ff-only origin/test/windows-local-notifications. Porównaj SHA
+z zielonym przebiegiem CI przed instalacją. Aktualizator testowej gałęzi
+nie pobiera sam kolejnych commitów.
 
-    Set-Location '\\wsl.localhost\Ubuntu-26.04\home\NAZWA_UZYTKOWNIKA\projects\devstack-source'
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1
+    bash scripts/update.sh --windows-local-notifications
 
-Instalator buduje program w profilu użytkownika Windows, kopiuje do niego
-skrypt WinRT i rejestruje tożsamość powiadomień DevStack w HKCU. Na końcu
-wypisuje pełną ścieżkę do pliku DevStack.Notifications.exe. Zachowaj
-ją do włączenia transportu w Ubuntu.
+Flaga jest jawnym opt-in. Bez niej standardowa aktualizacja main nie
+instaluje ani nie włącza tego transportu. Zintegrowana aktualizacja:
 
-### Gotowy program z GitHub Actions
+1. Uruchamia dotychczasowe testy i buduje frontend bez roota.
+2. Zatrzymuje timer powiadomień na czas wymiany launchera i pozwala
+   zakończyć się aktywnemu jednorazowemu kolektorowi.
+3. Przez WSL Interop uruchamia instalator w istniejącym koncie Windows;
+   kompiluje mały program lokalnie przy użyciu .NET Framework Windows.
+4. Wdraża część Ubuntu istniejącym aktualizatorem z kopią poprzedniego
+   kodu i kontrolą zdrowia usług.
+5. Dopiero po udanym wdrożeniu atomowo zapisuje chroniony przez root
+   znacznik /etc/devstack/windows-local-notifications z nową ścieżką.
+6. Usuwa wyłącznie stary komponent LocalNotifications z AppData,
+   zachowując ustawienia użytkownika, tożsamość powiadomień i widżety.
 
-Workflow Windows local notification launcher tworzy archiwum o nazwie
-devstack-windows-local-notifications-SHA. Zawiera sprawdzony program GUI,
-źródła, instalator, test i tę instrukcję. Archiwum jest dostępne przez
-30 dni od kompilacji. Instalacja części Ubuntu nadal korzysta z checkoutu
-gałęzi testowej.
+Przy ponownym włączeniu istniejący znacznik zachowuje czas opt-in,
+aby nie wysyłać starego backlogu ani nie odrzucać nowych zdarzeń przy
+zwykłej aktualizacji. Jedno zdarzenie używa jednej ścieżki dostarczenia.
+Nie usuwa się subskrypcji WNS; pozostaje dostępna do wycofania.
+Nie zmienia się interwału poll (5 s) ani kolektora (8 s).
 
-Pobierz paczkę z przebiegu dla tego samego commita, rozpakuj ją i otwórz
-jej katalog w Windows PowerShell. Porównaj COMMIT.txt z git rev-parse HEAD
-w Ubuntu. Sumy z SHA256SUMS.txt pozwalają zweryfikować rozpakowane pliki.
+Jeśli normalne konto Windows nie może utworzyć C:\DevStack, aktualizator
+zakończy się błędem przed wdrożeniem Ubuntu. W takim przypadku, i tylko
+pod tym samym kontem Windows, uruchom zaufany skrypt z przejrzanego
+checkoutu w podwyższonym Windows PowerShell 5.1:
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode PrepareDirectory
+
+Tryb ten tworzy tylko katalog z odpowiednim ACL. Nie uruchamiaj całej
+aktualizacji w podwyższonej sesji. Ponów aktualizację z normalnego Ubuntu.
+Jeśli katalog już istnieje, ale ma niebezpieczne ACL, instalator celowo
+odmawia zmiany uprawnień w ciemno.
+
+Jeśli instalacja Windows się nie powiedzie, Ubuntu nie jest wdrażane.
+Jeśli aktualizator Linux nie przejdzie kontroli, sam przywróci poprzedni
+kod zgodnie z dotychczasową procedurą; pliki Windows mogą pozostać
+zainstalowane, lecz znacznik transportu nie zostanie przełączony.
+Jeśli zapis znacznika lub czyszczenie AppData zawiedzie po udanym
+wdrożeniu Linux, aktualizator zgłosi błąd z opisem częściowego stanu.
+W takiej sytuacji sprawdź komunikat i ponów właściwy etap albo wycofaj
+test. Nie deklarujemy transakcji obejmującej dwa systemy operacyjne.
+
+## Samodzielne demo i gotowa paczka (opcjonalne)
+
+Zintegrowana aktualizacja nie wymaga osobnego pobierania ZIP.
+Można jednak pobrać paczkę z workflow Windows local notification launcher
+dla dokładnie tego samego SHA, zweryfikować COMMIT.txt i SHA256SUMS.txt
+oraz zainstalować sam komponent w zwykłym Windows PowerShell 5.1:
 
     Get-Content .\COMMIT.txt
     foreach ($line in Get-Content .\SHA256SUMS.txt) {
@@ -65,68 +117,76 @@ w Ubuntu. Sumy z SHA256SUMS.txt pozwalają zweryfikować rozpakowane pliki.
     }
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -UseBuiltLauncher
 
-Tryby Demo i Uninstall są dostępne zarówno z paczki, jak i z checkoutu.
+Demo i Uninstall działają z checkoutu lub paczki. Demo nie włącza
+transportu Ubuntu. Samodzielne włączenie po wdrożeniu właściwego Linux:
 
-## Test
+    sudo bash scripts/enable-windows-local-notifications.sh
 
-1. Odłącz Internet, zachowując lokalny dostęp do DevStacka i Mailpit.
-   W otwartym wcześniej oknie PowerShell uruchom demo. Obserwuj ekran
-   od wywołania do dymka, włącznie z pierwszym zimnym uruchomieniem.
-   Kryterium testu to dymek DevStack i zero mignięć dodatkowego okna.
-   Kliknięcie demonstracyjne otwiera skrzynkę testową.
+## Odbiór na rzeczywistym urządzeniu
+
+1. Po zintegrowanej aktualizacji zweryfikuj ścieżkę znacznika i stan usług:
+
+       git log -1 --oneline
+       sudo cat /etc/devstack/windows-local-notifications
+       systemctl is-active devstackd devstack-notifications.timer
+       sudo journalctl -u devstack-notifications.service -f
+
+2. Odłącz internet, zachowując lokalny dostęp do DevStacka i Mailpit.
+   W normalnym Windows PowerShell, w katalogu checkoutu, uruchom demo:
 
        powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode Demo
 
-2. W Ubuntu wstaw ścieżkę z instalatora i włącz transport.
+   Obserwuj pierwszy dymek, nazwę DevStack i brak mignięcia konsoli.
+   Kliknij po zakończeniu launchera. Nie zmieniaj ustawień Windows
+   ani Edge w trakcie pomiaru.
 
-       launcher="$(wslpath -u 'C:\Users\NAZWA\AppData\Local\DevStack\LocalNotifications\DevStack.Notifications.exe')"
-       test -f "$launcher" &&
-           printf '%s\n' "$launcher" | sudo install -m 0644 -o root -g root /dev/stdin /etc/devstack/windows-local-notifications
-       sudo journalctl -u devstack-notifications.service -f
+3. Wyślij fikcyjny e-mail przez lokalny SMTP przy otwartym panelu, a potem
+   drugi po zamknięciu ostatniego okna. Oczekuj odpowiednio jednego toastu
+   w panelu i jednego dymka Windows. Zapisz czas od przyjęcia SMTP do dymka.
+   Log outcome=accepted oznacza powodzenie wywołania WinRT, nie dowodzi
+   sam w sobie wyświetlenia. Sprawdź kliknięcie konkretnego maila oraz
+   odczyt wyłącznie tego wpisu w historii.
 
-3. Wyślij fikcyjną wiadomość lokalnym SMTP przy otwartym panelu, a potem
-   drugą po zamknięciu ostatniego okna DevStacka. W pierwszym przypadku
-   oczekuj toastu w panelu, w drugim pojedynczego dymka Windows bez
-   mignięcia konsoli. Zapisz czas od przyjęcia drugiego maila do dymka.
-4. Kliknij drugi dymek po zakończeniu procesu Windows i sprawdź, czy
-   otwiera właściwą wiadomość i oznacza tylko ten wpis jako przeczytany.
-   Powtórz próbę z dwiema kartami i zamknięciem jednej z nich. Pozostała
-   karta powinna przejąć powiadomienie również po zminimalizowaniu okna,
-   jeśli Edge nadal wykonuje poll.
-5. Log outcome=accepted oznacza, że wywołanie WinRT zakończyło się
-   powodzeniem. Porównaj je z faktycznym dymkiem i zachowaniem ekranu.
-   Jeśli bezpośrednie demo działa, a kolektor zwraca outcome=failed,
-   sprawdź dokładną ścieżkę w znaczniku oraz czy Ubuntu i Windows używają
-   tej samej sesji zalogowanego użytkownika z działającym WSL Interop.
+4. Powtórz z dwiema kartami, zamknięciem jednej i zminimalizowanym oknem.
+   Sprawdź również brak stale działającego launchera, restart Windows,
+   świadome uruchomienie Ubuntu, wysyłkę offline i brak automatycznego
+   uruchamiania WSL. CI nie zastępuje tych prób. Uśpiony lub zamrożony
+   dokument może utracić dzierżawę, dlatego nie gwarantujemy, że sam
+   fakt posiadania otwartego okna zawsze zatrzyma dymek systemowy.
 
-## Pełne wycofanie
+Jeżeli demo i bezpośrednie wywołanie z Ubuntu działają, ale kolektor
+zwraca failed, sprawdź Interop procesu systemd i sesję zalogowanego
+użytkownika. Nie uruchamiaj notyfikatora z uprawnieniami roota ani
+nie osłabiaj zabezpieczeń jednostek systemd.
 
-1. W Ubuntu usuń znacznik, żeby późniejsze zdarzenia wróciły do
-   standardowego transportu skonfigurowanego przed testem.
+## Pełne wycofanie pierwszego testu (powrót do WNS)
+
+1. Wyłącz lokalny transport w Ubuntu:
 
        sudo rm -f -- /etc/devstack/windows-local-notifications
 
-2. W tym samym koncie Windows i w katalogu gałęzi testowej zaczekaj na
-   zakończenie ewentualnego wywołania i uruchom deinstalator.
+2. W normalnym Windows PowerShell w katalogu aktualnego checkoutu
+   zaczekaj na ewentualny proces i odinstaluj komponent:
 
        Get-Process -Name DevStack.Notifications -ErrorAction SilentlyContinue | Wait-Process -Timeout 10
        powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode Uninstall
 
-   Deinstalator usuwa program, skrypt, tożsamość HKCU i jej ustawienia
-   oraz zleca Windows wyczyszczenie dymków tej tożsamości. Jeśli Windows
-   zwróci ostrzeżenie podczas czyszczenia historii, usuń pozostały testowy
-   dymek DevStack z Centrum powiadomień.
+   Deinstalator usuwa tylko własne pliki, tożsamość HKCU i ustawienia
+   powiadomień. Pozostałe katalogi w C:\DevStack oraz widżety są zachowane.
+   Jeśli czyszczenie historii Windows zwróci ostrzeżenie, usuń testowy
+   dymek ręcznie w Centrum powiadomień.
 
-3. W Ubuntu przełącz checkout na zapamiętaną gałąź przy tym samym
-   commicie albo użyj kopii dokładnego commitu z pierwszego kroku.
-   Ponownie zbuduj frontend i zainstaluj poprzednią wersję.
+3. W Ubuntu przywróć zapisany commit (w razie potrzeby użyj właściwej
+   nazwy gałęzi backup) i ponownie zainstaluj jego kod:
 
        cd ~/projects/devstack-source
-       git switch --detach backup/before-windows-local-notifications
+       git switch --detach backup/before-local-notifications
        bash scripts/build-frontend.sh
        sudo bash scripts/apply-update.sh
        git rev-parse HEAD
        systemctl is-active devstack-notifications.timer
 
-   Wycofanie dotyczy zainstalowanego kodu i konfiguracji transportu.
-   Dane testowe można usunąć standardowo w Mailpit i panelu.
+   Powrót dotyczy kodu i transportu, nie kasuje danych Mailpit, projektów
+   ani dziennika. Przy wycofywaniu późniejszej aktualizacji z już włączonym
+   transportem lokalnym przywróć pasujący poprzedni komponent Windows
+   i jego znacznik zamiast bezwarunkowo usuwać tożsamość aplikacji.

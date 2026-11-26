@@ -1,6 +1,8 @@
 name: DevStack browser and real mailbox
 
 on:
+  push:
+    branches: [test/windows-local-notifications]
   pull_request:
     branches: [main]
     paths:

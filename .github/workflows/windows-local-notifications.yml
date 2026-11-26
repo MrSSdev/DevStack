@@ -22,6 +22,7 @@ jobs:
           $files = @(
               'windows/install-local-notifications.ps1',
               'windows/test-local-notification-launcher.ps1',
+              'windows/test-local-notification-installation.ps1',
               'scripts/windows-local-notification.ps1'
           )
           foreach ($file in $files) {
@@ -58,6 +59,11 @@ jobs:
               '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relative
           }
           Set-Content -LiteralPath (Join-Path $package 'SHA256SUMS.txt') -Value $hashes -Encoding Ascii
+      - name: Test Windows installation, migration, and notification setting handling
+        shell: powershell
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'devstack-local-notifications'
+          ./windows/test-local-notification-installation.ps1 -PackageRoot $package
       - uses: actions/upload-artifact@v4
         with:
           name: devstack-windows-local-notifications-${{ github.sha }}

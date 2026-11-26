@@ -2,7 +2,7 @@ name: DevStack Windows Widgets
 
 on:
   push:
-    branches: [main, feature/windows-widgets]
+    branches: [main, feature/windows-widgets, test/windows-local-notifications]
     paths: ['windows/widgets/**', '.github/workflows/widgets.yml']
   pull_request:
     paths: ['windows/widgets/**', '.github/workflows/widgets.yml']

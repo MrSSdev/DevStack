@@ -8,6 +8,24 @@ $ErrorActionPreference = 'Stop'
 $applicationId = 'DevStack.LocalNotifications'
 $registration = "HKCU:\Software\Classes\AppUserModelId\$applicationId"
 
+# On the first notification Windows may not have created per-app settings
+# yet (ERROR_NOT_FOUND, 0x80070490). Let WinRT itself enforce policy on
+# that single Show call. Every other error or explicit disabled setting
+# remains a failure. Do not change Windows notification preferences.
+function Assert-DevStackNotificationSetting([scriptblock]$ReadSetting) {
+    try {
+        $value = & $ReadSetting
+    } catch {
+        if ($_.Exception.GetBaseException().HResult.ToString('X8') -eq '80070490') {
+            return
+        }
+        throw
+    }
+    if ($null -eq $value -or $value.ToString() -ne 'Enabled') {
+        throw 'Windows notifications are disabled or unavailable for DevStack.'
+    }
+}
+
 function Read-DevStackNotice {
     $line = [Console]::ReadLine()
     if ([string]::IsNullOrEmpty($line) -or $line.Length -gt 256) {
@@ -107,7 +125,13 @@ try {
 $toast.Group = 'devstack'
 $manager = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
 $notifier = $manager::CreateToastNotifier($applicationId)
-if ($notifier.Setting.ToString() -ne 'Enabled') {
-    throw 'Windows notifications are disabled for DevStack.'
+# Reflection preserves the underlying HRESULT on Windows PowerShell 5.1;
+# ordinary property access can turn a failed WinRT getter into null.
+$type = $notifier.GetType()
+$setting = $type.GetProperty('Setting')
+$show = $type.GetMethod('Show', [type[]]@($toast.GetType()))
+if ($null -eq $setting -or $null -eq $show) {
+    throw 'Windows could not expose the notification API.'
 }
-$notifier.Show($toast)
+Assert-DevStackNotificationSetting { $setting.GetValue($notifier, $null) }
+$null = $show.Invoke($notifier, [object[]]@($toast))
