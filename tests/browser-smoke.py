@@ -527,7 +527,12 @@ class BrowserAcceptance(unittest.TestCase):
         source.click()
         source.press('Control+a')
         self.assertTrue(source.evaluate('e=>e.selectionStart===0&&e.selectionEnd===e.value.length&&document.activeElement===e'))
-        self.assertEqual(self.page.evaluate('window.getSelection().toString()'),'')
+        # Chromium also exposes the focused textarea selection through the
+        # document Selection API. It must contain only the source, not the
+        # surrounding mail reader or dashboard. The range and focus checks
+        # above independently verify that Ctrl+A selected the entire field.
+        self.assertEqual(self.page.evaluate('window.getSelection().toString()'),
+                         source.input_value())
         self.page.get_by_role('button',name='Usuń',exact=True).click()
         self.page.get_by_role('button',name='Anuluj',exact=True).click()
         self.assertEqual(mailpit()['total'],43)
