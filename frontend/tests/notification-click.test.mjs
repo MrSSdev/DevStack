@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { notificationClickId, notificationRouteHash } from '../src/lib/notification-client.ts'
+import ts from 'typescript'
+
+// Match the other frontend tests: use the project's compiler rather than
+// relying on native TypeScript loading (not available in every supported
+// Node 20/22 build or when native type stripping is disabled).
+const clientSource=readFileSync(new URL('../src/lib/notification-client.ts',import.meta.url),'utf8')
+const compiled=ts.transpileModule(clientSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText
+const { notificationClickId, notificationRouteHash } =
+  await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'))
 
 const base='https://devstack.test'
 const mailId='M'.repeat(22)

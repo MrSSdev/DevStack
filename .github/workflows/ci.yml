@@ -80,7 +80,9 @@ jobs:
           node-version: '24'
       - name: Resolve dependencies
         run: npm install --no-audit --no-fund
-      - name: Frontend regression tests
+      - name: Frontend regression tests (without native TypeScript loading)
+        env:
+          NODE_OPTIONS: --no-experimental-strip-types
         run: npm test
       - name: TypeScript and production Vite build
         run: npm run build
