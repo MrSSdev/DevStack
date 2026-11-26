@@ -34,3 +34,9 @@ NODE_EXTRA_CA_CERTS='/path/to/public/rootCA.pem' \
 This deliberately clears the entire Mailpit inbox, creates a project and
 database, changes theme/widget settings, stops/starts Redis and exercises the
 shared login limiter. Never run it against a personal or shared installation.
+
+The installed-stack workflow also reproduces a legacy root-owned, mode-0755
+`/var/lib/devstack-web` before applying the real privileged updater. It checks
+that directory ownership and permissions are repaired, the sandboxed collector
+completes successfully, the timer is active, and a previously stored SQLite
+preference survives the update. The real SMTP/browser scenarios run afterward.

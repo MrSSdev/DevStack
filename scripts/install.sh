@@ -179,6 +179,10 @@ systemctl reload nginx
 systemctl enable --now devstackd
 install -m 0644 -o root -g root /opt/devstack/scripts/devstack-notifications.{service,timer} /etc/systemd/system/
 systemctl daemon-reload
+# Initialize the journal with the actual unprivileged, sandboxed worker.
+systemctl start devstack-notifications.service
+[[ "$(systemctl show -p Result --value devstack-notifications.service)" == success ]]
+[[ "$(systemctl show -p ExecMainStatus --value devstack-notifications.service)" == 0 ]]
 systemctl enable --now devstack-notifications.timer
 curl -fsSk --resolve devstack.test:443:127.0.0.1 https://devstack.test/ | grep -q '<div id="root"></div>'
 systemctl --no-pager is-active devstackd nginx php8.5-fpm mariadb redis-server

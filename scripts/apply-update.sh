@@ -170,6 +170,19 @@ echo '[update] Swapping installed code and restarting the helper...'
 # Keep the previous application in /opt for same-filesystem atomic renames.
 if [[ "$notice_timer_was_active" -eq 1 ]]; then systemctl stop devstack-notifications.timer; fi
 systemctl stop devstack-notifications.service 2>/dev/null || true
+
+# Earlier installations can have a root-owned web state directory. The
+# unprivileged collector must be able to create/open its SQLite journal.
+# Repair only this fixed, private directory, never recursively chown its
+# contents or follow a symlink. Existing sessions, journals and keys stay put.
+if [[ -L /var/lib/devstack-web || ( -e /var/lib/devstack-web && ! -d /var/lib/devstack-web ) ]]; then
+  echo 'Unsafe DevStack web state directory; refusing update.' >&2
+  false
+fi
+install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web
+# Create a missing session directory as the web account, not as root.
+runuser -u devstackweb -- mkdir -p -m 0700 /var/lib/devstack-web/sessions
+
 old_moved=1
 mv -- /opt/devstack "$prior_dir"
 mv -- "$stage_dir" /opt/devstack
@@ -210,6 +223,11 @@ else
     cmp -s "/opt/devstack/scripts/$item" "/etc/systemd/system/$item" || { echo "Notification unit differs: $item" >&2; false; }
   done
 fi
+# A live timer alone is not proof that its one-shot worker can open SQLite.
+# Run the actual restricted systemd service before accepting the update.
+systemctl start devstack-notifications.service
+[[ "$(systemctl show -p Result --value devstack-notifications.service)" == success ]]
+[[ "$(systemctl show -p ExecMainStatus --value devstack-notifications.service)" == 0 ]]
 systemctl enable --now devstack-notifications.timer
 systemctl is-active --quiet devstack-notifications.timer
 

@@ -8,6 +8,11 @@ on:
       - 'backend/**'
       - 'daemon/**'
       - 'scripts/install.sh'
+      - 'scripts/apply-update.sh'
+      - 'scripts/update.sh'
+      - 'scripts/devstack-notifications.service'
+      - 'scripts/devstack-notifications.timer'
+      - 'scripts/notifications-worker.php'
       - 'scripts/install-mailpit.sh'
       - 'tests/browser-smoke.py'
       - '.github/workflows/browser.yml'
@@ -65,6 +70,23 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('DEVSTACK_E2E_PASSWORD=' + password + '\n')
           PY
+      - name: Verify legacy web-state permissions during a real update
+        run: |
+          sudo systemctl stop devstack-notifications.timer
+          sudo systemctl stop devstack-notifications.service
+          sudo -u devstackweb /usr/bin/php -r 'require "/opt/devstack/notifications.php"; $db = new DevStackNotices(); $db->setCategories(["mail"]);'
+          # Reproduce the existing-workstation failure without deleting any
+          # database content. This runner is a disposable installation.
+          sudo chown root:root /var/lib/devstack-web
+          sudo chmod 0755 /var/lib/devstack-web
+          mkdir -p "$HOME/projects/devstack-source"
+          cp -a backend daemon framework-installers scripts "$HOME/projects/devstack-source/"
+          (cd "$HOME/projects/devstack-source"; sudo bash scripts/apply-update.sh)
+          test "$(sudo stat -c '%U:%G:%a' /var/lib/devstack-web)" = 'devstackweb:devstackweb:700'
+          test "$(systemctl show -p Result --value devstack-notifications.service)" = success
+          test "$(systemctl show -p ExecMainStatus --value devstack-notifications.service)" = 0
+          systemctl is-active --quiet devstack-notifications.timer
+          sudo -u devstackweb /usr/bin/php -r 'require "/opt/devstack/notifications.php"; $db = new DevStackNotices(); if ($db->categories() !== ["mail"]) { exit(1); } $db->setCategories(DevStackNotices::CATEGORIES);'
       - name: Install browser tooling
         run: |
           python3 -m venv /tmp/devstack-browser-venv
@@ -78,7 +100,7 @@ jobs:
       - name: Diagnostics on failure
         if: failure()
         run: |
-          sudo journalctl -u devstackd -u nginx -u php8.5-fpm -u devstack-mailpit --no-pager -n 100
+          sudo journalctl -u devstackd -u nginx -u php8.5-fpm -u devstack-mailpit -u devstack-notifications.service --no-pager -n 100
           sudo tail -80 /var/log/nginx/error.log
       - uses: actions/upload-artifact@v4
         if: always()

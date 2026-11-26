@@ -74,6 +74,18 @@ are prerequisites. The timer may be checked with:
     systemctl status devstack-notifications.timer
     journalctl -u devstack-notifications.service --no-pager -n 30
 
+The installer and updater start the actual collector once before reporting
+success. A one-shot service normally returns to `inactive` with
+`Result=success` and `ExecMainStatus=0`. If an older installation reports
+SQLite "unable to open database file", inspect the private state directory:
+
+    sudo namei -l /var/lib/devstack-web/notifications.sqlite3
+
+The updater repairs the fixed directory to `devstackweb:devstackweb`, mode
+`0700`. It does not recursively change ownership or remove the journal,
+sessions, or VAPID key. A symlink or non-directory at that location is
+rejected. Do not run the collector manually as root.
+
 Do not copy the private journal, subscription endpoints or VAPID private
 key to a public repository. The update preserves this data and does not
 change Mailpit, application projects or Windows widgets.
