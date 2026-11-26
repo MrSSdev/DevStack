@@ -28,8 +28,8 @@ fi
 cd "$root"
 
 branch="$(git branch --show-current)"
-if [[ "$branch" != main && "$branch" != test/windows-local-notifications ]]; then
-  echo 'Update supports main or the verified local-notification test branch.' >&2
+if [[ "$branch" != main && "$branch" != test/windows-local-notifications && "$branch" != test/windows-component-layout ]]; then
+  echo 'Update supports main or an explicitly verified Windows integration test branch.' >&2
   exit 2
 fi
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
