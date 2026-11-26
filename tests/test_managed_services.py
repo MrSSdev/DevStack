@@ -54,17 +54,7 @@ class ManagedServiceTests(unittest.TestCase):
             for action in ('start','stop','restart'):
                 result=m.schedule('mailpit',action)
                 self.assertTrue(result['accepted'])
-                self.assertRegex(result['receipt'],r'^[a-f0-9]{32}
-                self.assertEqual(run.call_args.args[0][-4:],['/usr/bin/systemctl','--no-ask-password',action,'devstack-mailpit.service'])
-            for service,action in [('sshd','restart'),('mailpit.service','restart'),('nginx','reset-failed'),('nginx','--force'),([], 'restart')]:
-                with self.assertRaises(ValueError):m.schedule(service,action)
-            self.values['devstack-mailpit.service']['LoadState']='not-found'
-            with self.assertRaises(ValueError):m.schedule('mailpit','start')
-            self.assertEqual(run.call_count,3)
-        with patch.object(m,'units_snapshot',return_value=self.values),patch.object(m,'action_pending',return_value=True),patch.object(m.subprocess,'run') as run:
-            with self.assertRaises(RuntimeError):m.schedule('nginx','restart')
-            run.assert_not_called()
-)
+                self.assertRegex(result['receipt'],r'^[a-f0-9]{32}\Z')
                 self.assertTrue(any(arg.startswith('--property=ExecStopPost=/usr/bin/python3 -I ') and arg.endswith('mailpit '+action+' '+result['receipt']) for arg in run.call_args.args[0]))
                 self.assertEqual(run.call_args.args[0][-4:],['/usr/bin/systemctl','--no-ask-password',action,'devstack-mailpit.service'])
             for service,action in [('sshd','restart'),('mailpit.service','restart'),('nginx','reset-failed'),('nginx','--force'),([], 'restart')]:
