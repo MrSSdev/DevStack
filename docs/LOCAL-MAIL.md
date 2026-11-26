@@ -47,10 +47,13 @@ HTML independently of the dashboard theme. Supported bounded raster CID
 and data images are embedded without network requests. Remote HTTPS images
 are blocked by default; the per-message **Wczytaj obrazy zewnętrzne** action
 allows browser image requests and warns that they may contact sender servers
-or tracking pixels. External stylesheets and fonts, scripts, forms, active
-links, nested frames, SVG markup and refresh/base tags are not enabled.
-Use the current-message Mailpit shortcut for active links or unsupported
-email features. Browser preview is not an Outlook/Gmail compatibility test.
+or tracking pixels. Absolute HTTP(S) links open only on deliberate user
+navigation in a separate tab/window, preserving signed URLs. The preview
+has no scripts or same-origin permission; destinations have no opener or
+referrer. Relative, credentialed and non-HTTP(S) URLs are disabled. External
+stylesheets and fonts, forms, nested frames, SVG and refresh/base tags are
+blocked. Source HTML is shown in a read-only selectable text area. Use the
+current-message Mailpit shortcut for unsupported email features. Browser preview is not an Outlook/Gmail compatibility test.
 The preview requires PHP 8.5 XML/DOM (installed by fresh setup; existing
 installations lacking it must install php8.5-xml before updating).
 Attachment downloads are forced to be files rather than active documents.
