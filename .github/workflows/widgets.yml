@@ -7,12 +7,18 @@ on:
   pull_request:
     paths: ['windows/widgets/**', 'windows/windows-layout.ps1', 'windows/windows-layout-migration.ps1', 'windows/layout-directory-identity.cs', 'windows/notification-layout-copy.ps1', 'windows/migrate-notification-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/install-hosts-sync.ps1', 'windows/hosts-layout.ps1', 'windows/watch-hosts.ps1', 'windows/hosts-lib.ps1', '.github/workflows/widgets.yml']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      first_install:
+        description: Publish the fresh-installation package instead of CI artifacts
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: widgets-${{ github.ref }}
+  group: widgets-${{ github.ref }}-${{ inputs.first_install && 'first-install' || 'ci' }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +39,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ inputs.first_install && '0' || '1' }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -83,7 +92,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Approved DevStack visual/interaction tests failed' }
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && !inputs.first_install }}
         with:
           name: DevStack-WSL-Approved-Preview
           path: wsl-approved-previews/
@@ -91,7 +100,7 @@ jobs:
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && !inputs.first_install }}
         with:
           name: DevStack-Widgets-Preview
           path: widgets-previews/
@@ -99,7 +108,7 @@ jobs:
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && !inputs.first_install }}
         with:
           name: DevStack-Services-Approved-Preview
           path: services-approved-previews/
@@ -208,8 +217,23 @@ jobs:
           Write-Host 'Complete migration bundle verified before publication.'
 
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.first_install }}
         with:
           name: DevStack-Windows-Widgets-0.5.2.0-migration
           path: widgets-packages/install/
           retention-days: 14
           if-no-files-found: error
+
+      - name: Assemble and verify the first-installation package
+        if: ${{ inputs.first_install }}
+        shell: powershell
+        run: |
+          ./windows/Build-FirstInstallation.ps1 -WidgetBundle widgets-packages/install -OutputDirectory (Join-Path $env:RUNNER_TEMP 'devstack-first-installation')
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.first_install }}
+        with:
+          name: ${{ github.event_name == 'pull_request' && 'DevStack-First-Installation-x64-test' || 'DevStack-First-Installation-x64' }}
+          path: ${{ runner.temp }}/devstack-first-installation/
+          if-no-files-found: error
+          retention-days: 14

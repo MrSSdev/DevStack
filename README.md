@@ -20,6 +20,8 @@ Windows 11, WSL2 with Ubuntu 26.04 and systemd, an Ubuntu account with sudo acce
 
 ## Quick start
 
+For a first installation, run [**DevStack - First Installation Package**](https://github.com/MrSSdev/DevStack/actions/workflows/first-installation.yml) on `main`, download `DevStack-First-Installation-x64` and follow the included `START-HERE.md`. It contains a matching Git source bundle, Windows integration, signed optional widgets and optional local notification launcher. See [the complete guide](docs/FIRST-INSTALLATION-PACKAGE.md). The manual source-clone installation below is also supported.
+
 In Windows PowerShell as Administrator, install Ubuntu if needed:
 
 ```powershell
