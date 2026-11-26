@@ -49,11 +49,18 @@ marker survives password login and is consumed after acknowledgement.
 Opening a real mail toast also marks only its own event read. PHP tests
 cover closed-ID tombstones, late poll/operation/job requests, a remaining
 live tab, new lifetime registration and expired leases. A browser lifecycle
-scenario exercises the real authenticated beacon leave, rejects invalid
+scenario exercises the real authenticated service-worker leave, rejects invalid
 body CSRF/origin/content-type and unrelated API use, tests late API requests,
 blocked polling after pagehide, a synthetic BFCache-style pageshow, actual
-reload, deliberately dropped beacon recovery and real navigation away
-without a successor poll. It checks only lease presence in the isolated
-fixture database. The synthetic lifecycle events and a navigation away
-are not evidence of native Windows window closure or background throttling. The tests do not simulate or claim successful native
-Windows delivery.
+reload, recovery after deliberately dropping both document transports, navigation
+to `about:blank` without a successor poll, and closing one of two Chromium tabs
+while the other tab retains its lease. It checks only the fixture client IDs
+in the isolated database. Use an installed Edge PWA on the physical Windows
+device to validate window closure, background throttling, and WNS delivery.
+
+The failed run at `533b962` showed the navigation's leave request without
+an HTTP response in the Playwright trace. An isolated Nginx/PHP 8.5
+reproduction saw a trusted `pagehide` and a beacon accepted for queuing,
+followed by Chromium's `net::ERR_ABORTED` and no Nginx access-log entry.
+This also happened with Playwright routing disabled. The worker's
+request reached Nginx and PHP with the same session and received HTTP 200.

@@ -54,20 +54,26 @@ The browser and its push infrastructure require Internet connectivity,
 permission and OS notification settings. Only the existing five-second
 authenticated notification poll renews a page's 90-second presence lease;
 ordinary state requests and operation results do not. Minimized/hidden
-pages keep polling as their browser permits. On pagehide the panel stops
-polling, invalidates queued responses and queues an authenticated
-`navigator.sendBeacon` leave (falling back to the existing keepalive fetch
-if beacon cannot queue it). The beacon is a same-origin JSON POST; only
-that exact endpoint accepts the session-bound CSRF token in the body
-instead of the custom header. All other API CSRF rules remain unchanged.
+pages keep polling as their browser permits. On `pagehide` the panel stops
+polling, invalidates queued responses and sends the retiring ID and current
+CSRF token to its service worker in memory. The worker keeps the message
+event alive while it posts to `/api/notifications/leave` with the same-origin
+session cookie and the normal CSRF header. This lets the request run after
+the page closes or navigates away. Chromium can abort a document-owned
+beacon on navigation even after `sendBeacon` returns `true` (queued).
+An uncontrolled page or one with an older worker starts a keepalive fetch
+and can try a beacon if the fetch fails while the page still runs. Only the
+leave endpoint also accepts a session-bound CSRF token in a JSON body,
+with an explicit matching origin, for this fallback.
 The journal atomically removes the lease and remembers the closed document
 ID for 24 hours, so delayed polls cannot reactivate it within that period.
 The document also records up to 16 explicitly retired IDs in tab-local
 sessionStorage (no token or live ID). If a teardown request was lost, the
 next authenticated poll after a reload/restoration atomically retires these
 IDs with its new heartbeat, then clears the acknowledged IDs. A restored
-page (including BFCache) or a new login uses a fresh lifetime ID. A hidden visibility transition
-alone is not a close. If the browser fails to deliver leave, crashes,
+page (including BFCache) or a new login uses a fresh lifetime ID. A hidden
+visibility transition keeps the existing lease and polling behavior. If the
+browser fails to deliver leave, crashes,
 freezes or throttles/suspends a page beyond the lease interval, presence
 can still be inaccurate; a missed leave expires after at most the remaining
 lease interval, and a frozen open page may receive system push instead of

@@ -55,6 +55,9 @@ export function acknowledgeOperation(id:unknown,csrf:string,client=notificationC
 // ID or a CSRF token. Duplicated tabs can copy sessionStorage safely: these
 // IDs already belong to stopped lifetimes. Storage is best effort.
 const retiredKey='devstack:retired-notification-clients'
+// An older controller can remain active briefly during an update. Use the
+// script URL to distinguish workers that can handle the leave message.
+const pwaWorker='/sw.js?presence=1'
 export function retiredNotificationClients():string[]{
   try{
     const value:unknown=JSON.parse(sessionStorage.getItem(retiredKey)??'[]')
@@ -70,19 +73,29 @@ function saveRetiredNotificationClients(ids:string[]){
 export function acknowledgeRetiredNotificationClients(ids:string[]){
   if(ids.length)saveRetiredNotificationClients(retiredNotificationClients().filter(id=>!ids.includes(id)))
 }
-export function leaveNotifications(csrf:string,client=notificationClient){
+export async function leaveNotifications(csrf:string,client=notificationClient){
   if(!csrf)return
   saveRetiredNotificationClients([...retiredNotificationClients(),client])
-  // Beacon is designed to queue small POSTs across document teardown.
-  // true means queued, not delivered. A later authenticated poll also
-  // reconciles explicitly retired IDs if an unload request was lost.
+  const controller=navigator.serviceWorker?.controller
+  if(controller?.scriptURL===new URL(pwaWorker,window.location.origin).href){
+    try{
+      controller.postMessage({type:'devstack:notification-leave',client,csrf})
+      return
+    }catch{/* Fall through to the document transport. */}
+  }
+  // An uncontrolled page or one with an older worker can still send leave.
   try{
-    if(typeof navigator.sendBeacon==='function'&&navigator.sendBeacon('/api/notifications/leave',
-      new Blob([JSON.stringify({client,csrf})],{type:'application/json'})))return
-  }catch{/* Fall back to the existing header-authenticated keepalive. */}
-  void fetch('/api/notifications/leave',{method:'POST',credentials:'same-origin',keepalive:true,
-    headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
-    body:JSON.stringify({client})}).catch(()=>undefined)
+    await fetch('/api/notifications/leave',{method:'POST',credentials:'same-origin',keepalive:true,
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+      body:JSON.stringify({client})})
+  }catch{
+    // Try beacon if fetch fails while this document can still run code.
+    // The next authenticated poll or lease expiry covers a lost request.
+    try{
+      navigator.sendBeacon?.('/api/notifications/leave',
+        new Blob([JSON.stringify({client,csrf})],{type:'application/json'}))
+    }catch{/* Best effort during document teardown. */}
+  }
 }
 
 export async function updateAppBadge(count:number){
@@ -95,7 +108,7 @@ export async function updateAppBadge(count:number){
 
 export function registerPwa(){
   if('serviceWorker' in navigator&&window.isSecureContext){
-    void navigator.serviceWorker.register('/sw.js',{scope:'/',updateViaCache:'none'}).catch(()=>undefined)
+    void navigator.serviceWorker.register(pwaWorker,{scope:'/',updateViaCache:'none'}).catch(()=>undefined)
   }
 }
 function decodeKey(key:string):Uint8Array<ArrayBuffer>{
@@ -106,7 +119,7 @@ async function readyWorker(){
   if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){
     throw new Error('Ta przeglądarka nie obsługuje powiadomień Web Push.')
   }
-  await navigator.serviceWorker.register('/sw.js',{scope:'/',updateViaCache:'none'})
+  await navigator.serviceWorker.register(pwaWorker,{scope:'/',updateViaCache:'none'})
   return await new Promise<ServiceWorkerRegistration>((resolve,reject)=>{
     const timer=window.setTimeout(()=>reject(new Error('Service worker nie jest jeszcze aktywny. Odśwież aplikację.')),10000)
     void navigator.serviceWorker.ready.then(reg=>{window.clearTimeout(timer);resolve(reg)},error=>{window.clearTimeout(timer);reject(error)})

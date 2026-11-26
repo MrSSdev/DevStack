@@ -3,6 +3,16 @@
 'use strict';
 self.addEventListener('install',event=>event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
+self.addEventListener('message',event=>{
+  const {type,client,csrf}=event.data??{};
+  if(type!=='devstack:notification-leave'||event.origin!==self.location.origin||event.source?.type!=='window'||
+    typeof client!=='string'||!/^[a-f0-9]{32}$/.test(client)||typeof csrf!=='string'||!/^[a-f0-9]{64}$/.test(csrf))return;
+  // Start the authenticated request in the worker. Chromium can cancel a
+  // beacon sent by the departing document even after accepting it to queue.
+  event.waitUntil(fetch('/api/notifications/leave',{method:'POST',credentials:'same-origin',
+    headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+    body:JSON.stringify({client})}).catch(()=>undefined));
+});
 self.addEventListener('fetch',event=>{
   const url=new URL(event.request.url);
   if(event.request.method!=='GET'||event.request.mode!=='navigate'||url.origin!==self.location.origin||url.pathname!=='/')return;

@@ -28,7 +28,7 @@ function worker(existing=false){
     clients:{matchAll:async()=>existing?[client]:[],openWindow:async url=>calls.push(['open',url])},
     addEventListener:(type,handler)=>listeners.set(type,handler)
   }
-  vm.runInNewContext(source,{self,URL})
+  vm.runInNewContext(source,{self,URL,fetch:async(url,options)=>calls.push(['fetch',url,options])})
   return {calls,dispatch:async(type,event)=>{
     let done
     listeners.get(type)({...event,waitUntil:p=>{done=p}})
@@ -68,4 +68,25 @@ test('fragment parser keeps the normal route and validates the complete journal 
   assert.equal(notificationClickId('#/unknown?notice='+id),undefined)
   assert.equal(notificationClickId(hash+'&other=1'),undefined)
   assert.equal(notificationClickId('#/mail/'+mailId),undefined)
+})
+
+test('worker leaves only the named client with the existing session and CSRF header',async()=>{
+  const w=worker()
+  const client='c'.repeat(32)
+  const csrf='a'.repeat(64)
+  const data={type:'devstack:notification-leave',client,csrf,url:'https://example.invalid/'}
+  const event={data,origin:base,source:{type:'window'}}
+  await w.dispatch('message',{...event,origin:'https://example.invalid'})
+  await w.dispatch('message',{...event,source:{type:'worker'}})
+  await w.dispatch('message',{...event,data:{...data,csrf:'invalid'}})
+  await w.dispatch('message',{...event,data:{...data,client:'invalid'}})
+  assert.deepEqual(w.calls,[])
+  await w.dispatch('message',event)
+  const [[operation,url,options]]=w.calls
+  assert.equal(operation,'fetch')
+  assert.equal(url,'/api/notifications/leave')
+  assert.equal(options.method,'POST')
+  assert.equal(options.credentials,'same-origin')
+  assert.equal(options.headers['X-CSRF-Token'],csrf)
+  assert.deepEqual(JSON.parse(options.body),{client})
 })

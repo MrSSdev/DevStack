@@ -72,7 +72,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
       // Stop before sending leave. An in-flight response must not schedule
       // another heartbeat or update the closed page.
       suspended.current=true;generation.current++;queued.current=false;stop()
-      leaveNotifications(csrf,notificationClient)
+      void leaveNotifications(csrf,notificationClient)
     }
     const restore=()=>{
       if(suspended.current){

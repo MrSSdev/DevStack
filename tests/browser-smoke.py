@@ -825,13 +825,15 @@ class BrowserAcceptance(unittest.TestCase):
             client=other.value.request.post_data_json['client']
             self.assertNotEqual(original,client)
             self.assertTrue(present(client))
+            second.wait_for_function('navigator.serviceWorker.controller !== null')
             requests=[]
             second.on('request',lambda req: requests.append(req.url) if req.url==BASE+'/api/notifications/poll' else None)
             # Drive the actual pagehide handler deterministically, leaving the
             # test document available to exercise a BFCache-style restoration.
-            with second.expect_response(lambda r:r.url==BASE+'/api/notifications/leave' and r.status==200) as leave:
+            with self.context.expect_event('response',lambda r:r.url==leave_url and r.status==200) as leave:
                 second.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}))")
             self.assertEqual(leave.value.request.post_data_json['client'],client)
+            self.assertIsNotNone(leave.value.request.service_worker)
             wait_presence(client,False)
             self.assertTrue(present(original))
             # Replay an older request at the authenticated API boundary.
@@ -861,9 +863,15 @@ class BrowserAcceptance(unittest.TestCase):
             wait_presence(resumed,False)
             self.assertTrue(present(fresh))
             self.assertTrue(present(original))
-            # Deliberately lose the next beacon: a true result merely means
-            # "queued". The real next authenticated poll must recover it.
-            second.evaluate("Object.defineProperty(navigator,'sendBeacon',{configurable:true,value:()=>true})")
+            # Exercise the uncontrolled-document fallback and deliberately
+            # lose its beacon. The next authenticated poll must recover it.
+            second.evaluate("""() => {
+                Object.defineProperty(navigator.serviceWorker,'controller',{get:()=>null});
+                const request=window.fetch;
+                window.fetch=(url,options)=>url==='/api/notifications/leave'
+                    ? Promise.reject(new TypeError('Fixture drops leave fetch')) : request(url,options);
+                Object.defineProperty(navigator,'sendBeacon',{value:()=>true});
+            }""")
             with second.expect_response(poll_response) as recovered:
                 second.reload()
             latest=recovered.value.request.post_data_json['client']
@@ -873,12 +881,26 @@ class BrowserAcceptance(unittest.TestCase):
             self.assertTrue(present(latest))
             self.assertTrue(present(original))
             # Real navigation away with no DevStack successor: no recovery
-            # poll is available, so the browser must deliver the leave itself.
+            # poll is available. The worker must deliver this leave.
+            second.wait_for_function('navigator.serviceWorker.controller !== null')
             second.goto('about:blank')
             wait_presence(latest,False)
             self.assertTrue(present(original))
+            self.assertEqual(self.post('/api/notifications/poll',{'client':latest}).status,200)
+            self.assertFalse(present(latest))
+
+            with second.expect_response(poll_response) as reopened:
+                second.goto(BASE+'/#/dashboard')
+            closing=reopened.value.request.post_data_json['client']
+            self.assertNotIn(closing,[original,client,resumed,fresh,latest])
+            self.assertTrue(present(closing))
+            second.wait_for_function('navigator.serviceWorker.controller !== null')
+            with second.expect_event('close'):
+                second.close(run_before_unload=True)
+            wait_presence(closing,False)
+            self.assertTrue(present(original))
         finally:
-            second.close()
+            if not second.is_closed():second.close()
 
     def test_05_login_screen_and_form(self):
         anonymous=self.browser.new_context(viewport={'width':853,'height':950})
