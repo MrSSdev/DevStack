@@ -47,24 +47,69 @@ $registryFixture = @{}
 $capabilityFixture = @()
 $readFixture = { param($path, $name) $registryFixture["$path|$name"] }
 $listFixture = { $capabilityFixture }
+$packageFixture = @()
+$packagesFixture = { $packageFixture }
 $choicePath = 'HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\web+devstack\UserChoice|ProgId'
 $commandPath = 'HKEY_CLASSES_ROOT\DevStack.Fixture\shell\open\command|'
 $capability = 'Software\DevStackFixture\Capabilities'
 $capabilityPath = "HKEY_CURRENT_USER\$capability\URLAssociations|web+devstack"
-Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture)) 'No association should fall back to HTTPS'
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'No association should fall back to HTTPS'
 $registryFixture[$choicePath] = 'DevStack.Fixture'
-Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture)) 'Stale UserChoice should fall back to HTTPS'
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Stale UserChoice should fall back to HTTPS'
 $registryFixture[$commandPath] = '"C:\fixture.exe" "%1"'
-Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture) 'Existing UserChoice should prefer PWA'
+Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture) 'Existing UserChoice should prefer PWA'
 $registryFixture.Remove($choicePath)
 $capabilityFixture = @($capability)
 $registryFixture[$capabilityPath] = 'DevStack.Fixture'
-Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture) 'Registered PWA without UserChoice should prefer PWA'
+Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture) 'Registered PWA without UserChoice should prefer PWA'
 $registryFixture.Remove($commandPath)
-Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture)) 'Removed PWA should fall back to HTTPS'
-Assert-True (-not (Test-DevStackPwaProtocol { throw 'registry unavailable' } $listFixture)) 'Registry failure should fall back to HTTPS'
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Removed PWA should fall back to HTTPS'
+Assert-True (-not (Test-DevStackPwaProtocol { throw 'registry unavailable' } $listFixture $packagesFixture)) 'Registry failure should fall back to HTTPS'
 $registryFixture['HKEY_CLASSES_ROOT\web+devstack\shell\open\command|'] = '"C:\fixture.exe" "%1"'
-Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture) 'Direct protocol class should prefer PWA'
+Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture) 'Direct protocol class should prefer PWA'
+
+# Reproduce the actual Edge AppX registration observed on the ASUS.
+# There is no UserChoice, RegisteredApplications entry or default shell
+# command. The package and ProgID are deliberately different from the PC.
+$registryFixture.Clear()
+$capabilityFixture = @()
+$package = 'devstack.test-A1B2C3D4_2.3.4.5_neutral__fixture123456'
+$packageFixture = @($package)
+$progId = 'AppXFixture123456789'
+$association = 'HKEY_CURRENT_USER\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\' + $package + '\App\Capabilities\URLAssociations|web+devstack'
+$openPath = 'HKEY_CLASSES_ROOT\' + $progId + '\Shell\open'
+$registryFixture['HKEY_CLASSES_ROOT\web+devstack|URL Protocol'] = ''
+$registryFixture[$association] = $progId
+$registryFixture["$openPath|PackageId"] = $package
+$registryFixture["$openPath|ContractId"] = 'Windows.Protocol'
+$delegatePath = $openPath + '\command|DelegateExecute'
+$registryFixture[$delegatePath] = '{11111111-2222-3333-4444-555555555555}'
+Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture) 'Edge AppX without classic command or UserChoice must prefer PWA'
+$sampleEvent = [pscustomobject]@{ category = 'mail'; id = 'mail-AbCdEf0123456789AaBbCc'; kind = 'info' }
+[xml]$appxToast = New-DevStackToastXml $sampleEvent (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)
+Assert-True ($appxToast.toast.launch -ceq 'web+devstack://open/mail/AbCdEf0123456789AaBbCc?notice=mail-AbCdEf0123456789AaBbCc') 'Actual AppX detection must select the protocol in generated XML'
+$packageFixture = @()
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Removed AppX package must fall back to HTTPS even if the class remains'
+$packageFixture = @($package)
+$registryFixture["$openPath|PackageId"] = 'unrelated.package'
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Mismatched AppX package must not select PWA'
+$registryFixture["$openPath|PackageId"] = $package
+$registryFixture["$openPath|ContractId"] = 'Windows.Launch'
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Non-protocol AppX contract must fall back'
+$registryFixture["$openPath|ContractId"] = 'Windows.Protocol'
+$registryFixture[$delegatePath] = 'invalid'
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Invalid delegate must fall back'
+$registryFixture.Remove($delegatePath)
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Missing AppX delegate must fall back'
+$registryFixture[$delegatePath] = '{11111111-2222-3333-4444-555555555555}'
+$registryFixture.Remove($association)
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'A registered scheme alone does not prove an AppX handler'
+$unrelated = 'other.test-A1B2C3D4_2.3.4.5_neutral__fixture123456'
+$packageFixture = @($unrelated)
+$registryFixture[$association.Replace($package,$unrelated)] = $progId
+$registryFixture["$openPath|PackageId"] = $unrelated
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture $packagesFixture)) 'Unrelated AppX package must not select DevStack PWA'
+Write-Output 'Edge AppX capability and delegated protocol activation: OK.'
 
 $cases = @(
     @{ category = 'mail'; id = 'mail-AbCdEf0123456789AaBbCc'; route = '/mail/AbCdEf0123456789AaBbCc' },

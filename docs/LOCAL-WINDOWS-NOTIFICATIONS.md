@@ -30,7 +30,12 @@ nadal otwierał przeglądarkę.
 
 Nowy dymek wybiera protokół PWA przy wykryciu skojarzenia Windows
 (UserChoice, bezpośrednia klasa lub per-user RegisteredApplications
-z istniejącym shell/open/command). Jest to odczyt rejestru, nie
+z istniejącym shell/open/command lub pakiet AppX z rejestracją
+protokołu w AppModel Repository, zgodnym PackageId, ContractId
+Windows.Protocol i DelegateExecute). ASUS po aktualizacji d642089:
+Render nadal generował HTTPS. Diagnostyka potwierdziła pakiet Edge PWA,
+AppX ProgID bez domyślnej komendy i brak UserChoice. Nowy test odtwarza
+ten układ bez identyfikatorów konkretnej instalacji. Jest to odczyt rejestru, nie
 uruchomienie komendy ani modyfikacja skojarzeń. Brak rejestracji
 lub błąd odczytu daje HTTPS. Akcja Otworz w przegladarce zachowuje
 dokładnie tę samą trasę i ID; stan skojarzenia może się zmienić

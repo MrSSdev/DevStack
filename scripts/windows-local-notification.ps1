@@ -57,11 +57,39 @@ function Test-DevStackPwaProtocol(
                 foreach ($name in $key.GetValueNames()) { $key.GetValue($name) }
             } finally { $key.Dispose() }
         }
+    },
+    [scriptblock]$ReadPackages = {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages')
+        if ($null -ne $key) {
+            try { $key.GetSubKeyNames() } finally { $key.Dispose() }
+        }
     }
 ) {
     try {
         $scheme = 'web+devstack'
         $classes = 'HKEY_CLASSES_ROOT\'
+        # Edge on Windows 11 may install a PWA as an AppX package. Its
+        # per-user capabilities are in AppModel\Repository\Packages, not
+        # RegisteredApplications. The ProgID uses DelegateExecute instead
+        # of a default shell command, even before UserChoice is created.
+        # Match the fixed DevStack origin, not a machine-specific package,
+        # Edge app ID, ProgID, version, publisher hash or COM delegate.
+        $repository = 'HKEY_CURRENT_USER\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\'
+        foreach ($package in @(& $ReadPackages)) {
+            if ($package -isnot [string] -or $package -notmatch '\Adevstack\.test-[A-Za-z0-9_.-]{1,220}\z') { continue }
+            $progId = & $ReadValue ($repository + $package + '\App\Capabilities\URLAssociations') $scheme
+            if ($progId -isnot [string] -or $progId -notmatch '\AAppX[A-Za-z0-9]{1,128}\z') { continue }
+            $open = $classes + $progId + '\Shell\open'
+            $packageId = & $ReadValue $open 'PackageId'
+            $contract = & $ReadValue $open 'ContractId'
+            $delegate = & $ReadValue ($open + '\command') 'DelegateExecute'
+            if ($packageId -is [string] -and $packageId -ieq $package -and
+                $contract -is [string] -and $contract -ieq 'Windows.Protocol' -and
+                $delegate -is [string] -and
+                $delegate -match '\A\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}\z') {
+                return $true
+            }
+        }
         $choice = & $ReadValue 'HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\web+devstack\UserChoice' 'ProgId'
         $candidates = @($choice, $scheme)
         foreach ($capability in @(& $ReadCapabilities)) {
