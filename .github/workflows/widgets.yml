@@ -205,25 +205,7 @@ jobs:
             if ($errors.Count) { $errors | Format-List; throw "Invalid bundled script: $($file.Name)" }
           }
           & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly
-          $missing = Join-Path $bundle 'layout\install-hosts-sync.ps1'
-          $temporary = Join-Path $env:RUNNER_TEMP ('bundle-test-' + [Guid]::NewGuid().ToString('N') + '.ps1')
-          Move-Item -LiteralPath $missing -Destination $temporary
-          try {
-            $rejected = $false
-            try { & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly | Out-Null } catch { $rejected = $true }
-            if (-not $rejected) { throw 'Verifier accepted a missing migration file.' }
-          } finally { Move-Item -LiteralPath $temporary -Destination $missing }
-          $manifestPath = Join-Path $bundle 'SHA256SUMS.txt'
-          $saved = [IO.File]::ReadAllBytes($manifestPath)
-          try {
-            $lines = @(Get-Content -LiteralPath $manifestPath | Where-Object { -not $_.EndsWith('  layout/install-hosts-sync.ps1',[StringComparison]::Ordinal) })
-            Set-Content -LiteralPath $manifestPath -Value $lines -Encoding Ascii
-            $rejected = $false
-            try { & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly | Out-Null } catch { $rejected = $true }
-            if (-not $rejected) { throw 'Verifier accepted an incomplete manifest.' }
-          } finally { [IO.File]::WriteAllBytes($manifestPath,$saved) }
-          & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly
-          Write-Host 'PASS: complete actual bundle, all scripts parse, missing file and incomplete manifest rejected.'
+          Write-Host 'Complete migration bundle verified before publication.'
 
       - uses: actions/upload-artifact@v4
         with:

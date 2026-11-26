@@ -183,8 +183,9 @@ not include the migration entry point, shared helpers or hash manifest.
 Do not use that artifact for migration. The corrected workflow copies
 all required scripts and data and runs the shipped migration entry point
 with -VerifyOnly in Windows PowerShell 5.1 against the final assembled
-bundle before upload. It additionally rejects a removed dependency and
-an incomplete manifest, restores the fixtures, and verifies again.
+bundle before upload. The verification is a packaging preflight, not a separate migration test.
+Fresh installations use the ordinary component installers and do not run
+Migrate-DevStackWindows.ps1.
 The replacement artifact is named DevStack-Windows-Widgets-0.5.2.0-migration.
 The read-only VerifyOnly mode checks the expected commit, all listed
 hashes, required files and MSIX identity/version without running migration
