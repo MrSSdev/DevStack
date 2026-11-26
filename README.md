@@ -58,6 +58,19 @@ Readings refresh while the panel is open. Start Ubuntu explicitly when you want 
 
 Create a project in the dashboard. The folder identifier follows the project name as you type, and the local .test domain follows the identifier. Either field can be edited independently and restored to automatic generation. Choose the document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Operation feedback is shown in shared shadcn/Base UI toast notifications, visible across views and while scrolling. Installer progress cannot be dismissed and has no timeout; its existing toast becomes a six-second success notice only after the server confirms completion. Installer failures stay until dismissed so their log details remain available. Other short success and error notices expire automatically and pause on hover/focus. Confirmations and service-state indicators remain in their original controls. Save your work before stopping Ubuntu or restarting services.
 
+## Installable app and notifications
+
+DevStack is installable as a PWA from Edge at https://devstack.test. It uses
+the same authenticated panel, with its own Start/taskbar icon and window.
+The header bell opens the local event history. Read, delete individual
+entries or clear all without touching projects or Mailpit. Toasts continue
+to show operation progress; new mail and service failures also appear when
+the panel is open. See [Notifications and PWA](docs/NOTIFICATIONS.md).
+
+Optional browser Web Push requires `sudo apt install python3-pywebpush`
+on Ubuntu 26.04 and explicit activation in Settings → Notifications.
+No subscription or Internet delivery is enabled by default.
+
 ## Local test email (optional)
 
 Install Mailpit once in Ubuntu from a reviewed checkout:

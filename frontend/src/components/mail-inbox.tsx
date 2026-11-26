@@ -13,7 +13,7 @@ type Summary={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null
 type Message={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null; Cc?:Address[]|null; Bcc?:Address[]|null; Date?:string; Text?:string; HTML?:string; Attachments?:Attachment[]|null; Inline?:Attachment[]|null}
 type Page={total:number; unread:number; messages_count:number; start:number; messages:Summary[]|null}
 type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown)=>Promise<T>
-type Props={status?:string; csrf:string; request:Request; refreshStatus:()=>void}
+type Props={initialMessage?:string;status?:string; csrf:string; request:Request; refreshStatus:()=>void}
 
 const idPattern=/^[A-Za-z0-9]{22}$/
 const partPattern=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -24,13 +24,13 @@ const messageDate=(s?:string)=>s&&!Number.isNaN(Date.parse(s))?new Date(s).toLoc
 function address(a?:Address|null):string{return a?(a.Name&&a.Address?a.Name+' <'+a.Address+'>':a.Address||a.Name||'—'):'—'}
 function addresses(a?:Address[]|null):string{return Array.isArray(a)?a.map(address).join(', '):'—'}
 
-export function MailInbox({status,csrf,request,refreshStatus}:Props){
+export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:Props){
   const [query,setQuery]=useState('')
   const [appliedQuery,setAppliedQuery]=useState('')
   const [start,setStart]=useState(0)
   const [revision,setRevision]=useState(0)
   const [page,setPage]=useState<Page|null>(null)
-  const [selected,setSelected]=useState('')
+  const [selected,setSelected]=useState(idPattern.test(initialMessage)?initialMessage:'')
   const [message,setMessage]=useState<Message|null>(null)
   const [format,setFormat]=useState<'html'|'text'|'source'>('html')
   const [externalImagesFor,setExternalImagesFor]=useState('')
@@ -45,7 +45,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
   const active=status==='active'
 
   useEffect(()=>{
-    if(!active){setPage(null);setSelected('');setMessage(null);setLoading(false);return}
+    if(!active){setPage(null);if(status!==undefined)setSelected('');setMessage(null);setLoading(false);return}
     let disposed=false
     setLoading(true);setListError('')
     const params=new URLSearchParams({start:String(start),query:appliedQuery})
@@ -85,7 +85,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
   const refresh=()=>{setRevision(v=>v+1);refreshStatus()}
   function search(e:FormEvent){e.preventDefault();setChecked([]);setStart(0);setAppliedQuery(query.trim());setRevision(v=>v+1)}
   function changePage(next:number){setChecked([]);setStart(next)}
-  function back(){setSelected('');setMessage(null);setConfirmDelete(null);setRevision(v=>v+1)}
+  function back(){if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(window.location.hash))window.location.hash='/mail';setSelected('');setMessage(null);setConfirmDelete(null);setRevision(v=>v+1)}
   async function remove(){
     if(deleting||!confirmDelete)return
     const mode=confirmDelete
@@ -97,6 +97,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
       if(mode==='all')await request('POST','/api/mail/clear',csrf,{confirmation:'delete-all'})
       else if(mode==='one')await request('POST','/api/mail/delete',csrf,{id:ids[0]})
       else await request('POST','/api/mail/delete-many',csrf,{ids})
+      if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(window.location.hash))window.location.hash='/mail'
       setSelected('');setMessage(null);setConfirmDelete(null);setChecked([])
       if(mode==='all'){setQuery('');setAppliedQuery('');setStart(0)}
       else if(messages.every(m=>ids.includes(m.ID))&&start>0)setStart(Math.max(0,start-pageSize))

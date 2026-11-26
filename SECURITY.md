@@ -74,6 +74,22 @@ message opening to a sender or tracker. No referrer is sent. External
 stylesheets, fonts, scripts and active links remain blocked; ordinary
 attachment downloads retain their attachment disposition.
 
+### Notification journal and PWA
+
+The authenticated, CSRF-protected notification API stores bounded events
+in the existing private devstackweb directory. The unprivileged systemd
+timer polls the fixed Mailpit API and read-only daemon snapshot; no worker
+starts WSL or executes arbitrary user commands. No browser-provided notice
+text or route is stored. Clear/delete remove records, not underlying
+resources. The PWA service worker does not cache authenticated content.
+Optional Web Push needs explicit browser permission and a local
+subscription; the sender validates provider host, scheme and key lengths
+at both boundaries, disables redirects and proxy environment, and only
+sends generic event identifiers and category/severity. The private VAPID
+key and endpoint credentials must not be shared. Presence leases and
+short delivery TTL reduce duplicate/system notifications; closed-window
+detection is best-effort, not an authorization boundary.
+
 ## Windows integration and widgets
 
 Review privileged installation scripts. Verify the public mkcert CA fingerprint before importing it into Windows. Keep the private CA key inside Ubuntu. Install the widget MSIX using its matching public code-signing certificate and installer from the same trusted build.

@@ -20,7 +20,7 @@ if [[ -e /etc/devstack/server.json || -e /etc/nginx/sites-available/devstack-man
   echo 'Existing DevStack installation found. Installer refuses overwrite.' >&2
   exit 1
 fi
-if [[ ! -f "$SRC/backend/public/index.html" ]] || [[ ! -d "$SRC/backend/public/assets" ]]; then
+if [[ ! -f "$SRC/backend/public/index.html" ]] || [[ ! -d "$SRC/backend/public/assets" ]] || [[ ! -f "$SRC/backend/public/sw.js" ]] || [[ ! -f "$SRC/backend/public/manifest.webmanifest" ]]; then
   echo 'Frontend is not built. First run bash scripts/build-frontend.sh as normal user.' >&2
   exit 1
 fi

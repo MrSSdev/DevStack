@@ -42,7 +42,7 @@ if [[ -L "$src/framework-installers" || -L "$src/framework-installers/laravel" ]
   exit 1
 fi
 
-for file in backend/public/index.php backend/public/index.html backend/security.php backend/mail-preview.php backend/notifications.php backend/push-helper.php \
+for file in backend/public/index.php backend/public/index.html backend/public/sw.js backend/public/manifest.webmanifest backend/public/pwa/icon-192.png backend/public/pwa/icon-512.png backend/public/pwa/devstack.svg backend/security.php backend/mail-preview.php backend/notifications.php backend/push-helper.php \
     daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
     scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/notification-push.py scripts/devstack-notifications.service scripts/devstack-notifications.timer; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
@@ -95,6 +95,7 @@ rollback() {
       echo 'CRITICAL: automatic rollback failed; restore from protected backup!' >&2
     fi
   fi
+  if [[ "$notice_timer_was_active" -eq 1 ]]; then systemctl start devstack-notifications.timer; fi
   if [[ -d "$stage_dir" ]]; then rm -rf -- "$stage_dir"; fi
   if [[ -d "$stage_dir.failed" ]]; then rm -rf -- "$stage_dir.failed"; fi
   echo "Previous-code backup: $backup_dir/installed" >&2
@@ -116,6 +117,10 @@ for item in notifications.php push-helper.php; do
 done
 install -m 0644 -o root -g root "$src/backend/public/index.php" "$stage_dir/public/index.php"
 install -m 0644 -o root -g root "$src/backend/public/index.html" "$stage_dir/public/index.html"
+install -d -m 0755 -o root -g root "$stage_dir/public/pwa"
+for item in sw.js manifest.webmanifest pwa/icon-192.png pwa/icon-512.png pwa/devstack.svg; do
+  install -m 0644 -o root -g root "$src/backend/public/$item" "$stage_dir/public/$item"
+done
 install -m 0644 -o root -g root "$src/daemon/devstackd.py" "$stage_dir/daemon/devstackd.py"
 install -m 0644 -o root -g root "$src/daemon/project_frameworks.py" "$stage_dir/daemon/project_frameworks.py"
 install -m 0644 -o root -g root "$src/daemon/managed_services.py" "$stage_dir/daemon/managed_services.py"

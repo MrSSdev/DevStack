@@ -18,16 +18,20 @@ import { acknowledgeJob, readAcknowledgedJob, rememberVisibleSuccess, showJobNot
 import { frameworkWebroot, resolveInstallerFields, type InstallerField, type InstallerValues } from '@/lib/installer-options'
 import { resolveProjectIdentity, projectIdentityPayload, type ProjectIdentityDraft } from '@/lib/project-identity'
 import { MailInbox } from '@/components/mail-inbox'
+import { NotificationCenter, NotificationSettings, useNotificationCenter } from '@/components/notification-center'
+import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange } from '@/lib/notification-client'
 import { PageHeader } from '@/components/page-header'
 import { ManagedServices, WidgetServiceSettings, type ManagedService } from '@/components/managed-services'
 
 type View = 'dashboard' | 'projects' | 'new' | 'project' | 'mail' | 'settings'
-const settingsTabs=[{id:'environment',label:'Środowisko'},{id:'installers',label:'Instalatory'},{id:'windows',label:'Windows'},{id:'widgets',label:'Widżety'},{id:'security',label:'Bezpieczeństwo'}] as const
+const settingsTabs=[{id:'environment',label:'Środowisko'},{id:'installers',label:'Instalatory'},{id:'windows',label:'Windows'},{id:'widgets',label:'Widżety'},{id:'notifications',label:'Powiadomienia'},{id:'security',label:'Bezpieczeństwo'}] as const
 type SettingsTab=typeof settingsTabs[number]['id']
 
 // The native Windows Widgets link to /#/projects and /#/new. Keep this
 // routing entirely client-side: no new server endpoints or auth bypass.
 function viewFromHash(): View {
+  if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(window.location.hash))return 'mail'
+  if(/^#\/project\/[a-z][a-z0-9-]{1,39}$/.test(window.location.hash))return 'project'
   switch (window.location.hash) {
     case '#/projects': return 'projects'
     case '#/new': return 'new'
@@ -48,8 +52,8 @@ type StarterKit = { id:string; label:string }
 type ToolInfo = { composer: boolean; installed: string|null; latest?: string|null; starter_kits?:StarterKit[]|null; installer_options?:InstallerField[]|null }
 type EngineDefinition = { label:string; tool:string; webroot:string; default_option:string; option_label:string; option_hint:string; description:string; database_options?:{id:string;label:string}[]; database_hint?:string }
 type EngineJob = { id: string; engine?: string; action: string; state: string; message: string; slug?: string; log?: string; tool?: ToolInfo }
-type State = { services: Record<string,string>; managed_services?:ManagedService[]; service_action_pending?:boolean; projects: Project[]; preferences: { theme: 'light'|'dark' }; engine_job?: EngineJob|null; engines?: Record<string,EngineDefinition>; engine_access_allowed?: boolean; mailpit?: string }
-type Envelope<T> = { ok: boolean; result?: T; error?: string; authenticated?: boolean; csrf?: string }
+type State = { engine_notice?:{id:string;show:boolean}|null; services: Record<string,string>; managed_services?:ManagedService[]; service_action_pending?:boolean; projects: Project[]; preferences: { theme: 'light'|'dark' }; engine_job?: EngineJob|null; engines?: Record<string,EngineDefinition>; engine_access_allowed?: boolean; mailpit?: string }
+type Envelope<T> = { notification_id?:string; ok: boolean; result?: T; error?: string; authenticated?: boolean; csrf?: string }
 type Draft = ProjectIdentityDraft & { webroot: string; database: boolean; https: boolean; local_mail: boolean; engine: string; starter_kit: string }
 
 // Render the two stored regions in one editor without losing legacy rules.
@@ -62,12 +66,17 @@ const blank: Draft = { name: '', slug: null, domain: null, webroot: 'public', da
 async function request<T>(method: 'GET'|'POST', path: string, csrf?: string, data?: unknown): Promise<T> {
   const response = await fetch(path, {
     method, credentials: 'same-origin', cache: 'no-store',
-    headers: { ...(data ? {'Content-Type':'application/json'} : {}), ...(method === 'POST' ? {'X-CSRF-Token':csrf ?? ''} : {}) },
+    headers: { 'X-DevStack-Client':notificationClient, ...(data ? {'Content-Type':'application/json'} : {}), ...(method === 'POST' ? {'X-CSRF-Token':csrf ?? ''} : {}) },
     ...(data ? {body:JSON.stringify(data)} : {}),
   })
   let body: Envelope<T>
   try { body = await response.json() as Envelope<T> }
   catch { throw new Error(`Nieprawidłowa odpowiedź serwera (HTTP ${response.status}).`) }
+  if(method==='POST'&&csrf){
+    const result=body.result as {notification_id?:string}|undefined
+    acknowledgeOperation(result?.notification_id??body.notification_id,csrf)
+    if(result?.notification_id?.startsWith('job-'))window.dispatchEvent(new Event(notificationChange))
+  }
   if (!response.ok || !body.ok) throw new Error(body.error || `Błąd HTTP ${response.status}.`)
   return (body.result ?? body) as T
 }
@@ -121,9 +130,10 @@ export function App() {
   const navigation=useRef<HTMLElement>(null)
   const menuButton=useRef<HTMLButtonElement>(null)
   const [view,setView]=useState<View>(viewFromHash)
+  const [mailRoute,setMailRoute]=useState(()=>window.location.hash.match(/^#\/mail\/([A-Za-z0-9]{22})$/)?.[1]??'')
   const [settingsTab,setSettingsTab]=useState<SettingsTab>('environment')
   const [server,setServer]=useState<State>({services:{},projects:[],preferences:{theme:'light'}})
-  const [selected,setSelected]=useState('')
+  const [selected,setSelected]=useState(()=>window.location.hash.match(/^#\/project\/([a-z][a-z0-9-]{1,39})$/)?.[1]??'')
   const [projectSearch,setProjectSearch]=useState('')
   const jobPresentation=useRef<{signature:string;state:string}|null>(null)
   const activeEngineToast=useRef<{jobId:string;toastId:string}|null>(null)
@@ -153,6 +163,13 @@ export function App() {
   const [caFingerprint,setCaFingerprint]=useState('')
   const [caInfoError,setCaInfoError]=useState(false)
 
+  function navigateNotice(route:string){
+    if(!isNoticeRoute(route))return
+    const hash=route.slice(1)
+    if(window.location.hash!==hash)window.location.hash=hash
+    else {setView(viewFromHash());setMailRoute(hash.match(/^#\/mail\/([A-Za-z0-9]{22})$/)?.[1]??'');const slug=hash.match(/^#\/project\/([a-z][a-z0-9-]{1,39})$/)?.[1];if(slug)setSelected(slug)}
+  }
+  const notifications=useNotificationCenter(authenticated,csrf,request,navigateNotice)
   const projects=server.projects
   const searchTerms=projectSearch.trim().toLocaleLowerCase('pl-PL').split(/\s+/).filter(Boolean)
   const visibleProjects=projects.filter(p=>{const haystack=[p.name,p.slug,p.domain,projectFramework(p)].join(' ').toLocaleLowerCase('pl-PL');return searchTerms.every(term=>haystack.includes(term))})
@@ -256,7 +273,7 @@ export function App() {
   },[navOpen,desktop])
   useEffect(()=>{
     // Support direct bookmarks from Windows Widgets, plus browser Back/Forward.
-    const syncRoute=()=>{setView(viewFromHash());setNavOpen(false);setDbSecret('')}
+    const syncRoute=()=>{setView(viewFromHash());setNavOpen(false);setDbSecret('');setMailRoute(window.location.hash.match(/^#\/mail\/([A-Za-z0-9]{22})$/)?.[1]??'');const slug=window.location.hash.match(/^#\/project\/([a-z][a-z0-9-]{1,39})$/)?.[1];if(slug)setSelected(slug)}
     window.addEventListener('hashchange',syncRoute)
     return ()=>window.removeEventListener('hashchange',syncRoute)
   },[])
@@ -308,6 +325,9 @@ export function App() {
     // Keep polling the accepted ID instead of retiring the new loading toast.
     if(awaitingEngineJob&&job?.id!==awaitingEngineJob)return
     if(awaitingEngineJob)setAwaitingEngineJob('')
+    // Real job presentation is assigned by the shared journal. Keep a local
+    // already-started toast alive if its history entry was deliberately cleared.
+    if(job&&server.engine_notice?.id===job.id&&!server.engine_notice.show&&activeEngineToast.current?.jobId!==job.id)return
     const jobId=job?.id??''
     if((activeEngineToast.current?.jobId??'')!==jobId){
       const previous=activeEngineToast.current
@@ -340,7 +360,7 @@ export function App() {
     remember()
     document.addEventListener('visibilitychange',remember)
     return ()=>document.removeEventListener('visibilitychange',remember)
-  },[authenticated,initializing,engineJob,dismissedJob,awaitingEngineJob,engines,projects])
+  },[authenticated,initializing,engineJob,dismissedJob,awaitingEngineJob,engines,projects,server.engine_notice])
   useEffect(()=>{
     if(!authenticated || !server.service_action_pending)return
     const id=window.setInterval(()=>{if(document.visibilityState==='visible')void refresh()},1500)
@@ -491,7 +511,7 @@ export function App() {
     catch {fail('Przeglądarka zablokowała schowek.')}
   }
   function go(next:View){
-    setView(next);setNavOpen(false);setDbSecret('')
+    setView(next);setNavOpen(false);setDbSecret('');if(next==='mail')setMailRoute('')
     // Keep a selected project's in-memory detail view as-is. All other
     // views have stable, shareable hash URLs used by Windows Widgets.
     if(next!=='project')window.location.hash='/'+next
@@ -510,11 +530,12 @@ export function App() {
       <p className="px-3 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">System</p><button onClick={()=>go('settings')} className={linkStyle(view==='settings')}><Settings2 className="size-4"/>Ustawienia</button>
       <div className="mt-auto space-y-3 rounded-xl border bg-secondary/50 p-3"><div className="flex items-center gap-2 text-xs font-medium"><ShieldCheck className="size-4 text-emerald-600"/> Lokalnie · WSL2</div><div className="break-all text-xs text-muted-foreground">https://devstack.test</div>{passwordRequired?<Button className="w-full" variant="outline" size="sm" onClick={()=>{void logout()}}><LogOut/>Wyloguj</Button>:<Badge>Tryb bez hasła</Badge>}</div>
     </aside>
-    <div className="flex min-h-dvh min-w-0 flex-col lg:pl-52" inert={!desktop&&navOpen}><header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur"><div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-2 px-3 sm:px-5"><div className="flex min-w-0 items-center gap-2"><Button size="icon" variant="ghost" ref={menuButton} className="lg:hidden" aria-label="Otwórz menu" aria-expanded={navOpen} aria-controls="main-navigation" onClick={()=>setNavOpen(true)}><Menu/></Button><a href="#/dashboard" onClick={e=>{e.preventDefault();go('dashboard')}} className="truncate rounded-sm text-sm font-semibold hover:underline focus-visible:outline-2 focus-visible:outline-ring" title="Strona główna">DevStack</a></div><div className="flex items-center gap-2"><Badge className="hidden md:inline-flex">Ubuntu 26.04 · WSL2</Badge><span className="hidden text-xs text-muted-foreground xl:inline" aria-live="polite">{lastRefreshed?'Aktualizacja: '+lastRefreshed.toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'Oczekiwanie na dane'}</span><Button variant="outline" size="icon" aria-label={refreshing?'Odświeżanie danych':'Odśwież dane usług i projektów'} title={refreshing?'Odświeżanie…':'Odśwież dane usług i projektów'} disabled={refreshing} onClick={()=>{void refresh(true)}}><RefreshCw className={refreshing?'animate-spin':''}/></Button><Button variant="outline" size="icon" aria-label={theme==='light'?'Włącz ciemny motyw':'Włącz jasny motyw'} title={savingTheme?'Zapisywanie motywu…':'Zmień i zapisz motyw'} disabled={savingTheme} onClick={()=>{void toggleTheme()}}>{theme==='light'?<Moon/>:<Sun/>}</Button></div></div></header>
+    <div className="flex min-h-dvh min-w-0 flex-col lg:pl-52" inert={!desktop&&navOpen}><header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur"><div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-2 px-3 sm:px-5"><div className="flex min-w-0 items-center gap-2"><Button size="icon" variant="ghost" ref={menuButton} className="lg:hidden" aria-label="Otwórz menu" aria-expanded={navOpen} aria-controls="main-navigation" onClick={()=>setNavOpen(true)}><Menu/></Button><a href="#/dashboard" onClick={e=>{e.preventDefault();go('dashboard')}} className="truncate rounded-sm text-sm font-semibold hover:underline focus-visible:outline-2 focus-visible:outline-ring" title="Strona główna">DevStack</a></div><div className="flex items-center gap-2"><Badge className="hidden md:inline-flex">Ubuntu 26.04 · WSL2</Badge><span className="hidden text-xs text-muted-foreground xl:inline" aria-live="polite">{lastRefreshed?'Aktualizacja: '+lastRefreshed.toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'Oczekiwanie na dane'}</span><NotificationCenter model={notifications} navigate={navigateNotice}/><Button variant="outline" size="icon" aria-label={refreshing?'Odświeżanie danych':'Odśwież dane usług i projektów'} title={refreshing?'Odświeżanie…':'Odśwież dane usług i projektów'} disabled={refreshing} onClick={()=>{void refresh(true)}}><RefreshCw className={refreshing?'animate-spin':''}/></Button><Button variant="outline" size="icon" aria-label={theme==='light'?'Włącz ciemny motyw':'Włącz jasny motyw'} title={savingTheme?'Zapisywanie motywu…':'Zmień i zapisz motyw'} disabled={savingTheme} onClick={()=>{void toggleTheme()}}>{theme==='light'?<Moon/>:<Sun/>}</Button></div></div></header>
       <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5">
       {view!=='mail'&&<><PageHeader title={title[view]} actions={<>{view==='projects'&&<Button size="sm" onClick={()=>go('new')}><Plus/>Nowy projekt</Button>}{view==='new'&&<div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={()=>go('projects')}><ArrowLeft/>Projekty</Button><Button size="sm" type="submit" form="new-project-form" disabled={busy||engineBusy||(draft.local_mail&&server.mailpit!=='active')||(!!draftEngine&&(!engineAllowed||!kitReady))}><Plus/>{busy||engineBusy?'Tworzenie…':'Utwórz projekt'}</Button></div>}{view==='project'&&current&&<div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={()=>go('projects')}><ArrowLeft/>Projekty</Button><Button size="sm" variant="outline" onClick={()=>{void copy(`${current.https?'https':'http'}://${current.domain}`)}}><Copy/>URL</Button><Button size="sm" onClick={()=>window.open(`${current.https?'https':'http'}://${current.domain}`,'_blank','noopener,noreferrer')}><ExternalLink/>Otwórz stronę</Button></div>}{view==='settings'&&<nav aria-label="Kategorie ustawień" className="flex min-w-0 flex-wrap items-center gap-1">
           {settingsTabs.map(tab=><Button key={tab.id} size="sm" variant={settingsTab===tab.id?'default':'ghost'} aria-pressed={settingsTab===tab.id} onClick={()=>setSettingsTab(tab.id)}>{tab.label}</Button>)}
         </nav>}</>}/></>}
+      {view==='project'&&!current&&<Card><CardContent className="space-y-3 p-4"><p className="text-sm text-muted-foreground">{lastRefreshed?'Projekt nie jest dostępny.':'Wczytywanie projektu…'}</p><Button size="sm" variant="outline" onClick={()=>go('projects')}>Lista projektów</Button></CardContent></Card>}
       {view==='dashboard'&&<><div className="grid grid-cols-2 gap-3 xl:grid-cols-4"><Metric label="Projekty" value={String(projects.length)} foot="Domeny .test" icon={<FolderCode className="size-5"/>}/><Metric label="Aktywne usługi" value={`${managed.filter(s=>s.state==='active').length}/${managed.length}`} foot="Uruchomione / wszystkie" icon={<Activity className="size-5"/>}/><Metric label="HTTPS" value={String(projects.filter(p=>p.https).length)} foot="Auto SSL" icon={<LockKeyhole className="size-5"/>}/><Metric label="Bazy danych" value={String(projects.filter(p=>p.database).length)} foot="MariaDB" icon={<Database className="size-5"/>}/></div>
         <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]"><ManagedServices services={managed} csrf={csrf} request={request} refresh={()=>refresh()} blocked={engineBusy||!!server.service_action_pending}/>
         <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>Ostatnie projekty</CardTitle></div><Button size="sm" variant="outline" onClick={()=>go('projects')}>Wszystkie<ArrowRight/></Button></div></CardHeader><CardContent>{projects.length===0?<p className="py-8 text-center text-sm text-muted-foreground">Brak projektów.</p>:<div className="divide-y">{projects.slice(0,5).map(p=><button key={p.slug} className="flex w-full items-center gap-3 py-3 text-left hover:opacity-75" onClick={()=>details(p.slug)}><IconBox><FolderCode className="size-4"/></IconBox><div className="min-w-0 flex-1"><div className="break-words text-sm font-medium">{p.name}</div><span className="break-all text-xs text-muted-foreground">{p.domain}</span></div>{p.https&&<LockKeyhole className="size-4 text-emerald-600"/>}<ChevronRight className="size-4 text-muted-foreground"/></button>)}</div>}</CardContent></Card></div></>}
@@ -567,13 +588,14 @@ export function App() {
             <div className="flex flex-wrap gap-2"><Button type="submit" variant="destructive" disabled={busy||deleteConfirmation!==current.slug||(current.database&&!deleteDbConfirm)}><Trash2/>{busy?'Usuwanie…':'Potwierdź usunięcie'}</Button><Button variant="outline" type="button" disabled={busy} onClick={()=>{setDeleteOpen(false);setDeleteConfirmation('');setDeleteDbConfirm(false)}}>Anuluj</Button></div>
           </form>}
         </CardContent></Card></div>}
-      {view==='mail'&&<MailInbox status={server.mailpit} csrf={csrf} request={request} refreshStatus={()=>{void refresh()}}/>}
+      {view==='mail'&&<MailInbox key={mailRoute} initialMessage={mailRoute} status={server.mailpit} csrf={csrf} request={request} refreshStatus={()=>{void refresh()}}/>}
       {view==='settings'&&<div className="space-y-3">
         
         <section aria-label="Środowisko" hidden={settingsTab!=='environment'}><Card><CardHeader><CardTitle>Parametry środowiska</CardTitle></CardHeader><CardContent className="space-y-2"><Info label="Panel" value="https://devstack.test"/><Info label="Backend" value="PHP-FPM 8.5 + Unix socket"/><Info label="SSL" value="mkcert (prywatny lokalny CA)"/><Info label="Usługi" value="systemd"/></CardContent></Card><div className="mt-3"><Card><CardHeader><CardTitle>Motyw</CardTitle></CardHeader><CardContent className="flex items-center justify-between gap-3"><span className="text-sm">{theme==='dark'?'Ciemny':'Jasny'}</span><Button size="sm" variant="outline" disabled={savingTheme} onClick={()=>{void toggleTheme()}}>{theme==='dark'?<Sun/>:<Moon/>}Zmień motyw</Button></CardContent></Card></div></section>
         <section aria-label="Instalatory" hidden={settingsTab!=='installers'}><Card><CardHeader><CardTitle>Narzędzia instalacyjne</CardTitle><CardDescription>Instalatory frameworków w Ubuntu.</CardDescription></CardHeader><CardContent className="space-y-3">{Object.keys(engines).length>1&&<select aria-label="Instalator" className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" value={toolId} onChange={e=>setSelectedTool(e.target.value)}>{Object.entries(engines).map(([id,definition])=><option key={id} value={id}>{definition.tool}</option>)}</select>}<Info label="Narzędzie" value={toolDefinition?.tool??'Brak'}/>{toolDefinition&&<p className="text-xs text-muted-foreground">{toolDefinition.description}</p>}{!engineAllowed?<div className="space-y-2 text-xs text-muted-foreground"><p>Zgoda administratora na instalatory w trybie bez hasła:</p><code className="block break-all rounded bg-secondary p-2">sudo php /opt/devstack/scripts/configure-auth.php --allow-local-installers --i-understand-local-risk</code><p>Odśwież panel po wykonaniu polecenia.</p></div>:<><Info label="Zainstalowana" value={toolLoading?'Odczytywanie…':toolInfo?.installed??(toolInfo?'Brak':'Nieznana')}/><Info label="Dostępna" value={engineJob&&engineJob.engine===toolId&&engineJob.action==='check'&&engineJob.state==='succeeded'?engineJob.tool?.latest??'Nieznana':'Sprawdź aktualizacje'}/>{toolInfo?.composer===false&&<p className="text-xs text-muted-foreground">Composer nie jest dostępny. Zainstaluj go w Ubuntu.</p>}<div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" disabled={busy||engineBusy||toolLoading||!toolInfo?.installed} onClick={()=>void toolAction('check')}><RefreshCw/>Sprawdź aktualizacje</Button><Button variant="outline" size="sm" disabled={busy||engineBusy||toolLoading||!toolInfo?.composer} onClick={()=>void toolAction(toolInfo?.installed?'update-tool':'install-tool')}>{toolInfo?.installed?'Aktualizuj instalator':'Zainstaluj instalator'}</Button></div><p className="text-xs text-muted-foreground">Aktualizacja instalatora nie zmienia istniejących projektów.</p></>}</CardContent></Card></section>
         <section aria-label="Windows" hidden={settingsTab!=='windows'}><Card><CardHeader><CardTitle>Synchronizacja Windows</CardTitle></CardHeader><CardContent className="space-y-3 text-sm"><p>Zmiany domen .test są automatycznie zapisywane w zarządzanym bloku Windows hosts.</p><p className="text-muted-foreground">Pierwsza instalacja wymaga administratora Windows. Ręczna synchronizacja: <code className="break-all rounded bg-secondary px-1">windows/sync-hosts.ps1</code>.</p></CardContent></Card></section>
         <section aria-label="Widżety" hidden={settingsTab!=='widgets'}><WidgetServiceSettings services={managed} csrf={csrf} request={request} refresh={()=>refresh()}/></section>
+        <section aria-label="Powiadomienia" hidden={settingsTab!=='notifications'}><NotificationSettings model={notifications}/></section>
         <section aria-label="Bezpieczeństwo" hidden={settingsTab!=='security'}><div className="space-y-3"><Card><CardHeader><CardTitle>Dostęp do panelu</CardTitle></CardHeader><CardContent className="space-y-2"><Info label="Logowanie" value={passwordRequired?'Włączone (hasło)':'Wyłączone (tylko lokalnie)'}/><Info label="Instalatory" value={engineAllowed?(passwordRequired?'Po zalogowaniu':'Dozwolone lokalnie bez hasła'):'Wymagają zgody administratora'}/><p className="text-xs text-muted-foreground">Zmiana trybu logowania (administrator Ubuntu): <code className="break-all">sudo php /opt/devstack/scripts/configure-auth.php --setup</code></p></CardContent></Card><Card><CardHeader><CardTitle>Certyfikat CA w Windows</CardTitle><CardDescription>Publiczny certyfikat mkcert dla Windows.</CardDescription></CardHeader>
         <CardContent className="space-y-3 text-sm">
           <p className="text-muted-foreground">Import CA wymaga ręcznego potwierdzenia w Windows.</p>

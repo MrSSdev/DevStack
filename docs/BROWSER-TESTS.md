@@ -14,6 +14,8 @@ search, pagination, deletion, polling and recovery from a stopped Mailpit;
 long project names; project search, detected Composer versions, home link and shared favicon; shared fixed Base UI toasts, multiple notices, non-dismissible installer progress across polling phases and a six-second success timeout starting only after completion, persistent installer failure details, navigation, acknowledgement across reloads, retirement of older installer results, accessible dismissal without hover (including keyboard activation), and notices inside native service dialogs; unified Nginx editor with both stored rule types, safe validation and reload; authentication, session rotation,
 CSRF, origin validation, input rejection and login rate limiting.
 
+The dedicated PWA/history scenario exercises the real manifest, service worker, empty cache, live SMTP notification, cross-tab deduplication, read/delete/clear and persistence without deleting mail. Existing scenarios block service worker registration to preserve independent HTTP interception. PHP tests cover presence and push claims with a fake subscription; the suite does not contact real push providers or certify Windows notification delivery.
+
 Screenshots, traces and the screenshot manifest are uploaded for one day.
 Only generated fixture data is used. These tests do not certify Windows/WSL
 integration or acceptance on a physical workstation.

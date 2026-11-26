@@ -148,6 +148,7 @@ final class DevStackNotices
                     $id = 'job-' . $job;
                     $this->insert($id,'installer',$slug!==''?'Instalacja projektu':'Instalator',
                         $slug,'/#/projects','loading',$owner,false,true,'accepted');
+                    if ($owner!=='') $this->execute('UPDATE notices SET owner=? WHERE id=? AND kind=?',[$owner,$id,'loading']);
                     $this->setMeta('job', $job);
                     $this->touch($owner); $this->prune();
                     return $id;
@@ -313,7 +314,7 @@ final class DevStackNotices
             $this->touch($client); $this->prune();
             $deliver=[];
             if ($client!==''&&$claim) {
-                $rows=$this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND category!='installer' ORDER BY created,id LIMIT 40")->fetchAll();
+                $rows=$this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND id NOT LIKE 'job-%' ORDER BY created,id LIMIT 40")->fetchAll();
                 foreach ($rows as $row) {
                     if (count($deliver)>=3) break;
                     // The initiating tab already has the operation toast; wait
@@ -393,7 +394,7 @@ final class DevStackNotices
             if ($this->anyPresent()) return null;
             $subscription=$this->meta('subscription');
             if ($subscription===null) return null;
-            foreach ($this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND push=1 AND updated<=? ORDER BY updated,id LIMIT 40",[time()-2])->fetchAll() as $row) {
+            foreach ($this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND push=1 AND updated<=? ORDER BY updated,id LIMIT 200",[time()-2])->fetchAll() as $row) {
                 if (!in_array($row['category'],$this->categories(),true)) continue;
                 // Claim once before the network call. Unknown delivery is not
                 // retried (avoid duplicate system notifications).

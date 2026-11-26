@@ -321,10 +321,11 @@ try {
 } catch (InvalidArgumentException $e) {
     devstack_json(422, ['ok' => false, 'error' => $e->getMessage()]);
 } catch (Throwable $e) {
+    $notice=[];
     if ($method==='POST' && !str_starts_with($path,'/api/notifications/') && !str_starts_with($path,'/api/engines/') && !($path==='/api/projects' && ($body['engine']??'none')!=='none')) {
-        devstack_notice_operation($path,$body??[],[],false);
+        $notice=devstack_notice_operation($path,$body??[],[],false);
     }
     error_log('DevStack error: ' . $e->getMessage());
-    devstack_json(422, ['ok' => false, 'error' => $e->getMessage()]);
+    devstack_json(422, ['ok' => false, 'error' => $e->getMessage(), ...$notice]);
 }
 devstack_json(404, ['ok' => false, 'error' => 'Nieznana operacja API.']);
