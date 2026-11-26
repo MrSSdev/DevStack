@@ -15,7 +15,7 @@ import unittest
 import urllib.request
 from email.message import EmailMessage
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, sync_playwright
 
 BASE = 'https://devstack.test'
 OUT = pathlib.Path('browser-results')
@@ -168,10 +168,31 @@ class BrowserAcceptance(unittest.TestCase):
             expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
         else:
             expect(self.page.locator('html')).not_to_have_class(re.compile(r'\bdark\b'))
-        # Exclude ending toasts; nth locators shift as each toast is removed.
+        self.dismiss_visible_toasts()
+
+    def dismiss_visible_toasts(self):
+        # Use the actual close buttons. Pending collector events can arrive
+        # after theme() returns; persistent error toasts do not auto-dismiss.
+        # Keep the dedicated notification lifecycle tests unchanged.
         close = self.page.locator('[data-slot="toast"]:not([data-ending-style]) button[aria-label="Zamknij powiadomienie"]')
-        while close.count():
+        for _ in range(20):
+            if not close.count():
+                break
             close.first.click()
+        expect(close).to_have_count(0)
+
+    def click_layout_control(self, control):
+        # Only for the layout walk, after the notification assertion. A real
+        # toast may overlap a control at a narrow viewport. Close it using
+        # the same UI as a user, not force=True or CSS/DOM manipulation.
+        for attempt in range(3):
+            self.dismiss_visible_toasts()
+            try:
+                control.click(timeout=5000)
+                return
+            except PlaywrightTimeoutError as exc:
+                if attempt == 2 or 'toast-host' not in str(exc):
+                    raise
 
     def shot(self, name):
         self.page.evaluate('document.fonts.ready')
@@ -254,6 +275,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(response.status,200,response.text())
         send(HTML_SUBJECT, HTML)
         self.wait_total(1)
+        self.dismiss_visible_toasts()
         for width in [640, 853, 1024, 1280, 1920]:
             self.page.set_viewport_size({'width':width, 'height':950})
             for theme in ['light','dark']:
@@ -262,6 +284,7 @@ class BrowserAcceptance(unittest.TestCase):
                 for route in ['dashboard','projects','new','mail','settings']:
                     with self.subTest(width=width, theme=theme, route=route):
                         self.goto(route)
+                        self.dismiss_visible_toasts()
                         prefix=f'{width}-{theme}-'
                         if route=='mail':expect(self.message_button(HTML_SUBJECT)).to_be_visible()
                         if route=='new':self.page.get_by_role('combobox',name='Framework',exact=True).select_option('none')
@@ -292,7 +315,9 @@ class BrowserAcceptance(unittest.TestCase):
                             expect(self.page.get_by_role('heading',name='Browser fixture',exact=True)).to_be_visible()
                             self.shot(prefix+'project')
                             config=self.page.get_by_role('button',name=re.compile('pełną konfigurację'))
-                            if config.get_attribute('aria-expanded')!='true':config.click()
+                            if config.get_attribute('aria-expanded')!='true':
+                                self.click_layout_control(config)
+                            expect(config).to_have_attribute('aria-expanded','true')
                             self.shot(prefix+'project-nginx')
                             self.goto('projects')
                             self.page.locator('main button').filter(has_text='A'*70).click()
