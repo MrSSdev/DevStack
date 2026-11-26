@@ -242,44 +242,64 @@ class ValidationTests(unittest.TestCase):
                 d.delete_project({'slug':'missing','confirmation':'missing','delete_database':False})
 
     def test_delete_success_preserves_source_and_reconciles_state(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            folder=Path(tmp)
-            statefile=folder/'projects.json'
-            secretfile=folder/'credentials.json'
-            root=folder/'projects'/'demo'
-            root.mkdir(parents=True)
-            (root/'public').mkdir()
-            (root/'public'/'index.php').write_text('<?php echo "KEPT";')
-            site=folder/'devstack-demo.conf'
-            link=folder/'enabled.conf'
-            pool=folder/'fpm.conf'
-            site.write_text('nginx')
-            pool.write_text('fpm')
-            link.symlink_to(site)
-            p={'name':'Demo','domain':'demo.test','path':str(root),'webroot':'public',
-               'database':False,'https':False,'db_name':'','db_user':'','overrides':''}
-            d.write_json_atomic(statefile,{'demo':p})
-            d.write_json_atomic(secretfile,{})
-            commands=[]
-            def fake_run(argv,*args,**kwargs):
-                commands.append(argv)
-                return ''
-            with patch.object(d,'config',return_value={'projects_dir':str(root.parent)}), \
-                 patch.object(d,'STATE_FILE',statefile), \
-                 patch.object(d,'SECRET_FILE',secretfile), \
-                 patch.object(d,'site_path',return_value=site), \
-                 patch.object(d,'site_link_path',return_value=link), \
-                 patch.object(d,'pool_path',return_value=pool), \
-                 patch.object(d,'run',side_effect=fake_run):
-                result=d.delete_project({'slug':'demo','confirmation':'demo','delete_database':False})
-            self.assertIn('Pliki projektu pozostaly',result['message'])
-            self.assertEqual(d.read_json(statefile),{})
-            self.assertFalse(site.exists())
-            self.assertFalse(link.exists())
-            self.assertFalse(pool.exists())
-            self.assertEqual((root/'public'/'index.php').read_text(),'<?php echo "KEPT";')
-            self.assertIn(['/usr/sbin/nginx','-t'],commands)
-            self.assertTrue(any(argv[0]=='/usr/bin/systemd-run' for argv in commands))
+        for backup_kind in ('missing', 'file', 'symlink', 'directory'):
+            with self.subTest(backup_kind=backup_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    folder=Path(tmp)
+                    statefile=folder/'projects.json'
+                    secretfile=folder/'credentials.json'
+                    root=folder/'projects'/'demo'
+                    root.mkdir(parents=True)
+                    (root/'public').mkdir()
+                    (root/'public'/'index.php').write_text('<?php echo "KEPT";')
+                    site=folder/'devstack-demo.conf'
+                    link=folder/'enabled.conf'
+                    pool=folder/'fpm.conf'
+                    site.write_text('nginx')
+                    pool.write_text('fpm')
+                    link.symlink_to(site)
+                    backup=folder/'vhost-demo-previous.conf'
+                    unrelated=folder/'vhost-other-previous.conf'
+                    unrelated.write_text('other project backup')
+                    if backup_kind == 'file':
+                        backup.write_text('previous nginx config')
+                    elif backup_kind == 'symlink':
+                        backup.symlink_to(unrelated)
+                    elif backup_kind == 'directory':
+                        backup.mkdir()
+                        (backup/'unexpected').write_text('keep')
+                    p={'name':'Demo','domain':'demo.test','path':str(root),'webroot':'public',
+                       'database':False,'https':False,'db_name':'','db_user':'','overrides':''}
+                    d.write_json_atomic(statefile,{'demo':p})
+                    d.write_json_atomic(secretfile,{})
+                    commands=[]
+                    def fake_run(argv,*args,**kwargs):
+                        commands.append(argv)
+                        return ''
+                    with patch.object(d,'config',return_value={'projects_dir':str(root.parent)}), \
+                         patch.object(d,'STATE_FILE',statefile), \
+                         patch.object(d,'SECRET_FILE',secretfile), \
+                         patch.object(d,'site_path',return_value=site), \
+                         patch.object(d,'site_link_path',return_value=link), \
+                         patch.object(d,'pool_path',return_value=pool), \
+                         patch.object(d,'run',side_effect=fake_run):
+                        result=d.delete_project({'slug':'demo','confirmation':'demo','delete_database':False})
+                    self.assertIn('Pliki projektu pozostaly',result['message'])
+                    self.assertEqual(d.read_json(statefile),{})
+                    self.assertFalse(site.exists())
+                    self.assertFalse(link.exists())
+                    self.assertFalse(pool.exists())
+                    self.assertEqual(unrelated.read_text(),'other project backup')
+                    if backup_kind == 'directory':
+                        self.assertEqual((backup/'unexpected').read_text(),'keep')
+                        self.assertIn('Nie udalo sie usunac kopii',result['message'])
+                    else:
+                        self.assertFalse(backup.exists())
+                        self.assertFalse(backup.is_symlink())
+                        self.assertNotIn('Nie udalo sie usunac kopii',result['message'])
+                    self.assertEqual((root/'public'/'index.php').read_text(),'<?php echo "KEPT";')
+                    self.assertIn(['/usr/sbin/nginx','-t'],commands)
+                    self.assertTrue(any(argv[0]=='/usr/bin/systemd-run' for argv in commands))
 
     def test_delete_rollback_preserves_source_and_managed_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -295,6 +315,8 @@ class ValidationTests(unittest.TestCase):
             site.write_text('original nginx config')
             pool.write_text('original php pool')
             enabled.symlink_to(site)
+            backup = folder / 'vhost-demo-previous.conf'
+            backup.write_text('previous nginx config')
             meta = {'name':'Demo','domain':'demo.test','path':str(root),
                     'webroot':'public','https':False,'database':False,
                     'db_name':'','db_user':'','overrides':''}
@@ -320,6 +342,7 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(enabled.resolve(),site)
             self.assertEqual(site.read_text(),'original nginx config')
             self.assertEqual(pool.read_text(),'original php pool')
+            self.assertEqual(backup.read_text(),'previous nginx config')
             self.assertEqual((root/'index.php').read_text(),'<?php echo "KEEP";')
             self.assertFalse(any(a[0]=='/usr/bin/systemd-run' for a in cmds))
 
@@ -608,21 +631,18 @@ class ValidationTests(unittest.TestCase):
             target.write_text('old config', encoding='utf-8')
             state = Path(tmp) / 'state.json'
             state.write_text(json.dumps({'alpha': {'domain':'alpha.test','path':'/home/ubuntu/projects/alpha', 'webroot':'public','https':True, 'overrides':''}}), encoding='utf-8')
-            backup = Path(tmp) / 'backup'
-            backup.mkdir()
+            backup = Path(tmp) / 'vhost-alpha-previous.conf'
             commands=[]
             def fake_run(argv, *a, **kw):
                 commands.append(argv)
                 if argv[-1]=='-t' and len(commands)==1: raise RuntimeError('test failed')
                 return ''
-            # update_config has an explicit backup file location: patch Path at the exact site_path only,
-            # no real /etc files are touched.
-            with patch.object(d, 'STATE_FILE', state), patch.object(d, 'site_path', return_value=target), patch.object(d, 'run', side_effect=fake_run), patch.object(d, 'pathlib') as dummy:
-                # Preserve pathlib.Path semantics for other uses and redirect only backup location.
-                dummy.Path.side_effect = lambda value: backup if value=='/var/lib/devstack' else Path(value)
+            # Both state and the editor backup live in this disposable directory.
+            with patch.object(d, 'STATE_FILE', state), patch.object(d, 'site_path', return_value=target), patch.object(d, 'run', side_effect=fake_run):
                 with self.assertRaises(RuntimeError):
                     d.update_config({'slug':'alpha','rules':'client_max_body_size 64m;'})
             self.assertEqual(target.read_text(), 'old config')
+            self.assertEqual(backup.read_text(), 'old config')
             self.assertEqual(json.loads(state.read_text())['alpha']['overrides'], '')
 
 if __name__ == '__main__':

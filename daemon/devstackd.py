@@ -304,6 +304,10 @@ def pool_path(slug: str) -> pathlib.Path:
     return pathlib.Path('/etc/php/8.5/fpm/pool.d') / f'devstack-{slug}.conf'
 
 
+def nginx_backup_path(slug: str) -> pathlib.Path:
+    return STATE_FILE.parent / f'vhost-{slug}-previous.conf'
+
+
 def defer_php_fpm_reload() -> None:
     """Schedule reload after the PHP request completes to avoid Nginx 502.
 
@@ -939,11 +943,21 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
         except OSError:
             print('Warning: leftover generated project certificate ' + slug, file=sys.stderr)
 
+    # The editor's previous-version snapshot belongs to this project.
+    # Do not remove it before the deletion commits (including SQL removal).
+    backup_warning = ''
+    try:
+        nginx_backup_path(slug).unlink(missing_ok=True)
+    except OSError:
+        # Do not report a committed project deletion as a failed transaction.
+        print('Warning: leftover generated project Nginx backup ' + slug, file=sys.stderr)
+        backup_warning = ' Nie udalo sie usunac kopii poprzedniej konfiguracji Nginx.'
+
     # The committed state is authoritative; queue reconciliation once after deletion.
     hosts_warning = request_windows_hosts_sync()
     return {'message': 'Projekt usuniety z Nginx, PHP-FPM i DevStack' +
             (' wraz z baza MariaDB.' if database else '.') +
-            ' Pliki projektu pozostaly na dysku. Windows hosts zsynchronizuje sie automatycznie.' + hosts_warning}
+            ' Pliki projektu pozostaly na dysku. Windows hosts zsynchronizuje sie automatycznie.' + backup_warning + hosts_warning}
 
 
 def reveal(data: dict[str, Any]) -> dict[str, str]:
@@ -988,7 +1002,7 @@ def update_config(data: dict[str, Any]) -> dict[str, str]:
     after = nginx_conf(slug, p['domain'], pub, p['https'], overrides, assets)
     if after == before:
         return {'message': 'Brak zmian w konfiguracji.', **validated}
-    backup = pathlib.Path('/var/lib/devstack') / f'vhost-{slug}-previous.conf'
+    backup = nginx_backup_path(slug)
     backup.write_text(before, encoding='utf-8')
     target.write_text(after, encoding='utf-8')
     try:
