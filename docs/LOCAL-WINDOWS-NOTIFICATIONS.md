@@ -1,71 +1,132 @@
-# Experimental local Windows notifications
+# Test lokalnych powiadomień Windows na ASUS-ie
 
-The Windows 11 test branch delivers system notifications through Windows
-PowerShell 5.1 and WinRT. Ubuntu's existing collector claims an event in
-SQLite and asks the existing DevStack helper to invoke PowerShell once.
-Windows displays the toast and the process exits. There is no Windows
-timer, listener, Python installation, or PowerShell module.
+Kolektor DevStacka wysyła zdarzenie do małego programu Windows zbudowanego
+w trybie GUI. Program uruchamia Windows PowerShell 5.1 z ustawieniem
+CreateNoWindow, przekazuje dane do WinRT i kończy działanie. Oba procesy
+powstają tylko podczas wysyłki. Rozwiązanie korzysta z .NET Framework
+wbudowanego w Windows 11 i z istniejącej usługi DevStacka w Ubuntu.
 
-Windows receives the generic category and severity plus the journal ID.
-The toast link uses the fixed DevStack HTTPS origin and the existing
-authenticated notification-click flow. Windows opens the default HTTPS
-browser. If that profile needs a login, the existing click flow preserves
-the journal ID until the first authenticated poll.
+Tryb lokalny jest domyślnie wyłączony. Po włączeniu kolektor używa jednej
+rezerwacji w SQLite i wysyła zakwalifikowane zdarzenia przez WinRT.
+Aktywna karta przejmuje powiadomienia w panelu. Windows otrzymuje tylko
+identyfikator zdarzenia, kategorię i poziom ważności. Kliknięcie otwiera
+adres DevStacka w domyślnej przeglądarce HTTPS. Zalogowany panel oznacza
+wskazany wpis jako przeczytany przy najbliższym uwierzytelnionym pollu.
 
-The local transport is off by default. While enabled, it takes the place
-of Web Push delivery and shares the same atomic claim, category preferences,
-and suppression while a panel lease is active. The Web Push subscription
-stays stored for use after switching back. Events already in history, or
-whose last update predates activation, are skipped. Delivery failure keeps
-the event in history. A PowerShell success status means the Windows API
-accepted the toast. The popup itself depends on Windows notification
-settings and the interactive session. No Windows component starts WSL.
+## Instalacja
 
-## ASUS test
-
-Use an isolated DevStack installation and test mailbox. In an already running
-Ubuntu distribution, check out the test branch in the existing canonical
-source checkout, build the frontend and apply the staged update.
+Użyj izolowanej instalacji, testowej skrzynki Mailpit i już działającej
+dystrybucji Ubuntu. W katalogu źródłowym sprawdź, czy git status nie
+pokazuje lokalnych zmian. Zapisz nazwę aktualnej gałęzi i jej commit.
+Pomocnicza gałąź zachowuje dokładny commit do wycofania.
 
     cd ~/projects/devstack-source
+    git status --short
+    git branch --show-current
+    git rev-parse HEAD
+    git branch backup/before-windows-local-notifications HEAD
+    git fetch origin refs/heads/test/windows-local-notifications:refs/remotes/origin/test/windows-local-notifications
+    git switch --track origin/test/windows-local-notifications
+    git rev-parse HEAD
     bash scripts/build-frontend.sh
     sudo bash scripts/apply-update.sh
 
-In a PowerShell window under the signed-in Windows user, run the script
-from the test checkout. The registration creates the DevStack app identity
-under the current user's registry hive. Try the demo while disconnected
-from the Internet. Its link points to the test inbox.
+Porównaj commit po przełączeniu z SHA podanym dla testu. Następnie otwórz
+katalog tego checkoutu w zwykłym Windows PowerShell 5.1 jako zalogowany
+użytkownik Windows. Możesz użyć ścieżki UNC do już działającego Ubuntu,
+np. zastępując NAZWA_UZYTKOWNIKA swoją nazwą w poniższym przykładzie.
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-local-notification.ps1 -Mode Register
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-local-notification.ps1 -Mode Demo
+    Set-Location '\\wsl.localhost\Ubuntu-26.04\home\NAZWA_UZYTKOWNIKA\projects\devstack-source'
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1
 
-A demo succeeds when the **DevStack** toast appears and its link opens the
-test inbox. Keep Windows signed in for the remaining steps.
+Instalator buduje program w profilu użytkownika Windows, kopiuje do niego
+skrypt WinRT i rejestruje tożsamość powiadomień DevStack w HKCU. Na końcu
+wypisuje pełną ścieżkę do pliku DevStack.Notifications.exe. Zachowaj
+ją do włączenia transportu w Ubuntu.
 
-In Ubuntu, opt in as root and inspect the existing collector's log.
+### Gotowy program z GitHub Actions
 
-    sudo install -m 0644 -o root -g root /dev/null /etc/devstack/windows-local-notifications
-    sudo journalctl -u devstack-notifications.service -f
+Workflow Windows local notification launcher tworzy archiwum o nazwie
+devstack-windows-local-notifications-SHA. Zawiera sprawdzony program GUI,
+źródła, instalator, test i tę instrukcję. Archiwum jest dostępne przez
+30 dni od kompilacji. Instalacja części Ubuntu nadal korzysta z checkoutu
+gałęzi testowej.
 
-1. With the panel open, send a new SMTP fixture to local Mailpit. Expect
-   a panel toast while the tab polls.
-2. Close the last DevStack window. Keep Windows disconnected from Internet
-   while the local HTTPS origin and Mailpit remain reachable. Send a second
-   fixture and measure from SMTP acceptance to the system toast. Check for
-   one toast, then click it after the PowerShell process has exited.
-3. Check that the second fixture opens and its own journal entry changes to
-   read. Keep an unrelated unread fixture to confirm its status is preserved.
-4. Open two DevStack tabs and close one of them. Send another fixture and
-   check that the remaining tab still handles it. Repeat with the remaining
-   tab minimized.
-5. Compare the collector log with the visible toast. An
-   outcome=failed entry calls for running Demo in the same Windows user
-   session and checking WSL interoperability from the active distribution.
-   If Demo works and the integrated attempt fails, record whether WSL was
-   started interactively and which account has the local app identity.
+Pobierz paczkę z przebiegu dla tego samego commita, rozpakuj ją i otwórz
+jej katalog w Windows PowerShell. Porównaj COMMIT.txt z git rev-parse HEAD
+w Ubuntu. Sumy z SHA256SUMS.txt pozwalają zweryfikować rozpakowane pliki.
 
-To revert the transport, remove the Ubuntu opt-in marker. This restores the
-standard Web Push path for later events. To remove the experimental Windows
-identity, also run the script in Unregister mode under the same user.
+    Get-Content .\COMMIT.txt
+    foreach ($line in Get-Content .\SHA256SUMS.txt) {
+        $expected, $path = $line -split '  ', 2
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expected) {
+            throw "Nieprawidłowa suma pliku $path"
+        }
+    }
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -UseBuiltLauncher
 
-    sudo rm -- /etc/devstack/windows-local-notifications
+Tryby Demo i Uninstall są dostępne zarówno z paczki, jak i z checkoutu.
+
+## Test
+
+1. Odłącz Internet, zachowując lokalny dostęp do DevStacka i Mailpit.
+   W otwartym wcześniej oknie PowerShell uruchom demo. Obserwuj ekran
+   od wywołania do dymka, włącznie z pierwszym zimnym uruchomieniem.
+   Kryterium testu to dymek DevStack i zero mignięć dodatkowego okna.
+   Kliknięcie demonstracyjne otwiera skrzynkę testową.
+
+       powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode Demo
+
+2. W Ubuntu wstaw ścieżkę z instalatora i włącz transport.
+
+       launcher="$(wslpath -u 'C:\Users\NAZWA\AppData\Local\DevStack\LocalNotifications\DevStack.Notifications.exe')"
+       test -f "$launcher" &&
+           printf '%s\n' "$launcher" | sudo install -m 0644 -o root -g root /dev/stdin /etc/devstack/windows-local-notifications
+       sudo journalctl -u devstack-notifications.service -f
+
+3. Wyślij fikcyjną wiadomość lokalnym SMTP przy otwartym panelu, a potem
+   drugą po zamknięciu ostatniego okna DevStacka. W pierwszym przypadku
+   oczekuj toastu w panelu, w drugim pojedynczego dymka Windows bez
+   mignięcia konsoli. Zapisz czas od przyjęcia drugiego maila do dymka.
+4. Kliknij drugi dymek po zakończeniu procesu Windows i sprawdź, czy
+   otwiera właściwą wiadomość i oznacza tylko ten wpis jako przeczytany.
+   Powtórz próbę z dwiema kartami i zamknięciem jednej z nich. Pozostała
+   karta powinna przejąć powiadomienie również po zminimalizowaniu okna,
+   jeśli Edge nadal wykonuje poll.
+5. Log outcome=accepted oznacza, że wywołanie WinRT zakończyło się
+   powodzeniem. Porównaj je z faktycznym dymkiem i zachowaniem ekranu.
+   Jeśli bezpośrednie demo działa, a kolektor zwraca outcome=failed,
+   sprawdź dokładną ścieżkę w znaczniku oraz czy Ubuntu i Windows używają
+   tej samej sesji zalogowanego użytkownika z działającym WSL Interop.
+
+## Pełne wycofanie
+
+1. W Ubuntu usuń znacznik, żeby późniejsze zdarzenia wróciły do
+   standardowego transportu skonfigurowanego przed testem.
+
+       sudo rm -f -- /etc/devstack/windows-local-notifications
+
+2. W tym samym koncie Windows i w katalogu gałęzi testowej zaczekaj na
+   zakończenie ewentualnego wywołania i uruchom deinstalator.
+
+       Get-Process -Name DevStack.Notifications -ErrorAction SilentlyContinue | Wait-Process -Timeout 10
+       powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode Uninstall
+
+   Deinstalator usuwa program, skrypt, tożsamość HKCU i jej ustawienia
+   oraz zleca Windows wyczyszczenie dymków tej tożsamości. Jeśli Windows
+   zwróci ostrzeżenie podczas czyszczenia historii, usuń pozostały testowy
+   dymek DevStack z Centrum powiadomień.
+
+3. W Ubuntu przełącz checkout na zapamiętaną gałąź przy tym samym
+   commicie albo użyj kopii dokładnego commitu z pierwszego kroku.
+   Ponownie zbuduj frontend i zainstaluj poprzednią wersję.
+
+       cd ~/projects/devstack-source
+       git switch --detach backup/before-windows-local-notifications
+       bash scripts/build-frontend.sh
+       sudo bash scripts/apply-update.sh
+       git rev-parse HEAD
+       systemctl is-active devstack-notifications.timer
+
+   Wycofanie dotyczy zainstalowanego kodu i konfiguracji transportu.
+   Dane testowe można usunąć standardowo w Mailpit i panelu.

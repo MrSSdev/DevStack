@@ -52,10 +52,9 @@ ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
 ENGINE_UNIT = re.compile(r'devstack-engine-[0-9a-f]{32}-[a-z-]+\Z')
 WINDOWS_SCHTASKS = pathlib.Path('/mnt/c/Windows/System32/schtasks.exe')
 WINDOWS_HOSTS_TASK = 'DevStack Hosts Event Sync'
-WINDOWS_POWERSHELL = WINDOWS_SCHTASKS.with_name('WindowsPowerShell') / 'v1.0' / 'powershell.exe'
 WINDOWS_NOTIFICATION_MODE = pathlib.Path('/etc/devstack/windows-local-notifications')
-WINDOWS_NOTIFICATION_SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'scripts/windows-local-notification.ps1'
 WINDOWS_NOTIFICATION_ID = re.compile(r'(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22}')
+WINDOWS_NOTIFICATION_LAUNCHER = ('DevStack', 'LocalNotifications', 'DevStack.Notifications.exe')
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 DOMAIN = re.compile(r'[a-z][a-z0-9-]{0,39}\.test\Z')
 WEBROOT = re.compile(r'[a-zA-Z0-9_][a-zA-Z0-9_/-]{0,99}\Z')
@@ -1527,22 +1526,32 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
             or data['category'] not in ('mail', 'project', 'installer', 'service', 'settings')
             or data['kind'] not in ('success', 'error', 'info')):
         raise InputError('Nieprawidlowe powiadomienie Windows.')
-    if not WINDOWS_NOTIFICATION_MODE.is_file() or not WINDOWS_POWERSHELL.is_file():
+    if not WINDOWS_NOTIFICATION_MODE.is_file():
         return {'accepted': False}
     try:
-        # Only this deployed script is executable. The event travels as JSON
-        # on stdin regardless of the Windows command-line quoting rules.
-        script = WINDOWS_NOTIFICATION_SCRIPT.read_text(encoding='utf-8-sig')
-        encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
+        raw_path = WINDOWS_NOTIFICATION_MODE.read_text(encoding='utf-8').rstrip('\n')
+        launcher = pathlib.Path(raw_path)
+        if (re.search(r'[\x00-\x1f\x7f]', raw_path) or len(launcher.parts) < 7
+                or launcher.parts[:2] != ('/', 'mnt') or not re.fullmatch(r'[a-z]', launcher.parts[2])
+                or '..' in launcher.parts or launcher.parts[-3:] != WINDOWS_NOTIFICATION_LAUNCHER
+                or not launcher.is_file()):
+            return {'accepted': False}
+        # The launcher lives in the Windows user's writable profile. Never
+        # execute it with the daemon's Linux credentials.
+        account = pwd.getpwnam(config()['dev_user'])
+        if account.pw_uid == 0:
+            return {'accepted': False}
+        environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+        if 'WSL_INTEROP' in os.environ:
+            environment['WSL_INTEROP'] = os.environ['WSL_INTEROP']
+        encoded = base64.b64encode(json.dumps(data, ensure_ascii=True).encode('ascii')).decode('ascii')
         result = subprocess.run(
-            [str(WINDOWS_POWERSHELL), '-NoLogo', '-NoProfile', '-NonInteractive',
-             '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
-            cwd=WINDOWS_POWERSHELL.parent,
-            input=(json.dumps(data, ensure_ascii=True) + '\n').encode('ascii'),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6,
+            [str(launcher), encoded], cwd=launcher.parent, env=environment,
+            user=account.pw_uid, group=account.pw_gid, extra_groups=os.getgrouplist(account.pw_name, account.pw_gid),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8,
         )
         return {'accepted': result.returncode == 0}
-    except (OSError, subprocess.TimeoutExpired):
+    except (KeyError, OSError, ValueError, subprocess.TimeoutExpired):
         return {'accepted': False}
 
 

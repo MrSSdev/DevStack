@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Show', 'Register', 'Unregister', 'Demo', 'Render')]
+    [ValidateSet('Show', 'Register', 'Unregister', 'Render')]
     [string]$Mode = 'Show'
 )
 
@@ -59,7 +59,7 @@ function New-DevStackToastXml($Event) {
 
 if ($Mode -eq 'Render') {
     New-DevStackToastXml (Read-DevStackNotice)
-    exit 0
+    return
 }
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
@@ -70,23 +70,28 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
 if ($Mode -eq 'Register') {
     New-Item -Path $registration -Force | Out-Null
     New-ItemProperty -LiteralPath $registration -Name 'DisplayName' -PropertyType String -Value 'DevStack' -Force | Out-Null
-    exit 0
+    return
 }
 if ($Mode -eq 'Unregister') {
     if (Test-Path -LiteralPath $registration) {
-        Remove-Item -LiteralPath $registration
+        try {
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]::History.Clear($applicationId)
+        } catch {
+            Write-Warning 'Windows could not clear DevStack history. Dismiss any leftover DevStack toast in Notification Center.'
+        }
+        Remove-Item -LiteralPath $registration -Recurse
     }
-    exit 0
+    $settings = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\$applicationId"
+    if (Test-Path -LiteralPath $settings) {
+        Remove-Item -LiteralPath $settings -Recurse
+    }
+    return
 }
 if (-not (Test-Path -LiteralPath $registration)) {
     throw 'Register DevStack notifications in this Windows account first.'
 }
 
-$event = if ($Mode -eq 'Demo') {
-    @{ id = 'batch-00000000000000000000000000000000'; category = 'mail'; kind = 'info' }
-} else {
-    Read-DevStackNotice
-}
+$event = Read-DevStackNotice
 $xml = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]::new()
 $xml.LoadXml((New-DevStackToastXml $event))
 $toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]::new($xml)

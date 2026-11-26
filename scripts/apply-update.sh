@@ -44,7 +44,7 @@ fi
 
 for file in backend/public/index.php backend/public/index.html backend/public/sw.js backend/public/manifest.webmanifest backend/public/pwa/icon-192.png backend/public/pwa/icon-512.png backend/public/pwa/devstack.svg backend/security.php backend/mail-preview.php backend/notifications.php backend/push-helper.php \
     daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
-    scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/notification-push.py scripts/windows-local-notification.ps1 scripts/devstack-notifications.service scripts/devstack-notifications.timer; do
+    scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/notification-push.py scripts/devstack-notifications.service scripts/devstack-notifications.timer; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
     echo "Missing or unsafe source file: $file" >&2
     exit 1
@@ -129,7 +129,7 @@ install -d -m 0755 -o root -g root "$stage_dir/framework-installers" "$stage_dir
 for item in README.md catalog.json common.py registry.py runner.py laravel/README.md laravel/__init__.py laravel/adapter.py; do
   install -m 0644 -o root -g root "$src/framework-installers/$item" "$stage_dir/framework-installers/$item"
 done
-for item in list-domains.py watch-domains.py set-password.php configure-auth.php notifications-worker.php notification-push.py windows-local-notification.ps1 devstack-notifications.service devstack-notifications.timer; do
+for item in list-domains.py watch-domains.py set-password.php configure-auth.php notifications-worker.php notification-push.py devstack-notifications.service devstack-notifications.timer; do
   install -m 0644 -o root -g root "$src/scripts/$item" "$stage_dir/scripts/$item"
 done
 

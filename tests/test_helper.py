@@ -485,25 +485,39 @@ class ValidationTests(unittest.TestCase):
         event = {'id': 'mail-' + 'a'*22, 'category': 'mail', 'kind': 'info'}
         with tempfile.TemporaryDirectory() as tmp:
             mode = Path(tmp) / 'enabled'
-            exe = Path(tmp) / 'powershell.exe'
-            exe.touch()
-            with patch.object(d, 'WINDOWS_NOTIFICATION_MODE', mode), patch.object(d, 'WINDOWS_POWERSHELL', exe), patch.object(d.subprocess, 'run') as run:
+            exe = Path('/mnt/c/Users/Test User/AppData/Local/DevStack/LocalNotifications/DevStack.Notifications.exe')
+            is_file = Path.is_file
+            account = SimpleNamespace(pw_name='fixture', pw_uid=1001, pw_gid=1001)
+            with (
+                patch.object(d, 'WINDOWS_NOTIFICATION_MODE', mode),
+                patch.object(Path, 'is_file', lambda file: file == exe or is_file(file)),
+                patch.object(d, 'config', return_value={'dev_user': 'fixture'}),
+                patch.object(d.pwd, 'getpwnam', return_value=account),
+                patch.object(d.os, 'getgrouplist', return_value=[1001, 27]),
+                patch.object(d.subprocess, 'run') as run,
+            ):
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
-                mode.touch()
+                mode.write_text('/mnt/c/Users/Test User/powershell.exe\n')
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                mode.write_text(str(exe) + '\n')
                 for bad in ({**event, 'path': 'unexpected'}, {**event, 'id': 'https://other.test/'},
                             {**event, 'category': ['mail']}, {**event, 'kind': 'loading'}):
                     with self.assertRaises(d.InputError):
                         d.show_windows_notification(bad)
+                account.pw_uid = 0
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
                 run.assert_not_called()
+                account.pw_uid = 1001
                 run.return_value = SimpleNamespace(returncode=0)
                 self.assertTrue(d.show_windows_notification(event)['accepted'])
                 arguments = run.call_args.args[0]
                 self.assertEqual(arguments[0], str(exe))
-                self.assertEqual(arguments[-2], '-EncodedCommand')
-                self.assertEqual(base64.b64decode(arguments[-1]).decode('utf-16-le'),
-                                 d.WINDOWS_NOTIFICATION_SCRIPT.read_text(encoding='utf-8-sig'))
-                self.assertEqual(json.loads(run.call_args.kwargs['input']), event)
-                self.assertEqual(run.call_args.kwargs['timeout'], 6)
+                self.assertEqual(len(arguments), 2)
+                self.assertEqual(json.loads(base64.b64decode(arguments[1])), event)
+                self.assertEqual(run.call_args.kwargs['user'], 1001)
+                self.assertEqual(run.call_args.kwargs['group'], 1001)
+                self.assertEqual(run.call_args.kwargs['extra_groups'], [1001, 27])
+                self.assertEqual(run.call_args.kwargs['timeout'], 8)
                 run.return_value = SimpleNamespace(returncode=1)
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
 

@@ -1,0 +1,66 @@
+name: Windows local notification launcher
+
+on:
+  push:
+    branches:
+      - test/windows-local-notifications
+
+permissions:
+  contents: read
+
+jobs:
+  launcher:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate Windows scripts
+        shell: powershell
+        run: |
+          $files = @(
+              'windows/install-local-notifications.ps1',
+              'windows/test-local-notification-launcher.ps1',
+              'scripts/windows-local-notification.ps1'
+          )
+          foreach ($file in $files) {
+              $tokens = $null
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+              if ($errors.Count) { $errors | Format-List; throw "Cannot parse $file" }
+          }
+      - name: Build the GUI launcher and verify PowerShell has no console
+        shell: powershell
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'devstack-local-notifications'
+          $windows = New-Item -ItemType Directory -Path (Join-Path $package 'windows') -Force
+          ./windows/test-local-notification-launcher.ps1 -OutputExecutable (Join-Path $windows.FullName 'DevStack.Notifications.exe')
+      - name: Package the tested binary, source and installation instructions
+        shell: powershell
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'devstack-local-notifications'
+          $paths = @(
+              'windows/local-notification-launcher.cs',
+              'windows/install-local-notifications.ps1',
+              'windows/test-local-notification-launcher.ps1',
+              'scripts/windows-local-notification.ps1',
+              'docs/LOCAL-WINDOWS-NOTIFICATIONS.md'
+          )
+          foreach ($path in $paths) {
+              $target = Join-Path $package $path
+              New-Item -ItemType Directory -Path (Split-Path $target) -Force | Out-Null
+              Copy-Item -LiteralPath $path -Destination $target
+          }
+          Set-Content -LiteralPath (Join-Path $package 'COMMIT.txt') -Value $env:GITHUB_SHA -Encoding Ascii
+          $hashes = Get-ChildItem -LiteralPath $package -Recurse -File | Sort-Object FullName | ForEach-Object {
+              $relative = $_.FullName.Substring($package.Length + 1).Replace('\', '/')
+              '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relative
+          }
+          Set-Content -LiteralPath (Join-Path $package 'SHA256SUMS.txt') -Value $hashes -Encoding Ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devstack-windows-local-notifications-${{ github.sha }}
+          path: ${{ runner.temp }}/devstack-local-notifications/
+          if-no-files-found: error
+          retention-days: 30
