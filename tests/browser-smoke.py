@@ -796,6 +796,28 @@ class BrowserAcceptance(unittest.TestCase):
             self.goto('dashboard')
         original=first.value.request.post_data_json['client']
         self.assertTrue(present(original))
+        # Beacon has no custom header. The body-token exception is restricted
+        # to this exact same-origin JSON endpoint and still uses the session
+        # token. Bad requests cannot remove the live document.
+        leave_url=BASE+'/api/notifications/leave'
+        for headers,body in [
+            ({'Origin':BASE},{'client':original,'csrf':'invalid'}),
+            ({'Origin':'https://evil.invalid'},{'client':original,'csrf':self.csrf}),
+            ({},{'client':original,'csrf':self.csrf}),
+            ({'Origin':BASE,'Content-Type':'text/plain'},{'client':original,'csrf':self.csrf}),
+            ({'Origin':BASE},{'client':original,'csrf':self.csrf,'extra':True}),
+            ({'Origin':BASE,'X-CSRF-Token':'invalid'},{'client':original,'csrf':self.csrf}),
+        ]:
+            self.assertEqual(self.context.request.post(leave_url,headers=headers,data=body).status,403)
+        self.assertEqual(self.context.request.post(BASE+'/api/notifications/manage',
+            headers={'Origin':BASE},data={'action':'read-all','csrf':self.csrf}).status,403)
+        self.assertTrue(present(original))
+        probe='c'*32
+        self.assertEqual(self.post('/api/notifications/poll',{'client':probe}).status,200)
+        self.assertTrue(present(probe))
+        self.assertEqual(self.context.request.post(leave_url,headers={'Origin':BASE},
+            data={'client':probe,'csrf':self.csrf}).status,200)
+        self.assertFalse(present(probe))
         second=self.context.new_page()
         try:
             with second.expect_response(poll_response) as other:
@@ -828,14 +850,32 @@ class BrowserAcceptance(unittest.TestCase):
             self.assertNotEqual(resumed,client)
             self.assertTrue(present(resumed))
             self.assertFalse(present(client))
-            # A genuine reload also releases the previous lifetime; no fake
-            # push provider or native Windows event is required.
+            # A genuine reload also releases the previous lifetime. Verify
+            # that pagehide records the retired ID for the new document;
+            # this covers the teardown-request loss seen in the previous CI.
             with second.expect_response(poll_response) as reloaded:
                 second.reload()
             fresh=reloaded.value.request.post_data_json['client']
             self.assertNotIn(fresh,[original,client,resumed])
+            self.assertIn(resumed,reloaded.value.request.post_data_json.get('retired',[]))
             wait_presence(resumed,False)
             self.assertTrue(present(fresh))
+            self.assertTrue(present(original))
+            # Deliberately lose the next beacon: a true result merely means
+            # "queued". The real next authenticated poll must recover it.
+            second.evaluate("Object.defineProperty(navigator,'sendBeacon',{configurable:true,value:()=>true})")
+            with second.expect_response(poll_response) as recovered:
+                second.reload()
+            latest=recovered.value.request.post_data_json['client']
+            self.assertNotIn(latest,[original,client,resumed,fresh])
+            self.assertIn(fresh,recovered.value.request.post_data_json.get('retired',[]))
+            wait_presence(fresh,False)
+            self.assertTrue(present(latest))
+            self.assertTrue(present(original))
+            # Real navigation away with no DevStack successor: no recovery
+            # poll is available, so the browser must deliver the leave itself.
+            second.goto('about:blank')
+            wait_presence(latest,False)
             self.assertTrue(present(original))
         finally:
             second.close()

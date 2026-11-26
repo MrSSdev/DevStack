@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch'
 import { toast, fail } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
-import { consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, renewNotificationClient, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
+import { acknowledgeRetiredNotificationClients, consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, renewNotificationClient, retiredNotificationClients, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
 
 export function useNotificationCenter(authenticated:boolean,csrf:string,request:NoticeRequest,navigate:(route:string)=>void){
   const [state,setState]=useState<NoticeState>(emptyNoticeState)
@@ -38,9 +38,12 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     inFlight.current=true
     const version=generation.current
     const opened=pendingOpened.current.values().next().value
+    const client=notificationClient
+    const retired=retiredNotificationClients().filter(id=>id!==client)
     try{
-      const result=await request<NoticeState>('POST','/api/notifications/poll',csrf,{client:notificationClient,...(opened?{opened}:{})})
+      const result=await request<NoticeState>('POST','/api/notifications/poll',csrf,{client,...(opened?{opened}:{}),...(retired.length?{retired}:{})})
       if(!active.current||suspended.current||version!==generation.current)return
+      acknowledgeRetiredNotificationClients(retired)
       if(opened){
         pendingOpened.current.delete(opened)
         consumeNotificationClick(opened)

@@ -116,6 +116,23 @@ $presence->observeMail([['ID'=>str_repeat('K',22),'Created'=>gmdate('c'),'Subjec
 check_notice($presence->claimPush()===null,'New document lifetime renews presence');
 check_notice(array_column($presence->poll($new)['toast'],'id')===['mail-'.str_repeat('K',22)],'New document can receive foreground notifications');
 $presence->leave($new);
+// An unload request can disappear while the browser tears down a document.
+// A new authenticated poll can retire only explicitly recorded old IDs,
+// atomically with its own heartbeat; another live tab remains untouched.
+$recovery=new DevStackNotices(':memory:');
+$recovery->observeMail([]);$recovery->subscribe($subscription);$recovery->setCategories(['mail']);
+$recovery->poll($a);$recovery->poll($b);
+$recovery->poll($c,true,null,[$a,$a]);
+$recovery->observeMail([['ID'=>str_repeat('R',22),'Created'=>gmdate('c')]]);
+check_notice($recovery->poll($a)['toast']===[],'Recovered leave blocks late poll from retired ID');
+$recovery->leave($c);
+check_notice($recovery->claimPush()===null,'Recovery must preserve another live tab');
+$recovery->leave($b);
+check_notice($recovery->claimPush()!==null,'Recovered missing leave does not block push');
+foreach ([[$c],['invalid'],array_fill(0,17,$a),'invalid',['x'=>$a]] as $invalid) {
+    try {$recovery->poll($c,true,null,$invalid);check_notice(false,'Invalid retired list accepted');}
+    catch(InvalidArgumentException) {}
+}
 // Verify the persisted 90-second lease and pruning without sleeping for it.
 $fixture=tempnam(sys_get_temp_dir(),'devstack-notices-');
 try {

@@ -49,9 +49,11 @@ marker survives password login and is consumed after acknowledgement.
 Opening a real mail toast also marks only its own event read. PHP tests
 cover closed-ID tombstones, late poll/operation/job requests, a remaining
 live tab, new lifetime registration and expired leases. A browser lifecycle
-scenario exercises the real authenticated keepalive leave, late API requests,
-blocked polling after pagehide, a synthetic BFCache-style pageshow and an
-actual reload, checking only lease presence in the isolated fixture database.
-The synthetic lifecycle events are not evidence of native window closure or
-background throttling. The tests do not simulate or claim successful native
+scenario exercises the real authenticated beacon leave, rejects invalid
+body CSRF/origin/content-type and unrelated API use, tests late API requests,
+blocked polling after pagehide, a synthetic BFCache-style pageshow, actual
+reload, deliberately dropped beacon recovery and real navigation away
+without a successor poll. It checks only lease presence in the isolated
+fixture database. The synthetic lifecycle events and a navigation away
+are not evidence of native Windows window closure or background throttling. The tests do not simulate or claim successful native
 Windows delivery.

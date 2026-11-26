@@ -128,16 +128,18 @@ final class DevStackNotices
     {
         return (bool)$this->execute('SELECT 1 FROM closed_clients WHERE id=? AND expires>?',[$client,time()])->fetchColumn();
     }
+    private function closeClient(string $client): void
+    {
+        // Record even a leave that arrives before the first poll.
+        $this->execute('INSERT INTO closed_clients(id,expires) VALUES(?,?)
+            ON CONFLICT(id) DO UPDATE SET expires=excluded.expires',
+            [$client,time()+self::CLOSED_CLIENT_SECONDS]);
+        $this->execute('DELETE FROM clients WHERE id=?',[$client]);
+    }
     public function leave(string $client): void
     {
         if ($client === '') return;
-        $this->atomic(function () use ($client) {
-            // Record even a leave that arrives before the first poll.
-            $this->execute('INSERT INTO closed_clients(id,expires) VALUES(?,?)
-                ON CONFLICT(id) DO UPDATE SET expires=excluded.expires',
-                [$client,time()+self::CLOSED_CLIENT_SECONDS]);
-            $this->execute('DELETE FROM clients WHERE id=?',[$client]);
-        });
+        $this->atomic(fn()=>$this->closeClient($client));
     }
     private function present(string $client): bool
     {
@@ -335,11 +337,22 @@ final class DevStackNotices
         if ($client!=='') $this->execute("UPDATE notices SET delivery='toast' WHERE id=? AND owner=? AND direct=1 AND delivery='pending'",[$id,$client]);
     }
 
-    public function poll(string $client, bool $claim = true, mixed $opened = null): array
+    public function poll(string $client, bool $claim = true, mixed $opened = null, mixed $retired = []): array
     {
-        return $this->atomic(function () use ($client,$claim,$opened) {
+        // Only bounded, explicitly retired lifetimes may be replayed by a
+        // restored/reloaded document. A duplicate tab never retires a live ID.
+        if (!is_array($retired)||!array_is_list($retired)||count($retired)>16) {
+            throw new InvalidArgumentException('Nieprawidłowa lista zamkniętych klientów.');
+        }
+        foreach ($retired as $old) {
+            if (self::client($old)===''||$old===$client) {
+                throw new InvalidArgumentException('Nieprawidłowy zamknięty klient.');
+            }
+        }
+        return $this->atomic(function () use ($client,$claim,$opened,$retired) {
             $this->prune();
             $present=$this->touch($client);
+            if ($present) foreach (array_unique($retired) as $old) $this->closeClient($old);
             if ($opened!==null) {
                 // The clicked journal event alone is read before collecting
                 // toasts and returning the authoritative history snapshot.

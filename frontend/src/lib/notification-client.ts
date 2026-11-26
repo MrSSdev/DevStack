@@ -51,8 +51,35 @@ export function acknowledgeOperation(id:unknown,csrf:string,client=notificationC
     .catch(()=>undefined).finally(()=>window.dispatchEvent(new Event(notificationChange)))
 }
 
+// Remember only IDs explicitly retired by pagehide, never a live document
+// ID or a CSRF token. Duplicated tabs can copy sessionStorage safely: these
+// IDs already belong to stopped lifetimes. Storage is best effort.
+const retiredKey='devstack:retired-notification-clients'
+export function retiredNotificationClients():string[]{
+  try{
+    const value:unknown=JSON.parse(sessionStorage.getItem(retiredKey)??'[]')
+    return Array.isArray(value)?[...new Set(value.filter((id):id is string=>typeof id==='string'&&/^[a-f0-9]{32}$/.test(id)))].slice(-16):[]
+  }catch{return []}
+}
+function saveRetiredNotificationClients(ids:string[]){
+  try{
+    if(ids.length)sessionStorage.setItem(retiredKey,JSON.stringify([...new Set(ids)].slice(-16)))
+    else sessionStorage.removeItem(retiredKey)
+  }catch{/* The leave transport and lease fallback remain available. */}
+}
+export function acknowledgeRetiredNotificationClients(ids:string[]){
+  if(ids.length)saveRetiredNotificationClients(retiredNotificationClients().filter(id=>!ids.includes(id)))
+}
 export function leaveNotifications(csrf:string,client=notificationClient){
   if(!csrf)return
+  saveRetiredNotificationClients([...retiredNotificationClients(),client])
+  // Beacon is designed to queue small POSTs across document teardown.
+  // true means queued, not delivered. A later authenticated poll also
+  // reconciles explicitly retired IDs if an unload request was lost.
+  try{
+    if(typeof navigator.sendBeacon==='function'&&navigator.sendBeacon('/api/notifications/leave',
+      new Blob([JSON.stringify({client,csrf})],{type:'application/json'})))return
+  }catch{/* Fall back to the existing header-authenticated keepalive. */}
   void fetch('/api/notifications/leave',{method:'POST',credentials:'same-origin',keepalive:true,
     headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
     body:JSON.stringify({client})}).catch(()=>undefined)

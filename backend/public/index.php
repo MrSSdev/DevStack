@@ -44,10 +44,21 @@ if ($method === 'POST') {
     if ($origin !== null && $origin !== 'https://devstack.test') {
         devstack_json(403, ['ok' => false, 'error' => 'Nieprawidłowe pochodzenie żądania.']);
     }
-    if (!devstack_csrf_valid($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) {
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
+    // Beacon cannot set a custom header. Accept the same session-bound
+    // CSRF token in the small JSON body ONLY for the leave endpoint and
+    // only with an explicit, exact same-origin POST. All other routes and
+    // normal header requests retain the existing CSRF checks.
+    if ($path === '/api/notifications/leave' && $token === null &&
+        $origin === 'https://devstack.test' &&
+        strtolower(trim(explode(';', (string)($_SERVER['CONTENT_TYPE'] ?? ''))[0])) === 'application/json') {
+        $body = devstack_body();
+        if (count($body)===2 && array_key_exists('client',$body)) $token = $body['csrf'] ?? null;
+    }
+    if (!devstack_csrf_valid($token)) {
         devstack_json(403, ['ok' => false, 'error' => 'Nieprawidłowy token CSRF. Odśwież stronę.']);
     }
-    $body = devstack_body();
+    $body ??= devstack_body();
     if ($path === '/api/login') {
         if (!devstack_password_required()) {
             devstack_json(200, ['ok' => true, 'authenticated' => true, 'password_required' => false, 'csrf' => $_SESSION['csrf']]);
@@ -115,10 +126,12 @@ try {
         $client=DevStackNotices::client($body['client']??null);
         if ($client==='') throw new InvalidArgumentException('Nieprawidłowy klient powiadomień.');
         $store=new DevStackNotices();
-        devstack_json(200,['ok'=>true,'result'=>$store->poll($client,true,$body['opened']??null)]);
+        devstack_json(200,['ok'=>true,'result'=>$store->poll($client,true,$body['opened']??null,$body['retired']??[])]);
     }
     if ($method === 'POST' && $path === '/api/notifications/leave') {
-        (new DevStackNotices())->leave(DevStackNotices::client($body['client']??null));
+        $client=DevStackNotices::client($body['client']??null);
+        if ($client==='') throw new InvalidArgumentException('Nieprawidłowy klient powiadomień.');
+        (new DevStackNotices())->leave($client);
         devstack_json(200,['ok'=>true,'result'=>[]]);
     }
     if ($method === 'POST' && $path === '/api/notifications/ack') {

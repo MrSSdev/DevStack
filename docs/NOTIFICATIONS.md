@@ -55,11 +55,18 @@ permission and OS notification settings. Only the existing five-second
 authenticated notification poll renews a page's 90-second presence lease;
 ordinary state requests and operation results do not. Minimized/hidden
 pages keep polling as their browser permits. On pagehide the panel stops
-polling, invalidates queued responses and sends the authenticated keepalive
-leave request. The journal atomically removes the lease and remembers the
-closed document ID for 24 hours, so delayed polls cannot reactivate it
-within that retention period. A restored page (including BFCache) or a
-new login uses a fresh document lifetime ID. A hidden visibility transition
+polling, invalidates queued responses and queues an authenticated
+`navigator.sendBeacon` leave (falling back to the existing keepalive fetch
+if beacon cannot queue it). The beacon is a same-origin JSON POST; only
+that exact endpoint accepts the session-bound CSRF token in the body
+instead of the custom header. All other API CSRF rules remain unchanged.
+The journal atomically removes the lease and remembers the closed document
+ID for 24 hours, so delayed polls cannot reactivate it within that period.
+The document also records up to 16 explicitly retired IDs in tab-local
+sessionStorage (no token or live ID). If a teardown request was lost, the
+next authenticated poll after a reload/restoration atomically retires these
+IDs with its new heartbeat, then clears the acknowledged IDs. A restored
+page (including BFCache) or a new login uses a fresh lifetime ID. A hidden visibility transition
 alone is not a close. If the browser fails to deliver leave, crashes,
 freezes or throttles/suspends a page beyond the lease interval, presence
 can still be inaccurate; a missed leave expires after at most the remaining
