@@ -24,19 +24,26 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
+          extensions: dom, pdo_sqlite, mbstring
           coverage: none
       - name: Syntax checks
         run: |
           php -l backend/public/index.php
           php -l backend/security.php
+          php -l backend/mail-preview.php
+          php -l backend/notifications.php
+          php -l backend/push-helper.php
+          php -l scripts/notifications-worker.php
           php -l scripts/set-password.php
           php -l scripts/configure-auth.php
           bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh scripts/backup-project-db.sh scripts/verify-project-db-backup.sh scripts/update.sh scripts/apply-update.sh scripts/install-mailpit.sh
-          python3 -m py_compile daemon/devstackd.py daemon/managed_services.py framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py
+          python3 -m py_compile daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py
       - name: Backend unit tests
         run: |
           python3 -m unittest discover -s tests -v
           php tests/php-security.php
+          php tests/php-mail-preview.php
+          php tests/php-notifications.php
       - name: Backup scripts reject invalid inputs
         run: |
           if bash scripts/backup-project-db.sh 'unsafe/slug'; then

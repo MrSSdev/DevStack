@@ -47,6 +47,68 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(d.InputError, msg=value):
                 d.check_overrides(value)
 
+    def test_unified_nginx_editor_preserves_both_managed_regions(self):
+        flux = (r'location ~* ^/flux/(flux|editor)(\.min)?\.(js|css)$ {'
+                ' expires off; try_files $uri $uri/ /index.php?$query_string; }')
+        tuning = 'client_max_body_size 64m;\nclient_body_timeout 120s;'
+        expected = {'overrides': tuning, 'extra_locations': d.check_extra_locations(flux)}
+        self.assertEqual(d.check_nginx_rules(tuning + '\n\n' + flux), expected)
+        self.assertEqual(d.check_nginx_rules(flux + '\n# tuning\n' + tuning), expected)
+        self.assertEqual(d.check_nginx_rules(expected['overrides'] + '\n\n' + expected['extra_locations']), expected)
+        self.assertEqual(d.check_nginx_rules(' \n# nothing\n'), {'overrides': '', 'extra_locations': ''})
+        self.assertEqual(d.check_nginx_rules(flux)['overrides'], '')
+        self.assertEqual(d.check_nginx_rules(tuning)['extra_locations'], '')
+
+    def test_unified_nginx_editor_rejects_unsafe_or_duplicate_rules(self):
+        flux = (r'location ~* ^/flux/flux\.js$ {'
+                ' try_files $uri $uri/ /index.php?$query_string; }')
+        for bad in (None, 'x' * 5803, 'client_max_body_size 0m;',
+                    'client_max_body_size 64m;\nclient_max_body_size 128m;',
+                    'location / { proxy_pass http://evil.test; }',
+                    flux + '\n' + flux, flux + '\ninclude /etc/shadow;',
+                    flux.replace('try_files', 'root /etc; try_files'),
+                    flux.replace('/index.php?', '/secret.php?'),
+                    'client_body_timeout 120s;\n' + flux + '\x00'):
+            with self.assertRaises(d.InputError, msg=repr(bad)):
+                d.check_nginx_rules(bad)
+        with self.assertRaises(d.InputError):
+            d.update_config({'slug':'alpha','rules':'','overrides':''})
+
+    def test_framework_reader_uses_only_developer_credentials_and_known_results(self):
+        from types import SimpleNamespace
+        account = SimpleNamespace(pw_uid=1001, pw_gid=1001)
+        output = {
+            'demo': {'name': 'Laravel', 'version': '13.42.0', 'untrusted': 'discard'},
+            'other': {'name': 'Symfony', 'version': '<script>'},
+            'unknown': {'name': 'Unknown', 'version': '1.0'},
+            'not-requested': {'name': 'Laravel', 'version': '13.0'},
+        }
+        with patch.object(d, 'engine_identity', return_value=('developer', '/home/developer')), \
+             patch.object(d.pwd, 'getpwnam', return_value=account), \
+             patch.object(d.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps(output))) as run:
+            result = d.project_frameworks(['demo','other','unknown'])
+            self.assertEqual(result, {'demo': {'name': 'Laravel', 'version': '13.42.0'}})
+            args, kwargs = run.call_args
+            self.assertEqual(args[0][0], '/usr/bin/systemd-run')
+            self.assertEqual(args[0][-3:-1], ['/usr/bin/python3','-I'])
+            self.assertTrue(args[0][-1].endswith('/daemon/project_frameworks.py'))
+            self.assertIn('--uid=developer', args[0])
+            self.assertIn('--gid=1001', args[0])
+            self.assertIn('--working-directory=/', args[0])
+            self.assertIn('--property=NoNewPrivileges=yes', args[0])
+            self.assertIn('--property=ProtectHome=read-only', args[0])
+            self.assertIn('--property=ProtectSystem=strict', args[0])
+            self.assertIn('--property=RuntimeMaxSec=5s', args[0])
+            self.assertIn('--property=InaccessiblePaths=-/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack -/mnt/c', args[0])
+            self.assertNotIn('user', kwargs)
+            self.assertNotIn('group', kwargs)
+            self.assertEqual(json.loads(kwargs['input']), ['demo','other','unknown'])
+            self.assertEqual(kwargs['timeout'], 10)
+        with patch.object(d, 'engine_identity', return_value=('developer','/home/developer')), \
+             patch.object(d.pwd,'getpwnam',return_value=account), \
+             patch.object(d.subprocess,'run',side_effect=OSError('unavailable')):
+            self.assertEqual(d.project_frameworks(['demo']), {})
+
     def test_theme_defaults_and_persists_server_side(self):
         with tempfile.TemporaryDirectory() as tmp:
             pref = Path(tmp) / 'preferences.json'
@@ -436,7 +498,7 @@ class ValidationTests(unittest.TestCase):
                 # Preserve pathlib.Path semantics for other uses and redirect only backup location.
                 dummy.Path.side_effect = lambda value: backup if value=='/var/lib/devstack' else Path(value)
                 with self.assertRaises(RuntimeError):
-                    d.update_config({'slug':'alpha','overrides':'client_max_body_size 64m;'})
+                    d.update_config({'slug':'alpha','rules':'client_max_body_size 64m;'})
             self.assertEqual(target.read_text(), 'old config')
             self.assertEqual(json.loads(state.read_text())['alpha']['overrides'], '')
 

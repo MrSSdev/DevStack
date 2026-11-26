@@ -177,6 +177,38 @@ def check_extra_locations(value: Any) -> str:
     return '\n\n'.join(normalized)
 
 
+def check_nginx_rules(value: Any) -> dict[str, str]:
+    """One editor, the same two strictly validated managed Nginx regions.
+
+    Bare tuning directives go inside location /; the existing asset location
+    blocks go at server level. No raw user text is ever used in the vhost.
+    """
+    if not isinstance(value, str) or len(value) > 5802 or '\x00' in value:
+        raise InputError('Dodatkowa konfiguracja Nginx: wymagany tekst do 5802 znakow.')
+    position = 0
+    tuning = []
+    locations = []
+    while position < len(value):
+        while position < len(value) and value[position].isspace():
+            position += 1
+        if position == len(value):
+            break
+        match = ASSET_BLOCK.match(value, position)
+        if match:
+            locations.append(match.group(0))
+            position = match.end()
+            continue
+        end = value.find('\n', position)
+        if end < 0:
+            end = len(value)
+        tuning.append(value[position:end])
+        position = end + 1
+    return {
+        'overrides': check_overrides('\n'.join(tuning)),
+        'extra_locations': check_extra_locations('\n'.join(locations)),
+    }
+
+
 def read_json(path: pathlib.Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -279,13 +311,77 @@ def defer_php_fpm_reload() -> None:
          '/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
 
 
+def project_frameworks(slugs: list[str]) -> dict[str, dict[str, Any]]:
+    """Only the developer identity may inspect project-controlled metadata."""
+    if not slugs:
+        return {}
+    try:
+        user, home = engine_identity()
+        account = pwd.getpwnam(user)
+        if account.pw_uid == 0 or account.pw_gid == 0:
+            return {}
+        # PID 1 switches identity before applying restrictions, just like
+        # the established installer and project-directory workers. Direct
+        # credential changes in children of the hardened daemon can fail.
+        unit = 'devstack-frameworks-' + secrets.token_hex(8)
+        result = subprocess.run(
+            ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+             '--service-type=exec', '--unit=' + unit,
+             '--uid=' + user, '--gid=' + str(account.pw_gid),
+             '--working-directory=/', '--setenv=HOME=' + home,
+             '--setenv=PATH=/usr/bin:/bin',
+             '--property=NoNewPrivileges=yes',
+             '--property=ProtectSystem=strict', '--property=ProtectHome=read-only',
+             '--property=PrivateTmp=yes', '--property=PrivateDevices=yes',
+             '--property=ProtectKernelTunables=yes', '--property=ProtectKernelModules=yes',
+             '--property=ProtectControlGroups=yes', '--property=RestrictSUIDSGID=yes',
+             '--property=InaccessiblePaths=-/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack -/mnt/c',
+             '--property=PartOf=devstackd.service', '--property=RuntimeMaxSec=5s',
+             '--property=UMask=0077',
+             '/usr/bin/python3', '-I', str(pathlib.Path(__file__).resolve().with_name('project_frameworks.py'))],
+            input=json.dumps(slugs), capture_output=True, text=True, timeout=10,
+            check=True, close_fds=True,
+        )
+        if len(result.stdout) > 1024 * 1024:
+            raise ValueError('oversized framework response')
+        raw = json.loads(result.stdout)
+        if not isinstance(raw, dict):
+            return {}
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as exc:
+        # Keep the dashboard usable and emit only a bounded diagnostic, never
+        # raw project metadata or stderr from the worker.
+        code = (' (exit ' + str(exc.returncode) + ')') if isinstance(exc, subprocess.CalledProcessError) else ''
+        print('Framework metadata worker unavailable: ' + type(exc).__name__ + code, file=sys.stderr, flush=True)
+        return {}
+    labels = {'Laravel', 'Symfony', 'CakePHP', 'CodeIgniter', 'Yii', 'Slim'}
+    allowed = set(slugs)
+    output = {}
+    for slug, value in raw.items():
+        if slug not in allowed or not isinstance(value, dict):
+            continue
+        label, version = value.get('name'), value.get('version')
+        if not isinstance(label, str) or label not in labels:
+            continue
+        if version is not None and (not isinstance(version, str) or not re.fullmatch(
+            r'[0-9]{1,5}\.[0-9]{1,5}(?:\.[0-9]{1,5}){0,2}(?:[-+][0-9A-Za-z][0-9A-Za-z.+-]{0,47})?', version
+        )):
+            continue
+        output[slug] = {'name': label, 'version': version}
+    return output
+
+
 def public_projects() -> list[dict[str, Any]]:
     output = []
-    for slug, p in sorted(read_json(STATE_FILE).items()):
+    state = read_json(STATE_FILE)
+    frameworks = project_frameworks([slug for slug, p in state.items() if SLUG.fullmatch(slug) and isinstance(p, dict)])
+    for slug, p in sorted(state.items()):
         if not SLUG.fullmatch(slug) or not isinstance(p, dict):
             continue
         item = dict(p)
         item['slug'] = slug
+        item.pop('detected_framework', None)
+        if slug in frameworks:
+            item['detected_framework'] = frameworks[slug]
         path = site_path(slug)
         item['nginx_config'] = path.read_text(encoding='utf-8') if path.is_file() else ''
         output.append(item)
@@ -857,15 +953,27 @@ def reveal(data: dict[str, Any]) -> dict[str, str]:
 
 def update_config(data: dict[str, Any]) -> dict[str, str]:
     """Validate both editable regions, test Nginx, reload, or roll back."""
-    if not {'slug', 'overrides'}.issubset(data) or set(data) - {'slug', 'overrides', 'extra_locations'}:
-        raise InputError('Nieprawidlowe pola konfiguracji Nginx.')
+    if 'rules' in data:
+        if set(data) != {'slug', 'rules'}:
+            raise InputError('Nieprawidlowe pola konfiguracji Nginx.')
+        validated = check_nginx_rules(data['rules'])
+    else:
+        # Preserve the existing API and full-file editor for older clients.
+        if not {'slug', 'overrides'}.issubset(data) or set(data) - {'slug', 'overrides', 'extra_locations'}:
+            raise InputError('Nieprawidlowe pola konfiguracji Nginx.')
+        validated = None
     slug = check_slug(data.get('slug'))
-    overrides = check_overrides(data.get('overrides'))
     state = read_json(STATE_FILE)
     if slug not in state:
         raise InputError('Nie ma takiego projektu.')
     p = state[slug]
-    assets = check_extra_locations(data.get('extra_locations', p.get('extra_locations', '')))
+    if validated is None:
+        validated = {
+            'overrides': check_overrides(data.get('overrides')),
+            'extra_locations': check_extra_locations(data.get('extra_locations', p.get('extra_locations', ''))),
+        }
+    overrides = validated['overrides']
+    assets = validated['extra_locations']
     target = site_path(slug)
     if not target.is_file() or target.is_symlink():
         raise InputError('Plik Nginx nie jest dostepny.')
@@ -874,7 +982,7 @@ def update_config(data: dict[str, Any]) -> dict[str, str]:
     pub = root / p['webroot']
     after = nginx_conf(slug, p['domain'], pub, p['https'], overrides, assets)
     if after == before:
-        return {'message': 'Brak zmian w konfiguracji.'}
+        return {'message': 'Brak zmian w konfiguracji.', **validated}
     backup = pathlib.Path('/var/lib/devstack') / f'vhost-{slug}-previous.conf'
     backup.write_text(before, encoding='utf-8')
     target.write_text(after, encoding='utf-8')
@@ -892,7 +1000,7 @@ def update_config(data: dict[str, Any]) -> dict[str, str]:
         except Exception:
             print('Critical: nginx rollback may require manual intervention', file=sys.stderr)
         raise
-    return {'message': 'Konfiguracja przetestowana i zastosowana. Kopia poprzedniej wersji zostala zachowana.'}
+    return {'message': 'Konfiguracja przetestowana i zastosowana. Kopia poprzedniej wersji zostala zachowana.', **validated}
 
 
 def update_full_config(data: dict[str, Any]) -> dict[str, str]:
@@ -1402,7 +1510,12 @@ def recover_engine_job() -> None:
                           message='Operacja przerwana przez restart DevStack. Nie zostala automatycznie ponowiona.')
 
 
-OPS = {'status': status, 'create': create, 'reveal': reveal,
+def notification_snapshot(_: dict[str, Any]) -> dict[str, Any]:
+    # Read-only, inexpensive: never scan project trees or reveal credentials.
+    return {'engine_job': public_engine_job(), 'services': managed_services.public_rows()}
+
+
+OPS = {'notification_snapshot': notification_snapshot, 'status': status, 'create': create, 'reveal': reveal,
        'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,

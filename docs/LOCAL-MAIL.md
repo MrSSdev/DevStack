@@ -40,13 +40,26 @@ upstream UI is passwordless and independent of DevStack authentication;
 use it only on the trusted local workstation. The native inbox requires
 DevStack's ordinary access policy, including CSRF for deletion. Opening a
 message marks it as read according to Mailpit's API. The native HTML preview
-reconstructs only inert formatting, without scripts, remote images, active
-links or inline styles. Full fidelity is available in the upstream UI.
+uses a dedicated sandboxed iframe with an opaque origin and a separate
+Content Security Policy. It preserves sender CSS (including inline styles
+and media queries), document colors, legacy table attributes and passive
+HTML independently of the dashboard theme. Supported bounded raster CID
+and data images are embedded without network requests. Remote HTTPS images
+are blocked by default; the per-message **Wczytaj obrazy zewnętrzne** action
+allows browser image requests and warns that they may contact sender servers
+or tracking pixels. External stylesheets and fonts, scripts, forms, active
+links, nested frames, SVG markup and refresh/base tags are not enabled.
+Use the current-message Mailpit shortcut for active links or unsupported
+email features. Browser preview is not an Outlook/Gmail compatibility test.
+The preview requires PHP 8.5 XML/DOM (installed by fresh setup; existing
+installations lacking it must install php8.5-xml before updating).
 Attachment downloads are forced to be files rather than active documents.
 The native JSON preview is limited to 4 MiB; larger messages can be inspected
 in the full upstream inbox. Search, list and delete are limited to reviewed
-Mailpit endpoints; no arbitrary upstream path, send, relay or bulk delete
-endpoint is proxied by DevStack.
+Mailpit endpoints; selected-message deletion (up to 40 IDs) and clearing the mailbox require explicit
+confirmation. Clearing always includes every project and messages outside the
+current search. No arbitrary upstream path, send or relay endpoint is proxied
+by DevStack.
 
 ## New projects
 
@@ -109,8 +122,11 @@ files private; they are not included in a project database backup.
 
 The GitHub smoke workflow installs the pinned release and checks loopback
 listeners, SMTP capture, PHP mail(), PHP API list/search/message/attachment,
-single-message deletion and retention across service restart. A representative
+single and selected-message deletion, confirmed mailbox clearing and retention
+across service restart. The browser workflow installs the real stack and verifies
+the native inbox, isolated styled HTML, CID images, explicit remote-image opt-in, blocked active content, downloads, pagination, polling and compact layouts
+in both themes. See [browser tests](BROWSER-TESTS.md). A representative
 Laravel installer smoke enables local mail and sends through Laravel's
 configured mailer. The ordinary regression tests check the service opt-in,
-fixed upstream paths and inert preview tree. Local browser/WSL acceptance
+fixed upstream paths and the bounded HTML5 preview renderer. Local browser/WSL acceptance
 is still necessary after deploying.

@@ -83,3 +83,42 @@ jobs:
             exit 1
           fi
           systemctl is-active --quiet devstack-mailpit.service
+
+      - name: Verify bulk delete and clear against isolated mailbox
+        run: |
+          python3 - <<'PY'
+          from email.message import EmailMessage
+          import smtplib
+          for subject in ('bulk fixture A', 'bulk fixture B', 'clear fixture'):
+              message = EmailMessage()
+              message['From'] = 'hello@project.test'
+              message['To'] = 'recipient@example.test'
+              message['Subject'] = subject
+              message.set_content('fixture')
+              with smtplib.SMTP('127.0.0.1', 1025, timeout=5) as smtp:
+                  smtp.send_message(message)
+          PY
+          php <<'PHP'
+          <?php
+          require 'backend/security.php';
+          for ($i = 0; $i < 20; $i++) {
+              $page = devstack_mailpit_request('list', []);
+              if ($page['total'] === 4) break;
+              usleep(250000);
+          }
+          $ids = array_column(array_filter($page['messages'], fn($m) => str_starts_with($m['Subject'], 'bulk fixture')), 'ID');
+          if (count($ids) !== 2 || devstack_mailpit_request('delete-many', ['ids' => $ids]) !== ['deleted' => true]) exit(1);
+          for ($i = 0; $i < 20; $i++) {
+              $page = devstack_mailpit_request('list', []);
+              if ($page['total'] === 2) break;
+              usleep(250000);
+          }
+          if ($page['total'] !== 2) exit(1);
+          if (devstack_mailpit_request('clear', ['confirmation' => 'delete-all']) !== ['deleted' => true]) exit(1);
+          for ($i = 0; $i < 20; $i++) {
+              $page = devstack_mailpit_request('list', []);
+              if ($page['total'] === 0) break;
+              usleep(250000);
+          }
+          if ($page['total'] !== 0) exit(1);
+          PHP

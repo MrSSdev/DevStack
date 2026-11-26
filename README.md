@@ -56,7 +56,20 @@ Readings refresh while the panel is open. Start Ubuntu explicitly when you want 
 
 ## Daily use
 
-Create a project in the dashboard. The folder identifier follows the project name as you type, and the local .test domain follows the identifier. Either field can be edited independently and restored to automatic generation. Choose the document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Save your work before stopping Ubuntu or restarting services.
+Create a project in the dashboard. The folder identifier follows the project name as you type, and the local .test domain follows the identifier. Either field can be edited independently and restored to automatic generation. Choose the document root, HTTPS and optional database. Open the generated URL in your browser. Use the project settings to manage its server configuration. Operation feedback is shown in shared shadcn/Base UI toast notifications, visible across views and while scrolling. Installer progress cannot be dismissed and has no timeout; its existing toast becomes a six-second success notice only after the server confirms completion. Installer failures stay until dismissed so their log details remain available. Other short success and error notices expire automatically and pause on hover/focus. Confirmations and service-state indicators remain in their original controls. Save your work before stopping Ubuntu or restarting services.
+
+## Installable app and notifications
+
+DevStack is installable as a PWA from Edge at https://devstack.test. It uses
+the same authenticated panel, with its own Start/taskbar icon and window.
+The header bell opens the local event history. Read, delete individual
+entries or clear all without touching projects or Mailpit. Toasts continue
+to show operation progress; new mail and service failures also appear when
+the panel is open. See [Notifications and PWA](docs/NOTIFICATIONS.md).
+
+Optional browser Web Push requires `sudo apt install python3-pywebpush`
+on Ubuntu 26.04 and explicit activation in Settings → Notifications.
+No subscription or Internet delivery is enabled by default.
 
 ## Local test email (optional)
 
@@ -67,7 +80,7 @@ cd ~/projects/devstack-source
 sudo bash scripts/install-mailpit.sh
 ```
 
-Open **E-mail** in DevStack to read, search, download attachments and delete individual captured messages. Select **Lokalna poczta testowa** when creating a new project to configure its PHP-FPM mail transport and, for Laravel, its private `.env` SMTP settings. Existing projects are never changed automatically. See [Local test email](docs/LOCAL-MAIL.md) for limits, manual configuration and service management.
+Open **E-mail** in DevStack to read, preview isolated styled HTML (including bounded inline images), search, download attachments and delete individual or selected captured messages. Remote HTTPS images are blocked until explicitly enabled for the message. Clearing the entire inbox requires explicit confirmation. Select **Lokalna poczta testowa** when creating a new project to configure its PHP-FPM mail transport and, for Laravel, its private `.env` SMTP settings. Existing projects are never changed automatically. See [Local test email](docs/LOCAL-MAIL.md) for limits, manual configuration and service management.
 
 ## Framework installers
 
@@ -96,4 +109,4 @@ MIT — [LICENSE](LICENSE).
 
 The dashboard lists every installed service in the root-owned `daemon/service-catalog.json` registry (including optional Mailpit). Click a service to start, stop or restart it after confirmation. Stopping Nginx/PHP-FPM also stops the dashboard; recover in Ubuntu with `sudo systemctl start nginx php8.5-fpm` or use the widget's existing restart action when available. The panel queues one delayed systemd action; an accepted request is not proof of success. Do not run updates or create projects while changing core services.
 
-Settings → Widżet DevStack w Windows saves the selected services independently of the dashboard. Widget 0.5.0.0 reads the selection through the existing authenticated read bridge and retains the original default four tiles; extra tiles scroll. New managed services are added to the registry, not arbitrary systemd services. The original 0.5.0.0 transition requires both the MSIX and service integration update, after the normal Linux updater. New installer bundles support `Install-Widgets.ps1 -UpdateServiceIntegration` to do both before the guided first-open reset. Later package-only updates do not repeat integration unless required. Never replace a newer dashboard with a static frontend from an older Windows bundle. WSL telemetry and lifecycle are unchanged.
+Settings → Widżety → Widżet DevStack w Windows saves the selected services independently of the dashboard. Widget 0.5.0.0 reads the selection through the existing authenticated read bridge and retains the original default four tiles; extra tiles scroll. New managed services are added to the registry, not arbitrary systemd services. The original 0.5.0.0 transition requires both the MSIX and service integration update, after the normal Linux updater. New installer bundles support `Install-Widgets.ps1 -UpdateServiceIntegration` to do both before the guided first-open reset. Later package-only updates do not repeat integration unless required. Never replace a newer dashboard with a static frontend from an older Windows bundle. WSL telemetry and lifecycle are unchanged.

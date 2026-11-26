@@ -7,7 +7,7 @@ import ts from 'typescript'
 // baseline supported by Vite, without relying on Node's native TS loader.
 const source=readFileSync(new URL('../src/lib/engine-job-notice.ts',import.meta.url),'utf8')
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText
-const { JOB_NOTICE_KEY, readAcknowledgedJob, showJobNotice, acknowledgeJob, rememberVisibleSuccess } =
+const { JOB_NOTICE_KEY, readAcknowledgedJob, showJobNotice, acknowledgeJob, rememberVisibleSuccess, jobNoticeTimeout } =
   await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'))
 
 const job=(state,id='a'.repeat(32))=>({id,state})
@@ -54,4 +54,9 @@ test('unavailable or malformed storage does not break the panel or active jobs',
   storage().setItem(JOB_NOTICE_KEY,'invalid')
   assert.equal(readAcknowledgedJob(storage),'')
   assert.equal(showJobNotice(null,''),false)
+})
+
+test('installer timeout starts only at a successful terminal state',()=>{
+  for(const state of ['queued','checking','scaffolding','configuring','publishing','failed'])assert.equal(jobNoticeTimeout(job(state)),0,state)
+  assert.equal(jobNoticeTimeout(job('succeeded')),6000)
 })
