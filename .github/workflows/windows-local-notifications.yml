@@ -3,6 +3,7 @@ name: Windows local notification launcher
 on:
   push:
     branches:
+      - main
       - test/windows-local-notifications
 
 permissions:

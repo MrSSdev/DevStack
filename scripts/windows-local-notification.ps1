@@ -41,7 +41,47 @@ function Read-DevStackNotice {
     return $event
 }
 
-function New-DevStackToastXml($Event) {
+# Prefer the PWA only when there is evidence of an OS protocol handler.
+# Chromium registers per-user capabilities; UserChoice may not yet exist
+# before the first selection. Read associations but never set defaults,
+# execute registry commands, or register a competing protocol handler.
+function Test-DevStackPwaProtocol(
+    [scriptblock]$ReadValue = {
+        param($Path, $Name)
+        [Microsoft.Win32.Registry]::GetValue($Path, $Name, $null)
+    },
+    [scriptblock]$ReadCapabilities = {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\RegisteredApplications')
+        if ($null -ne $key) {
+            try {
+                foreach ($name in $key.GetValueNames()) { $key.GetValue($name) }
+            } finally { $key.Dispose() }
+        }
+    }
+) {
+    try {
+        $scheme = 'web+devstack'
+        $classes = 'HKEY_CLASSES_ROOT\'
+        $choice = & $ReadValue 'HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\web+devstack\UserChoice' 'ProgId'
+        $candidates = @($choice, $scheme)
+        foreach ($capability in @(& $ReadCapabilities)) {
+            if ($capability -is [string] -and $capability.StartsWith('Software\', [StringComparison]::OrdinalIgnoreCase)) {
+                $progId = & $ReadValue ('HKEY_CURRENT_USER\' + $capability + '\URLAssociations') $scheme
+                if ($progId -is [string]) { $candidates += $progId }
+            }
+        }
+        foreach ($progId in $candidates) {
+            if ($progId -isnot [string] -or $progId -cnotmatch '\A[A-Za-z0-9_.+-]{1,256}\z') { continue }
+            $command = & $ReadValue ($classes + $progId + '\shell\open\command') ''
+            if ($command -is [string] -and -not [string]::IsNullOrWhiteSpace($command)) { return $true }
+        }
+    } catch {
+        # A missing or inaccessible association must never block delivery.
+    }
+    return $false
+}
+
+function New-DevStackToastXml($Event, [bool]$UsePwa = (Test-DevStackPwaProtocol)) {
     $route = switch -CaseSensitive ($Event.category) {
         'mail' {
             if ($Event.id.StartsWith('mail-', [StringComparison]::Ordinal)) {
@@ -66,12 +106,20 @@ function New-DevStackToastXml($Event) {
     } else {
         'Zobacz szczegoly w DevStack.'
     }
-    $launch = 'https://devstack.test/#' + $route + '?notice=' + $Event.id
+    $https = 'https://devstack.test/#' + $route + '?notice=' + $Event.id
+    $launch = $https
+    $actions = ''
+    if ($UsePwa) {
+        $launch = 'web+devstack://open' + $route + '?notice=' + $Event.id
+        # The app may be removed or its association changed after delivery.
+        # Keep an explicit HTTPS route to the same event on those toasts.
+        $actions = '<actions><action content="Otworz w przegladarce" arguments="{0}" activationType="protocol"/></actions>' -f [Security.SecurityElement]::Escape($https)
+    }
 
     # Use protocol activation so Windows can open the URL after this process exits.
     return (
-        '<toast activationType="protocol" launch="{0}"><visual><binding template="ToastGeneric"><text>{1}</text><text>{2}</text></binding></visual></toast>' -f
-        [Security.SecurityElement]::Escape($launch), [Security.SecurityElement]::Escape($title), [Security.SecurityElement]::Escape($message)
+        '<toast activationType="protocol" launch="{0}"><visual><binding template="ToastGeneric"><text>{1}</text><text>{2}</text></binding></visual>{3}</toast>' -f
+        [Security.SecurityElement]::Escape($launch), [Security.SecurityElement]::Escape($title), [Security.SecurityElement]::Escape($message), $actions
     )
 }
 

@@ -35,6 +35,60 @@ foreach ($setting in @('DisabledForApplication', 'DisabledForUser', 'DisabledByG
 Assert-Rejected { Assert-DevStackNotificationSetting { throw [Runtime.InteropServices.COMException]::new('Access denied', -2147024891) } } 'Unrelated HRESULT'
 Write-Output 'First-notification HRESULT and disabled-setting handling: OK.'
 
+# Use the real functions, without changing associations on the runner.
+foreach ($name in @('Test-DevStackPwaProtocol', 'New-DevStackToastXml')) {
+    $definition = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+    }, $true)
+    Assert-True ($null -ne $definition) "Missing function: $name"
+    . ([scriptblock]::Create($definition.Extent.Text))
+}
+$registryFixture = @{}
+$capabilityFixture = @()
+$readFixture = { param($path, $name) $registryFixture["$path|$name"] }
+$listFixture = { $capabilityFixture }
+$choicePath = 'HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\web+devstack\UserChoice|ProgId'
+$commandPath = 'HKEY_CLASSES_ROOT\DevStack.Fixture\shell\open\command|'
+$capability = 'Software\DevStackFixture\Capabilities'
+$capabilityPath = "HKEY_CURRENT_USER\$capability\URLAssociations|web+devstack"
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture)) 'No association should fall back to HTTPS'
+$registryFixture[$choicePath] = 'DevStack.Fixture'
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture)) 'Stale UserChoice should fall back to HTTPS'
+$registryFixture[$commandPath] = '"C:\fixture.exe" "%1"'
+Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture) 'Existing UserChoice should prefer PWA'
+$registryFixture.Remove($choicePath)
+$capabilityFixture = @($capability)
+$registryFixture[$capabilityPath] = 'DevStack.Fixture'
+Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture) 'Registered PWA without UserChoice should prefer PWA'
+$registryFixture.Remove($commandPath)
+Assert-True (-not (Test-DevStackPwaProtocol $readFixture $listFixture)) 'Removed PWA should fall back to HTTPS'
+Assert-True (-not (Test-DevStackPwaProtocol { throw 'registry unavailable' } $listFixture)) 'Registry failure should fall back to HTTPS'
+$registryFixture['HKEY_CLASSES_ROOT\web+devstack\shell\open\command|'] = '"C:\fixture.exe" "%1"'
+Assert-True (Test-DevStackPwaProtocol $readFixture $listFixture) 'Direct protocol class should prefer PWA'
+
+$cases = @(
+    @{ category = 'mail'; id = 'mail-AbCdEf0123456789AaBbCc'; route = '/mail/AbCdEf0123456789AaBbCc' },
+    @{ category = 'mail'; id = ('batch-' + ('0' * 32)); route = '/mail' },
+    @{ category = 'project'; id = ('op-' + ('a' * 32)); route = '/projects' },
+    @{ category = 'installer'; id = ('job-' + ('b' * 32)); route = '/projects' },
+    @{ category = 'settings'; id = ('op-' + ('c' * 32)); route = '/settings' },
+    @{ category = 'service'; id = ('service-' + ('d' * 32)); route = '/dashboard' }
+)
+foreach ($case in $cases) {
+    $event = [pscustomobject]@{ category = $case.category; id = $case.id; kind = 'info' }
+    $suffix = $case.route + '?notice=' + $case.id
+    $https = 'https://devstack.test/#' + $suffix
+    [xml]$pwa = New-DevStackToastXml $event $true
+    Assert-True ($pwa.toast.activationType -ceq 'protocol') 'PWA toast must use protocol activation'
+    Assert-True ($pwa.toast.launch -ceq ('web+devstack://open' + $suffix)) "Incorrect PWA launch: $suffix"
+    Assert-True ($pwa.toast.actions.action.activationType -ceq 'protocol') 'Browser action must use protocol activation'
+    Assert-True ($pwa.toast.actions.action.arguments -ceq $https) 'Browser fallback lost the event route or ID'
+    [xml]$browser = New-DevStackToastXml $event $false
+    Assert-True ($browser.toast.launch -ceq $https) 'Absent PWA must use HTTPS for the main click'
+    Assert-True ($null -eq $browser.SelectSingleNode('/toast/actions')) 'Unnecessary browser fallback action'
+}
+Write-Output 'PWA association selection, exact event activation, and HTTPS fallback: OK.'
+
 $installer = Join-Path $PSScriptRoot 'install-local-notifications.ps1'
 $packageInstaller = Join-Path $PackageRoot 'windows\install-local-notifications.ps1'
 $root = 'C:\DevStack'

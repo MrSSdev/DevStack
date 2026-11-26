@@ -4,28 +4,40 @@ DevStack używa istniejącego kolektora i jednej rezerwacji w SQLite.
 Mały program GUI uruchamia Windows PowerShell 5.1 z CreateNoWindow,
 wywołuje WinRT i kończy działanie. Nie wymaga internetu, zewnętrznego
 modułu, nowej usługi, zadania harmonogramu ani stale działającego procesu.
-Kliknięcie dymka otwiera lokalny adres HTTPS w domyślnej przeglądarce.
+Kliknięcie nowego dymka preferuje protokół zarejestrowanej PWA
+web+devstack; bez wykrytej rejestracji pozostaje lokalny adres HTTPS.
+Dymek PWA ma dodatkową akcję otwarcia tego samego zdarzenia przez HTTPS.
 Uwierzytelniony poll oznacza dokładnie wskazane powiadomienie jako przeczytane.
 
-## Próba protokołu PWA (przed zmianą adresu dymka)
+## Aktywacja PWA
 
-ASUS: transport lokalny działa offline, ale Edge otwiera nawet zwykły
-adres https://devstack.test/ w oknie przeglądarki mimo włączonej obsługi
-linków i skojarzeń HTTP/HTTPS MSEdgeHTM. Manifest deklaruje teraz
-web+devstack z mapowaniem do /#/protocol?uri=%s; frontend przed
-renderowaniem sprowadza ten fragment do sprawdzonej lokalnej trasy i
-opcjonalnego dokładnego identyfikatora powiadomienia. Odczyt nadal wymaga
-normalnej uwierzytelnionej sesji i poll z CSRF. CI testuje mapowanie,
-odrzucanie obcych adresów, ciepły i zimny start przez URL manifestu;
-nie udaje rejestracji protokołu przez Windows. Adres produkcyjnego
-dymka pozostaje HTTPS do czasu pozytywnej próby na ASUS-ie.
+ASUS: 26.11.2026 wysyłka offline o 17:21:52, pierwsza kolekcja
+o 17:22:00, WinRT accepted o 17:22:02 (journal_age_s=0, send_ms=1768).
+Edge nie przechwytywał nawet https://devstack.test/ mimo włączonej
+obsługi linków i skojarzeń HTTP/HTTPS MSEdgeHTM. Wersja 02db79e
+(7/7 workflow) dodała web+devstack i bezpieczne mapowanie fragmentu.
+Aktualizacja Ubuntu udana. Odświeżenie istniejącej PWA nie
+zarejestrowało protokołu. Po ponownej instalacji PWA na ASUS-ie
+Win+R -> web+devstack://open/mail uruchomiło PWA. Powiadomienie
+SMTP offline nadal działało po reinstalacji; stary adres HTTPS
+nadal otwierał przeglądarkę.
 
-Po aktualizacji manifestu i rejestracji protokołu przez Edge sprawdź
-Win+R -> web+devstack://open/mail. Może być potrzebna zgoda Edge/Windows
-lub ponowna instalacja samej PWA bez kasowania danych witryny. Nie
-zmieniamy automatycznego startu, nie dodajemy procesu w tle ani własnej
-globalnej rejestracji protokołu w rejestrze Windows. Na tym etapie
-nie deklarujemy obsługi kliknięcia dymka przez protokół.
+Nowy dymek wybiera protokół PWA przy wykryciu skojarzenia Windows
+(UserChoice, bezpośrednia klasa lub per-user RegisteredApplications
+z istniejącym shell/open/command). Jest to odczyt rejestru, nie
+uruchomienie komendy ani modyfikacja skojarzeń. Brak rejestracji
+lub błąd odczytu daje HTTPS. Akcja Otworz w przegladarce zachowuje
+dokładnie tę samą trasę i ID; stan skojarzenia może się zmienić
+między wyświetleniem a kliknięciem. Dymki już wyświetlone nie
+zmieniają adresu. Nie dodajemy usługi ani procesu w tle.
+
+Manifest mapuje web+devstack do /#/protocol?uri=%s; frontend sprowadza
+ten fragment do sprawdzonej lokalnej trasy i ID. Odczyt nadal wymaga
+uwierzytelnionego poll z CSRF. Testy obejmują obie ścieżki XML,
+brak i usunięcie skojarzenia, ciepły i zimny start przez URL manifestu.
+CI nie zastępuje próby kliknięcia rzeczywistego dymka Windows.
+Jeżeli PWA wymaga ponownej instalacji, nie kasuj danych witryny.
+Microsoft Edge może poprosić o jednorazową zgodę.
 
 [Dokumentacja Microsoft](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/handle-protocols).
 
