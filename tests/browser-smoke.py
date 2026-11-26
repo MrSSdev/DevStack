@@ -1,8 +1,9 @@
 """Destructive acceptance tests for a disposable, fully installed DevStack.
 
 The app, PHP session boundary, Unix helper, Nginx, databases, and Mailpit are
-real. The dedicated notification lifecycle scenario replays only engine_job in a state response; other scenarios use real requests. Never use a personal inbox.
+real. The dedicated notification lifecycle scenario replays only engine_job in a state response. The context guards every external HTTP(S) request; only the two controlled image fixtures are fulfilled during explicit image opt-in. Mailbox requests and writes are real. Never use a personal inbox.
 """
+import base64
 import json
 import os
 import pathlib
@@ -18,15 +19,25 @@ from playwright.sync_api import expect, sync_playwright
 BASE = 'https://devstack.test'
 OUT = pathlib.Path('browser-results')
 HTML_SUBJECT = 'HTML fixture — Zażółć gęślą jaźń'
-HTML = '''<!doctype html><html><head><style>body{background:red}</style></head>
-<body><h1>Potwierdzenie rezerwacji</h1><p>Cześć <strong>Łukasz</strong>! Zażółć gęślą jaźń.</p>
+FIXTURE_IMAGES = {'https://example.invalid/tracker', 'https://example.invalid/css-pixel.png'}
+FIXTURE_PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6uoAAAAASUVORK5CYII=')
+CSP_FAILURES = {'csp', 'net::ERR_BLOCKED_BY_CSP'}
+HTML = '''<!doctype html><html lang="pl"><head><style>
+body{background:rgb(248,250,252);color:rgb(17,24,39)}
+.mail-card{width:560px;max-width:100%;margin:auto;background:white;padding:24px}
+.mail-button{display:inline-block;background:rgb(22,22,22);color:white;padding:12px 20px;border-radius:5px;text-decoration:none}
+.remote-probe{background-image:url(https://example.invalid/css-pixel.png);width:5px;height:5px}
+@media(max-width:500px){.mail-card{padding:10px}}
+</style><meta http-equiv="refresh" content="0;url=https://example.invalid/redirect"><base href="https://example.invalid/"></head>
+<body><div class="remote-probe"></div><div class="mail-card"><h1>Potwierdzenie rezerwacji</h1><p>Cześć <strong>Łukasz</strong>! Zażółć gęślą jaźń.</p>
 <table><tr><th>Usługa</th><th>Cena</th></tr><tr><td>Serwis</td><td>123,45 zł</td></tr></table>
 <ul><li>Pierwszy punkt</li><li>Drugi punkt</li></ul><blockquote>Treść cytowana</blockquote>
-<a href="https://example.invalid/reset">Potwierdź</a>
-<img src="https://example.invalid/tracker" onerror="window.mailAttack=1">
+<a class="mail-button" href="https://example.invalid/reset">Potwierdź</a>
+<img src="https://example.invalid/tracker" alt="Remote" onerror="window.mailAttack=1">
+<img src="cid:fixture-logo@test" alt="Fixture logo" width="24" height="24">
 <script>window.mailAttack=1</script><iframe srcdoc="bad"></iframe>
 <svg onload="window.mailAttack=1"></svg><form action="https://example.invalid"><input autofocus></form>
-</body></html>'''
+</div></body></html>'''
 
 
 def mailpit(method='GET', path='/messages', data=None):
@@ -46,6 +57,7 @@ def send(subject, html=None):
     m.set_content('Plain fixture body — Zażółć gęślą jaźń')
     if html:
         m.add_alternative(html, subtype='html')
+        m.get_payload()[-1].add_related(FIXTURE_PNG, maintype='image', subtype='png', cid='<fixture-logo@test>', filename='logo.png')
         m.add_attachment(b'Exact fixture bytes\n', maintype='text', subtype='plain', filename='fixture.txt')
     with smtplib.SMTP('127.0.0.1', 1025, timeout=5) as smtp:
         smtp.send_message(m)
@@ -74,8 +86,18 @@ class BrowserAcceptance(unittest.TestCase):
         self.page = self.context.new_page()
         self.errors = []
         self.external = []
+        self.unexpected_network = []
+        self.fixture_image_requests = []
+        self.external_images_enabled = False
         self.page.on('pageerror', lambda error: self.errors.append(str(error)))
-        self.page.on('request', lambda req: self.external.append(req.url) if not req.url.startswith(BASE + '/') else None)
+        # Chromium can emit a request event for a CSS url() even when CSP
+        # blocks it before the network. Keep Request objects to examine their
+        # final failure, not merely the URL in the initial event.
+        self.context.on('request', lambda req: self.external.append(req) if not req.url.startswith((BASE + '/', 'data:')) else None)
+        # Independent network guard. Nothing external is allowed to leave
+        # this browser context, even if the application's CSP regresses.
+        # Context routing also covers requests from sandboxed child frames.
+        self.context.route(re.compile(r'^https?://(?!devstack\.test(?:/|$))', re.I), self.guard_external_request)
         self.csrf = self.context.request.get(BASE + '/api/session').json()['csrf']
         login = self.post('/api/login', {'password':os.environ['DEVSTACK_E2E_PASSWORD']})
         self.assertEqual(login.status, 200, login.text())
@@ -89,7 +111,26 @@ class BrowserAcceptance(unittest.TestCase):
     def tearDown(self):
         self.page.screenshot(path=str(OUT / (self._testMethodName+'-last.png')), full_page=True)
         self.assertEqual(self.errors, [], 'Browser runtime errors')
-        self.assertEqual(self.external, [], 'Unexpected external requests from message content')
+        self.assert_mail_network()
+
+    def guard_external_request(self, route):
+        req = route.request
+        if self.external_images_enabled and req.resource_type == 'image' and req.url in FIXTURE_IMAGES:
+            self.fixture_image_requests.append(req)
+            route.fulfill(status=200, content_type='image/png', body=FIXTURE_PNG)
+        else:
+            self.unexpected_network.append((req.url, req.resource_type))
+            route.abort()
+
+    def assert_mail_network(self):
+        self.assertEqual(self.unexpected_network, [], 'Unexpected request reached the network interception boundary')
+        # Allow only a browser-confirmed CSP rejection, or a specific image
+        # request fulfilled by the fixture guard after explicit opt-in.
+        # DNS failures, generic aborts, pending requests and successes that
+        # bypassed the guard are not evidence of CSP protection.
+        unexpected = [(req.url, req.failure) for req in self.external
+                      if req not in self.fixture_image_requests and req.failure not in CSP_FAILURES]
+        self.assertEqual(unexpected, [], 'External requests not proven blocked by CSP or explicitly fulfilled')
 
     def post(self, path, data, **kwargs):
         return self.context.request.post(BASE + path, data=data,
@@ -259,7 +300,7 @@ class BrowserAcceptance(unittest.TestCase):
                             self.shot(prefix+'mail-settings')
                             self.page.get_by_role('button',name='Zamknij konfigurację').click()
                             self.message_button(HTML_SUBJECT).click()
-                            expect(self.page.get_by_role('heading',name='Potwierdzenie rezerwacji')).to_be_visible()
+                            expect(self.page.frame_locator('iframe[title="Podgląd wiadomości HTML"]').get_by_role('heading',name='Potwierdzenie rezerwacji')).to_be_visible()
                             self.shot(prefix+'mail-html')
                             self.page.get_by_role('button',name='Tekst',exact=True).click();self.shot(prefix+'mail-text')
                             self.page.get_by_role('button',name='Źródło HTML',exact=True).click();self.shot(prefix+'mail-source')
@@ -289,22 +330,74 @@ class BrowserAcceptance(unittest.TestCase):
         expect(self.page.get_by_text('41–43 / 43',exact=True)).to_be_visible()
         self.page.get_by_role('button',name='Wstecz',exact=True).click()
         self.message_button(HTML_SUBJECT).click()
-        expect(self.page.get_by_role('heading',name='Potwierdzenie rezerwacji')).to_be_visible()
+        expect(self.page.frame_locator('iframe[title="Podgląd wiadomości HTML"]').get_by_role('heading',name='Potwierdzenie rezerwacji')).to_be_visible()
         article=self.page.locator('article')
-        expect(article.get_by_role('cell',name='123,45 zł')).to_be_visible()
-        expect(article.locator('strong').filter(has_text='Łukasz')).to_be_visible()
-        expect(article.locator('script,iframe,img,style,form')).to_have_count(0)
-        expect(article.locator('a[href^="https://"]')).to_have_count(0)
+        iframe = article.locator('iframe[title="Podgląd wiadomości HTML"]')
+        expect(iframe).to_have_attribute('sandbox','')
+        expect(iframe).to_have_attribute('referrerpolicy','no-referrer')
+        preview = self.page.frame_locator('iframe[title="Podgląd wiadomości HTML"]')
+        expect(preview.get_by_role('cell',name='123,45 zł')).to_be_visible()
+        expect(preview.locator('strong').filter(has_text='Łukasz')).to_be_visible()
+        expect(preview.locator('script,iframe,svg,math,form,base,link,meta[http-equiv]')).to_have_count(0)
+        expect(preview.locator('a[href]')).to_have_count(0)
+        expect(preview.locator('a.mail-button')).to_have_css('background-color','rgb(22, 22, 22)')
+        expect(preview.locator('a.mail-button')).to_have_css('color','rgb(255, 255, 255)')
+        expect(preview.locator('body')).to_have_css('background-color','rgb(248, 250, 252)')
+        expect(preview.locator('.mail-card')).to_have_css('background-color','rgb(255, 255, 255)')
+        logo=preview.locator('img[alt="Fixture logo"]')
+        expect(logo).to_have_attribute('src',re.compile('^data:image/png;base64,'))
+        expect(logo).to_be_visible()
+        for _ in range(50):
+            if logo.evaluate('e=>e.complete&&e.naturalWidth===1'):break
+            self.page.wait_for_timeout(100)
+        self.assertTrue(logo.evaluate('e=>e.complete&&e.naturalWidth===1'))
+        expect(preview.locator('img[alt="Remote"]')).not_to_have_attribute('src',re.compile('.+'))
+        self.assertTrue(iframe.evaluate('e=>e.contentDocument===null'))
         self.assertIsNone(self.page.evaluate('window.mailAttack'))
+        self.assert_mail_network()
+        self.assertEqual(self.fixture_image_requests, [], 'Default preview must not load external images')
+        self.shot('853-original-styles-mail')
+        # Only the exact fixture image URLs may reach the context guard after
+        # opt-in. No network access or blanket allowance of failed requests.
+        self.external_images_enabled = True
+        self.page.get_by_role('button',name='Wczytaj obrazy zewnętrzne').click()
+        remote=preview.locator('img[alt="Remote"]')
+        expect(remote).to_have_attribute('src','https://example.invalid/tracker')
+        expect(remote).to_be_visible()
+        for _ in range(100):
+            if ({req.url for req in self.fixture_image_requests} == FIXTURE_IMAGES
+                    and remote.evaluate('e=>e.complete&&e.naturalWidth===1')):break
+            self.page.wait_for_timeout(100)
+        self.assertEqual({req.url for req in self.fixture_image_requests}, FIXTURE_IMAGES)
+        self.assertTrue(remote.evaluate('e=>e.complete&&e.naturalWidth===1'))
+        self.assert_mail_network()
+        approved_count=len(self.fixture_image_requests)
+        self.external_images_enabled = False
+        self.page.get_by_role('button',name='Ukryj obrazy zewnętrzne').click()
+        expect(remote).not_to_have_attribute('src',re.compile('.+'))
+        expect(preview.locator('body')).to_have_css('background-color','rgb(248, 250, 252)')
+        self.assertEqual(len(self.fixture_image_requests), approved_count, 'Disabling images must stop new external requests')
+        self.assert_mail_network()
         with self.page.expect_download() as download:
             article.get_by_role('link').filter(has_text='fixture.txt').click()
         self.assertEqual(pathlib.Path(download.value.path()).read_bytes(),b'Exact fixture bytes\n')
         message_id=next(m['ID'] for m in mailpit()['messages'] if m['Subject']==HTML_SUBJECT)
         message=self.context.request.get(BASE+'/api/mail/message/'+message_id).json()['result']
-        part=message['Attachments'][0]['PartID']
+        part=next(a['PartID'] for a in message['Attachments'] if a['FileName']=='fixture.txt')
         attachment=self.context.request.get(BASE+'/api/mail/message/'+message_id+'/part/'+part)
         self.assertEqual(attachment.headers['content-type'],'application/octet-stream')
         self.assertEqual(attachment.headers['content-disposition'],'attachment')
+        response=self.context.request.get(BASE+'/api/mail/message/'+message_id+'/preview')
+        self.assertEqual(response.status,200)
+        self.assertIn("sandbox; script-src 'none'",response.headers['content-security-policy'])
+        self.assertIn('img-src data:;',response.headers['content-security-policy'])
+        enabled=self.context.request.get(BASE+'/api/mail/message/'+message_id+'/preview?images=1')
+        self.assertEqual(enabled.status,200)
+        self.assertIn('img-src data: https:;',enabled.headers['content-security-policy'])
+        self.assertIn("script-src 'none'",enabled.headers['content-security-policy'])
+        self.assertEqual(response.headers['x-frame-options'],'SAMEORIGIN')
+        self.assertIn("frame-ancestors 'none'",self.context.request.get(BASE+'/api/state').headers['content-security-policy'])
+        self.assertEqual(self.context.request.get(BASE+'/api/state').headers['x-frame-options'],'DENY')
         self.page.get_by_role('button',name='Tekst',exact=True).click()
         expect(article.get_by_text('Plain fixture body — Zażółć gęślą jaźń',exact=False)).to_be_visible()
         self.page.get_by_role('button',name='Źródło HTML',exact=True).click()

@@ -42,7 +42,7 @@ if [[ -L "$src/framework-installers" || -L "$src/framework-installers/laravel" ]
   exit 1
 fi
 
-for file in backend/public/index.php backend/public/index.html backend/security.php \
+for file in backend/public/index.php backend/public/index.html backend/security.php backend/mail-preview.php \
     daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
     scripts/set-password.php scripts/configure-auth.php; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
@@ -100,6 +100,7 @@ cp -a /opt/devstack "$backup_dir/installed"
 echo '[update] Staging updated application without changing live files...'
 cp -a /opt/devstack/. "$stage_dir/"
 install -m 0644 -o root -g root "$src/backend/security.php" "$stage_dir/security.php"
+install -m 0644 -o root -g root "$src/backend/mail-preview.php" "$stage_dir/mail-preview.php"
 install -m 0644 -o root -g root "$src/backend/public/index.php" "$stage_dir/public/index.php"
 install -m 0644 -o root -g root "$src/backend/public/index.html" "$stage_dir/public/index.html"
 install -m 0644 -o root -g root "$src/daemon/devstackd.py" "$stage_dir/daemon/devstackd.py"
@@ -128,6 +129,7 @@ find "$stage_dir" -type f -exec chmod 0644 {} +
 echo '[update] Validating staged code and active web server configuration...'
 php -l "$stage_dir/public/index.php"
 php -l "$stage_dir/security.php"
+php -l "$stage_dir/mail-preview.php"
 php -l "$stage_dir/scripts/set-password.php"
 php -l "$stage_dir/scripts/configure-auth.php"
 python3 - "$stage_dir" <<'PY'

@@ -18,7 +18,7 @@ function devstack_boot(): void
     header('Referrer-Policy: no-referrer');
     header('X-Frame-Options: DENY');
     header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
-    header("Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+    header("Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; frame-src https://devstack.test/api/mail/message/; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
     ini_set('session.gc_maxlifetime', '28800');

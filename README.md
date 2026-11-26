@@ -67,7 +67,7 @@ cd ~/projects/devstack-source
 sudo bash scripts/install-mailpit.sh
 ```
 
-Open **E-mail** in DevStack to read, search, download attachments and delete individual or selected captured messages. Clearing the entire inbox requires explicit confirmation. Select **Lokalna poczta testowa** when creating a new project to configure its PHP-FPM mail transport and, for Laravel, its private `.env` SMTP settings. Existing projects are never changed automatically. See [Local test email](docs/LOCAL-MAIL.md) for limits, manual configuration and service management.
+Open **E-mail** in DevStack to read, preview isolated styled HTML (including bounded inline images), search, download attachments and delete individual or selected captured messages. Remote HTTPS images are blocked until explicitly enabled for the message. Clearing the entire inbox requires explicit confirmation. Select **Lokalna poczta testowa** when creating a new project to configure its PHP-FPM mail transport and, for Laravel, its private `.env` SMTP settings. Existing projects are never changed automatically. See [Local test email](docs/LOCAL-MAIL.md) for limits, manual configuration and service management.
 
 ## Framework installers
 

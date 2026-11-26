@@ -34,7 +34,7 @@ if ! command -v systemctl >/dev/null || [[ "$(ps -p 1 -o comm=)" != systemd ]]; 
 fi
 printf '[1/8] Installing official Ubuntu prerequisites...\n'
 apt-get update
-apt-get install -y nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis mariadb-server redis-server mkcert acl python3 ca-certificates
+apt-get install -y nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-xml mariadb-server redis-server mkcert acl python3 ca-certificates
 printf '[2/8] Creating unprivileged panel account and root-owned directories...\n'
 if ! id devstackweb >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin devstackweb
@@ -49,6 +49,7 @@ install -d -m 0710 -o root -g devstackweb /etc/devstack
 install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web /var/lib/devstack-web/sessions
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
+cp -a "$SRC/backend/mail-preview.php" /opt/devstack/mail-preview.php
 install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
 install -m 0644 -o root -g root "$SRC/daemon/project_frameworks.py" /opt/devstack/daemon/project_frameworks.py
 install -m 0644 -o root -g root "$SRC/daemon/managed_services.py" /opt/devstack/daemon/managed_services.py

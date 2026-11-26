@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, ArrowRight, Copy, Download, ExternalLink, Paperclip, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { toast, beginNotice, notify, fail } from '@/components/ui/toast'
@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/page-header'
-import { parseMailPreview, type PreviewNode } from '@/lib/safe-mail-preview'
 
 type Address={Name?:string; Address?:string}
 type Attachment={PartID:string; FileName?:string; ContentType?:string; Size?:number}
@@ -24,9 +23,6 @@ const manualConfig=['MAIL_MAILER=smtp','MAIL_SCHEME=null','MAIL_URL=null','MAIL_
 const messageDate=(s?:string)=>s&&!Number.isNaN(Date.parse(s))?new Date(s).toLocaleString('pl-PL'):''
 function address(a?:Address|null):string{return a?(a.Name&&a.Address?a.Name+' <'+a.Address+'>':a.Address||a.Name||'—'):'—'}
 function addresses(a?:Address[]|null):string{return Array.isArray(a)?a.map(address).join(', '):'—'}
-function renderPreview(nodes:PreviewNode[]):ReactNode[]{
-  return nodes.map((node,index)=>typeof node==='string'?node:createElement(node.tag,{key:index},...renderPreview(node.children)))
-}
 
 export function MailInbox({status,csrf,request,refreshStatus}:Props){
   const [query,setQuery]=useState('')
@@ -37,6 +33,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
   const [selected,setSelected]=useState('')
   const [message,setMessage]=useState<Message|null>(null)
   const [format,setFormat]=useState<'html'|'text'|'source'>('html')
+  const [externalImagesFor,setExternalImagesFor]=useState('')
   const [loading,setLoading]=useState(false)
   const [opening,setOpening]=useState(false)
   const [deleting,setDeleting]=useState(false)
@@ -65,7 +62,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
   useEffect(()=>{
     if(!active||!selected){setMessage(null);setOpening(false);return}
     let disposed=false
-    setMessage(null);setConfirmDelete(null);setOpening(true)
+    setMessage(null);setConfirmDelete(null);setOpening(true);setExternalImagesFor('')
     void request<Message>('GET','/api/mail/message/'+encodeURIComponent(selected)).then(result=>{
       if(disposed)return
       if(result.ID!==selected)throw new Error('Nieprawidłowa odpowiedź skrzynki.')
@@ -81,7 +78,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
     return ()=>window.clearInterval(timer)
   },[active,selected,deleting,confirmDelete,checked.length])
   useEffect(()=>{if(selected)readerHeading.current?.focus()},[selected])
-  const preview=useMemo(()=>message?.HTML?parseMailPreview(message.HTML):[],[message])
+  const externalImages=!!message&&externalImagesFor===message.ID
   const messages=page?.messages??[]
   const count=page?.messages_count??page?.total??0
   const attachments=[...(Array.isArray(message?.Attachments)?message.Attachments:[]),...(Array.isArray(message?.Inline)?message.Inline:[])].filter(a=>typeof a.PartID==='string'&&partPattern.test(a.PartID))
@@ -120,7 +117,7 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
             {active&&selected&&<Button size="sm" variant="outline" disabled={opening||deleting||!message||!!confirmDelete} onClick={()=>setConfirmDelete('one')}><Trash2/>Usuń</Button>}
             {active&&!selected&&checked.length>0&&<Button size="sm" variant="outline" disabled={loading||deleting||!!confirmDelete} onClick={()=>setConfirmDelete('many')}><Trash2/>Usuń ({checked.length})</Button>}
             {active&&!selected&&<Button size="sm" variant="outline" disabled={loading||deleting||!!confirmDelete||!page||page.total===0} onClick={()=>setConfirmDelete('all')}><Trash2/>Opróżnij</Button>}
-            {active&&<Button size="icon" variant="outline" title="Otwórz Mailpit" aria-label="Otwórz Mailpit" onClick={()=>window.open('http://127.0.0.1:8025/','_blank','noopener,noreferrer')}><ExternalLink/></Button>}
+            {active&&<Button size="icon" variant="outline" title="Otwórz Mailpit" aria-label="Otwórz Mailpit" onClick={()=>window.open('http://127.0.0.1:8025/'+(selected?'view/'+encodeURIComponent(selected):''),'_blank','noopener,noreferrer')}><ExternalLink/></Button>}
             <Button size="icon" variant="outline" aria-label="Konfiguracja poczty" title="Konfiguracja poczty" disabled={deleting||!!confirmDelete} onClick={()=>settingsDialog.current?.showModal()}><Settings/></Button>
     </>}/>
     <Card className="min-w-0">
@@ -157,7 +154,14 @@ export function MailInbox({status,csrf,request,refreshStatus}:Props){
             <div className="flex flex-wrap items-center gap-1.5 border-y py-2">{message.HTML&&<Button size="sm" variant={format==='html'?'default':'ghost'} onClick={()=>setFormat('html')}>HTML</Button>}<Button size="sm" variant={format==='text'?'default':'ghost'} onClick={()=>setFormat('text')}>Tekst</Button>{message.HTML&&<Button size="sm" variant={format==='source'?'default':'ghost'} onClick={()=>setFormat('source')}>Źródło HTML</Button>}<Button size="icon" variant="ghost" aria-label="Kopiuj treść" title="Kopiuj treść" onClick={()=>{void copy(format==='text'?message.Text??'':message.HTML??'','Treść')}}><Copy/></Button></div>
             
             {attachments.length>0&&<div className="space-y-1.5"><h3 className="text-xs font-semibold text-muted-foreground">Załączniki ({attachments.length})</h3><div className="flex flex-wrap gap-2">{attachments.map((a,i)=><a key={a.PartID+'-'+i} href={'/api/mail/message/'+message.ID+'/part/'+encodeURIComponent(a.PartID)} download={a.FileName||'mailpit-attachment'} className="flex min-w-0 max-w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-secondary"><Download className="size-4 shrink-0"/><span className="min-w-0 break-all">{a.FileName||a.ContentType||'Załącznik'}</span><span className="shrink-0 text-xs text-muted-foreground">{typeof a.Size==='number'?Math.ceil(a.Size/1024)+' KB':''}</span></a>)}</div></div>}
-            {format==='html'?<><div className="overflow-x-auto break-words rounded-md border bg-background p-4 text-sm leading-relaxed [&_h1]:text-2xl [&_h2]:text-xl [&_h3]:text-lg [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_p]:my-2 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6 [&_pre]:whitespace-pre-wrap [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:p-2 [&_hr]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:pl-3">{renderPreview(preview)}</div><p className="text-xs text-muted-foreground">Bez zewnętrznych obrazów, aktywnych linków i stylów nadawcy.{(message.HTML?.length??0)>250000?' Podgląd skrócono; pełna treść dostępna w Mailpit.':''}</p></>:<pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 text-sm">{(format==='source'?message.HTML:message.Text)||'(brak treści w tym formacie)'}</pre>}
+            {format==='html'?<div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="min-w-0 flex-1 text-xs text-muted-foreground">Oryginalne style HTML. Linki, skrypty i formularze nieaktywne.</p>
+                <Button size="sm" variant="outline" aria-pressed={externalImages} onClick={()=>setExternalImagesFor(externalImages?'':message.ID)}>{externalImages?'Ukryj obrazy zewnętrzne':'Wczytaj obrazy zewnętrzne'}</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">{externalImages?'Obrazy HTTPS włączone dla tej wiadomości. Mogą kontaktować się z serwerami nadawcy.':'Obrazy zewnętrzne zablokowane. Wczytanie może ujawnić otwarcie wiadomości nadawcy.'}</p>
+              <iframe key={message.ID} title="Podgląd wiadomości HTML" sandbox="" referrerPolicy="no-referrer" src={'/api/mail/message/'+message.ID+'/preview'+(externalImages?'?images=1':'')} className="block h-[max(24rem,calc(100dvh-13rem))] w-full min-w-0 rounded-md border bg-white"/>
+            </div>:<pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 text-sm">{(format==='source'?message.HTML:message.Text)||'(brak treści w tym formacie)'}</pre>}
           </>}
         </article>}
       </CardContent>
