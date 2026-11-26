@@ -4,7 +4,7 @@ The **DevStack browser and real mailbox** workflow installs the production
 build and actual DevStack services on an isolated Ubuntu runner. Chromium
 uses the fixture CA as a trusted certificate; HTTPS errors are not ignored.
 Mail is sent through real SMTP and read through the authenticated PHP API.
-The main acceptance scenarios do not mock requests or privileged operations. A separate toast lifecycle scenario uses a synthetic engine_job in the real GET /api/state response solely to exercise presentation and acknowledgement without installing a new framework; all authentication and writes remain real. The mail preview scenario intercepts only deliberately enabled external fixture image URLs, so CI never contacts the Internet for message images.
+The main acceptance scenarios do not mock requests or privileged operations. A separate toast lifecycle scenario uses a synthetic engine_job in the real GET /api/state response solely to exercise presentation and acknowledgement without installing a new framework; all authentication and writes remain real. The browser context guards external HTTP(S) requests from the start. Only the two controlled image fixtures are fulfilled after explicit image opt-in; all other requests reaching the interception boundary fail the test. Chromium reports some CSS URL attempts as request events followed by a CSP failure before reaching the network. The test accepts only that explicit CSP rejection, never a generic failure or DNS error. Both HTML and CSS images must load after opt-in, and switching back must stop new external requests.
 
 Coverage includes all primary screens and settings categories in both themes
 at 640, 853, 1024, 1280 and 1920 CSS pixels; persisted themes; keyboard drawer

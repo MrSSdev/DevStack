@@ -1,7 +1,7 @@
 """Destructive acceptance tests for a disposable, fully installed DevStack.
 
 The app, PHP session boundary, Unix helper, Nginx, databases, and Mailpit are
-real. The dedicated notification lifecycle scenario replays only engine_job in a state response. External fixture image requests are intercepted in the explicit image opt-in test. Mailbox requests and writes are real. Never use a personal inbox.
+real. The dedicated notification lifecycle scenario replays only engine_job in a state response. The context guards every external HTTP(S) request; only the two controlled image fixtures are fulfilled during explicit image opt-in. Mailbox requests and writes are real. Never use a personal inbox.
 """
 import base64
 import json
@@ -19,6 +19,9 @@ from playwright.sync_api import expect, sync_playwright
 BASE = 'https://devstack.test'
 OUT = pathlib.Path('browser-results')
 HTML_SUBJECT = 'HTML fixture — Zażółć gęślą jaźń'
+FIXTURE_IMAGES = {'https://example.invalid/tracker', 'https://example.invalid/css-pixel.png'}
+FIXTURE_PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6uoAAAAASUVORK5CYII=')
+CSP_FAILURES = {'csp', 'net::ERR_BLOCKED_BY_CSP'}
 HTML = '''<!doctype html><html lang="pl"><head><style>
 body{background:rgb(248,250,252);color:rgb(17,24,39)}
 .mail-card{width:560px;max-width:100%;margin:auto;background:white;padding:24px}
@@ -54,7 +57,7 @@ def send(subject, html=None):
     m.set_content('Plain fixture body — Zażółć gęślą jaźń')
     if html:
         m.add_alternative(html, subtype='html')
-        m.get_payload()[-1].add_related(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6uoAAAAASUVORK5CYII='), maintype='image', subtype='png', cid='<fixture-logo@test>', filename='logo.png')
+        m.get_payload()[-1].add_related(FIXTURE_PNG, maintype='image', subtype='png', cid='<fixture-logo@test>', filename='logo.png')
         m.add_attachment(b'Exact fixture bytes\n', maintype='text', subtype='plain', filename='fixture.txt')
     with smtplib.SMTP('127.0.0.1', 1025, timeout=5) as smtp:
         smtp.send_message(m)
@@ -83,8 +86,18 @@ class BrowserAcceptance(unittest.TestCase):
         self.page = self.context.new_page()
         self.errors = []
         self.external = []
+        self.unexpected_network = []
+        self.fixture_image_requests = []
+        self.external_images_enabled = False
         self.page.on('pageerror', lambda error: self.errors.append(str(error)))
-        self.page.on('request', lambda req: self.external.append(req.url) if not req.url.startswith((BASE + '/', 'data:')) else None)
+        # Chromium can emit a request event for a CSS url() even when CSP
+        # blocks it before the network. Keep Request objects to examine their
+        # final failure, not merely the URL in the initial event.
+        self.context.on('request', lambda req: self.external.append(req) if not req.url.startswith((BASE + '/', 'data:')) else None)
+        # Independent network guard. Nothing external is allowed to leave
+        # this browser context, even if the application's CSP regresses.
+        # Context routing also covers requests from sandboxed child frames.
+        self.context.route(re.compile(r'^https?://(?!devstack\\.test(?:/|$))', re.I), self.guard_external_request)
         self.csrf = self.context.request.get(BASE + '/api/session').json()['csrf']
         login = self.post('/api/login', {'password':os.environ['DEVSTACK_E2E_PASSWORD']})
         self.assertEqual(login.status, 200, login.text())
@@ -98,7 +111,26 @@ class BrowserAcceptance(unittest.TestCase):
     def tearDown(self):
         self.page.screenshot(path=str(OUT / (self._testMethodName+'-last.png')), full_page=True)
         self.assertEqual(self.errors, [], 'Browser runtime errors')
-        self.assertEqual(self.external, [], 'Unexpected external requests from message content')
+        self.assert_mail_network()
+
+    def guard_external_request(self, route):
+        req = route.request
+        if self.external_images_enabled and req.resource_type == 'image' and req.url in FIXTURE_IMAGES:
+            self.fixture_image_requests.append(req)
+            route.fulfill(status=200, content_type='image/png', body=FIXTURE_PNG)
+        else:
+            self.unexpected_network.append((req.url, req.resource_type))
+            route.abort()
+
+    def assert_mail_network(self):
+        self.assertEqual(self.unexpected_network, [], 'Unexpected request reached the network interception boundary')
+        # Allow only a browser-confirmed CSP rejection, or a specific image
+        # request fulfilled by the fixture guard after explicit opt-in.
+        # DNS failures, generic aborts, pending requests and successes that
+        # bypassed the guard are not evidence of CSP protection.
+        unexpected = [(req.url, req.failure) for req in self.external
+                      if req not in self.fixture_image_requests and req.failure not in CSP_FAILURES]
+        self.assertEqual(unexpected, [], 'External requests not proven blocked by CSP or explicitly fulfilled')
 
     def post(self, path, data, **kwargs):
         return self.context.request.post(BASE + path, data=data,
@@ -322,28 +354,30 @@ class BrowserAcceptance(unittest.TestCase):
         expect(preview.locator('img[alt="Remote"]')).not_to_have_attribute('src',re.compile('.+'))
         self.assertTrue(iframe.evaluate('e=>e.contentDocument===null'))
         self.assertIsNone(self.page.evaluate('window.mailAttack'))
-        self.assertEqual(self.external,[])
+        self.assert_mail_network()
+        self.assertEqual(self.fixture_image_requests, [], 'Default preview must not load external images')
         self.shot('853-original-styles-mail')
-        # Test the opt-in without contacting the Internet. Only controlled
-        # fixture image responses are intercepted; all mailbox calls are real.
-        requested=[]
-        def external_fixture(route):
-            requested.append(route.request.url)
-            route.fulfill(status=200,content_type='image/png',body=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6uoAAAAASUVORK5CYII='))
-        self.page.route('https://example.invalid/**',external_fixture)
+        # Only the exact fixture image URLs may reach the context guard after
+        # opt-in. No network access or blanket allowance of failed requests.
+        self.external_images_enabled = True
         self.page.get_by_role('button',name='Wczytaj obrazy zewnętrzne').click()
-        expect(preview.locator('img[alt="Remote"]')).to_have_attribute('src','https://example.invalid/tracker')
-        expect(preview.locator('img[alt="Remote"]')).to_be_visible()
-        for _ in range(50):
-            if 'https://example.invalid/tracker' in requested:break
+        remote=preview.locator('img[alt="Remote"]')
+        expect(remote).to_have_attribute('src','https://example.invalid/tracker')
+        expect(remote).to_be_visible()
+        for _ in range(100):
+            if ({req.url for req in self.fixture_image_requests} == FIXTURE_IMAGES
+                    and remote.evaluate('e=>e.complete&&e.naturalWidth===1')):break
             self.page.wait_for_timeout(100)
-        self.assertIn('https://example.invalid/tracker',requested)
-        self.assertTrue(set(requested)<= {'https://example.invalid/tracker','https://example.invalid/css-pixel.png'})
+        self.assertEqual({req.url for req in self.fixture_image_requests}, FIXTURE_IMAGES)
+        self.assertTrue(remote.evaluate('e=>e.complete&&e.naturalWidth===1'))
+        self.assert_mail_network()
+        approved_count=len(self.fixture_image_requests)
+        self.external_images_enabled = False
         self.page.get_by_role('button',name='Ukryj obrazy zewnętrzne').click()
-        expect(preview.locator('img[alt="Remote"]')).not_to_have_attribute('src',re.compile('.+'))
-        self.page.unroute('https://example.invalid/**',external_fixture)
-        self.assertTrue(set(self.external)<= {'https://example.invalid/tracker','https://example.invalid/css-pixel.png'})
-        self.external.clear()
+        expect(remote).not_to_have_attribute('src',re.compile('.+'))
+        expect(preview.locator('body')).to_have_css('background-color','rgb(248, 250, 252)')
+        self.assertEqual(len(self.fixture_image_requests), approved_count, 'Disabling images must stop new external requests')
+        self.assert_mail_network()
         with self.page.expect_download() as download:
             article.get_by_role('link').filter(has_text='fixture.txt').click()
         self.assertEqual(pathlib.Path(download.value.path()).read_bytes(),b'Exact fixture bytes\n')
@@ -357,6 +391,10 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(response.status,200)
         self.assertIn("sandbox; script-src 'none'",response.headers['content-security-policy'])
         self.assertIn('img-src data:;',response.headers['content-security-policy'])
+        enabled=self.context.request.get(BASE+'/api/mail/message/'+message_id+'/preview?images=1')
+        self.assertEqual(enabled.status,200)
+        self.assertIn('img-src data: https:;',enabled.headers['content-security-policy'])
+        self.assertIn("script-src 'none'",enabled.headers['content-security-policy'])
         self.assertEqual(response.headers['x-frame-options'],'SAMEORIGIN')
         self.assertIn("frame-ancestors 'none'",self.context.request.get(BASE+'/api/state').headers['content-security-policy'])
         self.assertEqual(self.context.request.get(BASE+'/api/state').headers['x-frame-options'],'DENY')
