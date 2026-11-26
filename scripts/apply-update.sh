@@ -42,9 +42,9 @@ if [[ -L "$src/framework-installers" || -L "$src/framework-installers/laravel" ]
   exit 1
 fi
 
-for file in backend/public/index.php backend/public/index.html backend/public/sw.js backend/public/manifest.webmanifest backend/public/pwa/icon-192.png backend/public/pwa/icon-512.png backend/public/pwa/devstack.svg backend/security.php backend/mail-preview.php backend/notifications.php backend/push-helper.php \
+for file in backend/public/index.php backend/public/index.html backend/public/sw.js backend/public/manifest.webmanifest backend/public/pwa/icon-192.png backend/public/pwa/icon-512.png backend/public/pwa/devstack.svg backend/security.php backend/mail-preview.php backend/notifications.php \
     daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
-    scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/notification-push.py scripts/devstack-notifications.service scripts/devstack-notifications.timer; do
+    scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/devstack-notifications.service scripts/devstack-notifications.timer; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
     echo "Missing or unsafe source file: $file" >&2
     exit 1
@@ -110,9 +110,11 @@ cp -a /opt/devstack "$backup_dir/installed"
 
 echo '[update] Staging updated application without changing live files...'
 cp -a /opt/devstack/. "$stage_dir/"
+# Retire only the old installed Web Push code; previous-code backup is kept.
+rm -f -- "$stage_dir/push-helper.php" "$stage_dir/scripts/notification-push.py"
 install -m 0644 -o root -g root "$src/backend/security.php" "$stage_dir/security.php"
 install -m 0644 -o root -g root "$src/backend/mail-preview.php" "$stage_dir/mail-preview.php"
-for item in notifications.php push-helper.php; do
+for item in notifications.php; do
   install -m 0644 -o root -g root "$src/backend/$item" "$stage_dir/$item"
 done
 install -m 0644 -o root -g root "$src/backend/public/index.php" "$stage_dir/public/index.php"
@@ -129,7 +131,7 @@ install -d -m 0755 -o root -g root "$stage_dir/framework-installers" "$stage_dir
 for item in README.md catalog.json common.py registry.py runner.py laravel/README.md laravel/__init__.py laravel/adapter.py; do
   install -m 0644 -o root -g root "$src/framework-installers/$item" "$stage_dir/framework-installers/$item"
 done
-for item in list-domains.py watch-domains.py set-password.php configure-auth.php notifications-worker.php notification-push.py devstack-notifications.service devstack-notifications.timer; do
+for item in list-domains.py watch-domains.py set-password.php configure-auth.php notifications-worker.php devstack-notifications.service devstack-notifications.timer; do
   install -m 0644 -o root -g root "$src/scripts/$item" "$stage_dir/scripts/$item"
 done
 
@@ -149,7 +151,6 @@ php -l "$stage_dir/public/index.php"
 php -l "$stage_dir/security.php"
 php -l "$stage_dir/mail-preview.php"
 php -l "$stage_dir/notifications.php"
-php -l "$stage_dir/push-helper.php"
 php -l "$stage_dir/scripts/notifications-worker.php"
 php -r 'exit(extension_loaded("pdo_sqlite") && extension_loaded("mbstring") ? 0 : 1);'
 php -l "$stage_dir/scripts/set-password.php"
@@ -158,7 +159,7 @@ python3 - "$stage_dir" <<'PY'
 import pathlib
 import sys
 root = pathlib.Path(sys.argv[1])
-for rel in ('daemon/devstackd.py', 'daemon/project_frameworks.py', 'daemon/managed_services.py', 'framework-installers/common.py', 'framework-installers/registry.py', 'framework-installers/runner.py', 'framework-installers/laravel/adapter.py', 'scripts/list-domains.py', 'scripts/watch-domains.py', 'scripts/notification-push.py'):
+for rel in ('daemon/devstackd.py', 'daemon/project_frameworks.py', 'daemon/managed_services.py', 'framework-installers/common.py', 'framework-installers/registry.py', 'framework-installers/runner.py', 'framework-installers/laravel/adapter.py', 'scripts/list-domains.py', 'scripts/watch-domains.py'):
     path = root / rel
     compile(path.read_bytes(), str(path), 'exec')
 print('Staged Python syntax OK')

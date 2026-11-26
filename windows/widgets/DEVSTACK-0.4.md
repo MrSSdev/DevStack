@@ -1,3 +1,7 @@
+## Version 0.5.3.0 — PWA navigation
+
+The two DevStack navigation actions prefer a registered web+devstack handler, including the Edge AppX registration. Otherwise the exact HTTPS route opens in the default browser. No changes to card design, service controls, telemetry or notifications.
+
 ## Version 0.5.2.0 — protected Windows component layout
 
 The current package uses C:\DevStack\Widgets for private configuration,

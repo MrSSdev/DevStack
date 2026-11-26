@@ -9,6 +9,7 @@
     <Compile Remove="Bridge/**/*.cs" />
     <Compile Include="../WidgetPaths.cs" Link="WidgetPaths.cs" />
     <Compile Include="../DevStackData.cs" Link="DevStackData.cs" />
+    <Compile Include="../DevStackNavigation.cs" Link="DevStackNavigation.cs" />
     <Compile Include="../StateProbe.cs" Link="StateProbe.cs" />
     <Compile Include="../WidgetCards.cs" Link="WidgetCards.cs" />
     <Compile Include="../WidgetDesign.cs" Link="WidgetDesign.cs" />

@@ -1,2 +1,35 @@
 using DevStack.Widgets;
+var keys = new Dictionary<(string,string),object>();
+object? Read(string path,string name) => keys.TryGetValue((path,name),out var value) ? value : null;
+bool Detect(string[]? packages=null,string[]? capabilities=null) =>
+    DevStackNavigation.HasPwa(Read,()=>capabilities??Array.Empty<string>(),()=>packages??Array.Empty<string>());
+void Check(bool ok,string message) { if (!ok) throw new Exception(message); }
+Check(!Detect(),"No registration must use HTTPS");
+Check(DevStackNavigation.Target("open-new",false)=="https://devstack.test/#/new","New project HTTPS");
+Check(DevStackNavigation.Target("open-projects",false)=="https://devstack.test/#/projects","Projects HTTPS");
+Check(DevStackNavigation.Target("open-new",true)=="web+devstack://open/new","New project PWA");
+Check(DevStackNavigation.Target("open-projects",true)=="web+devstack://open/projects","Projects PWA");
+const string choice=@"HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\web+devstack\UserChoice";
+keys[(choice,"ProgId")]="DevStackFixture";
+Check(!Detect(),"Incomplete UserChoice is insufficient");
+keys[(@"HKEY_CLASSES_ROOT\DevStackFixture\shell\open\command","")]="fixture command";
+Check(Detect(),"Valid UserChoice");
+keys.Clear();
+keys[(@"HKEY_CURRENT_USER\Software\Example\Capabilities\URLAssociations","web+devstack")]="DevStackFixture";
+keys[(@"HKEY_CLASSES_ROOT\DevStackFixture\shell\open\command","")]="fixture command";
+Check(Detect(capabilities:new[]{@"Software\Example\Capabilities"}),"Registered application capability");
+keys.Clear();
+const string package="devstack.test-fixture_1.0.0.0_x64__publisher";
+const string repository=@"HKEY_CURRENT_USER\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\";
+const string open=@"HKEY_CLASSES_ROOT\AppXfixture\Shell\open";
+keys[(repository+package+@"\App\Capabilities\URLAssociations","web+devstack")]="AppXfixture";
+keys[(open,"PackageId")]=package;
+keys[(open,"ContractId")]="Windows.Protocol";
+Check(!Detect(new[]{package}),"Missing delegate must not count as PWA");
+keys[(open+@"\command","DelegateExecute")]="{01234567-89ab-cdef-0123-456789abcdef}";
+Check(Detect(new[]{package}),"AppX protocol delegate without UserChoice");
+keys[(open,"PackageId")]="other-package";
+Check(!Detect(new[]{package}),"Wrong AppX package");
+Check(!DevStackNavigation.HasPwa((_,_)=>throw new UnauthorizedAccessException(),()=>Array.Empty<string>(),()=>new[]{package}),"Registry errors fall back");
+Console.WriteLine("Widget PWA navigation and fallback: OK");
 return SelfTest.Run();

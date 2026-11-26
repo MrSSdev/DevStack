@@ -1,6 +1,20 @@
 <?php
 declare(strict_types=1);
 
+// Report the configured local transport, not whether Windows displayed a
+// banner. A missing, malformed or unsafe opt-in must never select a fallback.
+function devstack_windows_notification_since(): ?int
+{
+    $path = '/etc/devstack/windows-local-notifications';
+    clearstatcache(true, $path);
+    $stat = @lstat($path);
+    if (!is_array($stat) || ($stat['mode'] & 0170000) !== 0100000 ||
+        $stat['uid'] !== 0 || ($stat['mode'] & 0022) !== 0 || $stat['size'] > 512) return null;
+    $value = @file_get_contents($path, false, null, 0, 513);
+    if (!is_string($value) || rtrim($value, "\r\n") !== '/mnt/c/DevStack/LocalNotifications/DevStack.Notifications.exe') return null;
+    return (int)$stat['mtime'];
+}
+
 // Single-workstation event journal. It is private to the existing unprivileged
 // panel account, never served as a file, and independent of Mailpit/project data.
 final class DevStackNotices
@@ -409,7 +423,7 @@ final class DevStackNotices
                 }
             }
             return ['items'=>array_map(self::publicRow(...),$this->execute('SELECT * FROM notices ORDER BY updated DESC,id DESC LIMIT '.self::LIMIT)->fetchAll()),
-                'toast'=>$deliver,'push_categories'=>$this->categories(),'subscribed'=>$this->meta('subscription')!==null];
+                'toast'=>$deliver,'push_categories'=>$this->categories(),'windows_enabled'=>devstack_windows_notification_since()!==null,'subscribed'=>false];
         });
     }
     public function mutate(string $action, mixed $id = null): void
@@ -443,62 +457,34 @@ final class DevStackNotices
         }
         $this->setMeta('push_categories',json_encode(array_values(array_unique($value)),JSON_THROW_ON_ERROR));
     }
-    public static function subscription(mixed $value): array
-    {
-        if (!is_object($value)&&!is_array($value)) throw new InvalidArgumentException('Nieprawidłowa subskrypcja.');
-        $s=(array)$value; $endpoint=$s['endpoint']??null;
-        $keys=(array)($s['keys']??[]);
-        if (!is_string($endpoint)||strlen($endpoint)>4096||preg_match('~[\x00-\x20\x7f]~',$endpoint)) throw new InvalidArgumentException('Nieprawidłowy adres Web Push.');
-        $url=parse_url($endpoint); $host=is_array($url)?strtolower($url['host']??''):'';
-        $allowed=$host==='fcm.googleapis.com'||$host==='updates.push.services.mozilla.com'||
-            preg_match('~^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.notify\.windows\.com$~D',$host);
-        if (!$allowed||($url['scheme']??'')!=='https'||isset($url['user'])||isset($url['pass'])||isset($url['fragment'])||
-            (isset($url['port'])&&$url['port']!==443)) throw new InvalidArgumentException('Nieobsługiwany dostawca Web Push.');
-        if ($host==='fcm.googleapis.com'&&!preg_match('~^/(?:fcm/send|wp)/[A-Za-z0-9_:/.-]+$~D',$url['path']??'')) throw new InvalidArgumentException('Nieprawidłowy adres FCM.');
-        foreach (['p256dh'=>65,'auth'=>16] as $key=>$bytes) {
-            $v=$keys[$key]??null;
-            if (!is_string($v)||!preg_match('~^[A-Za-z0-9_-]+$~D',$v)||strlen($v)>100) throw new InvalidArgumentException('Nieprawidłowy klucz Web Push.');
-            $raw=base64_decode(strtr($v,'-_','+/'),true);
-            if ($raw===false||strlen($raw)!==$bytes||($key==='p256dh'&&ord($raw[0])!==4)) throw new InvalidArgumentException('Nieprawidłowy klucz Web Push.');
-        }
-        return ['endpoint'=>$endpoint,'keys'=>['p256dh'=>$keys['p256dh'],'auth'=>$keys['auth']]];
-    }
-    public function subscribe(mixed $value): void
-    {
-        $subscription=self::subscription($value);
-        $this->atomic(function () use ($subscription) {
-            // One explicitly enabled browser/profile on this workstation.
-            $this->setMeta('subscription',json_encode($subscription,JSON_THROW_ON_ERROR));
-            // Never send a backlog at the instant push is enabled.
-            $this->db->exec("UPDATE notices SET delivery='history' WHERE delivery='pending' AND kind!='loading'");
-        });
-    }
+    // Legacy endpoint cleanup remains idempotent; no new subscription can be created.
     public function unsubscribe(): void
     {
-        $this->execute("DELETE FROM metadata WHERE key='subscription'");
+        if ($this->meta('subscription')!==null) $this->execute("DELETE FROM metadata WHERE key='subscription'");
     }
 
-    /** Reserve a background delivery. A local opt-in time selects Windows without a Web Push subscription. */
+    /** Reserve only local WinRT delivery; keep the historic journal field names. */
     public function claimPush(?int $windowsEnabledSince = null): ?array
     {
         return $this->atomic(function () use ($windowsEnabledSince) {
             $this->prune();
-            if ($this->anyPresent()) return null;
-            $subscription=$windowsEnabledSince===null?$this->meta('subscription'):null;
-            if ($windowsEnabledSince===null&&$subscription===null) return null;
+            // Retire only the obsolete subscription record, even with a live
+            // panel or without opt-in. Never clear categories or history.
+            $this->unsubscribe();
+            if ($windowsEnabledSince===null || $this->anyPresent()) return null;
             // Automatic mail events have no initiating operation toast to
             // acknowledge. Once no client is present, dispatch in the same
             // collector cycle instead of waiting for the next timer tick.
             // Keep the existing grace period for all other events.
             foreach ($this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND push=1
                 AND updated>=? AND ((category='mail' AND direct=0) OR updated<=?) ORDER BY updated,id LIMIT 200",
-                [$windowsEnabledSince??0,time()-2])->fetchAll() as $row) {
+                [$windowsEnabledSince,time()-2])->fetchAll() as $row) {
                 if (!in_array($row['category'],$this->categories(),true)) continue;
                 // Claim once before the network call. Unknown delivery is not
                 // retried (avoid duplicate system notifications).
                 $this->execute("UPDATE notices SET delivery='push' WHERE id=?",[$row['id']]);
                 return ['id'=>$row['id'],'journal_age_s'=>max(0,time()-(int)$row['updated']),
-                    'subscription'=>$subscription===null?null:json_decode($subscription,true,16,JSON_THROW_ON_ERROR),
+                    'subscription'=>null,
                     // Generic text only. No subject, recipient, hostname,
                     // project name, secret or original daemon output in push.
                     'payload'=>['id'=>$row['id'],'category'=>$row['category'],'kind'=>$row['kind']]];

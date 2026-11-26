@@ -2,7 +2,6 @@
 declare(strict_types=1);
 require_once __DIR__ . '/../security.php';
 require_once __DIR__ . '/../notifications.php';
-require_once __DIR__ . '/../push-helper.php';
 
 devstack_boot();
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
@@ -148,17 +147,8 @@ try {
         (new DevStackNotices())->setCategories($body['categories']??null);
         devstack_json(200,['ok'=>true,'result'=>[]]);
     }
-    if ($method === 'POST' && $path === '/api/notifications/push-key') {
-        session_write_close();
-        $key=devstack_push_helper('public');
-        if (($key['ok']??false)!==true||!is_string($key['key']??null)) {
-            throw new RuntimeException('Web Push wymaga pakietu python3-pywebpush w Ubuntu.');
-        }
-        devstack_json(200,['ok'=>true,'result'=>['key'=>$key['key']]]);
-    }
-    if ($method === 'POST' && $path === '/api/notifications/subscribe') {
-        (new DevStackNotices())->subscribe($body['subscription']??null);
-        devstack_json(200,['ok'=>true,'result'=>[]]);
+    if ($method === 'POST' && in_array($path, ['/api/notifications/push-key','/api/notifications/subscribe'], true)) {
+        devstack_json(410,['ok'=>false,'error'=>'Web Push został wycofany. DevStack korzysta z lokalnych powiadomień Windows.']);
     }
     if ($method === 'POST' && $path === '/api/notifications/unsubscribe') {
         (new DevStackNotices())->unsubscribe();

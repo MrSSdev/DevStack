@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch'
 import { toast, fail } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
-import { acknowledgeRetiredNotificationClients, consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, notificationDismissed, readNoticeOnClose, renewNotificationClient, retiredNotificationClients, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
+import { acknowledgeRetiredNotificationClients, consumeNotificationClick, emptyNoticeState, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, notificationDismissed, readNoticeOnClose, renewNotificationClient, retiredNotificationClients, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
 
 export function useNotificationCenter(authenticated:boolean,csrf:string,request:NoticeRequest,navigate:(route:string)=>void){
   const [state,setState]=useState<NoticeState>(emptyNoticeState)
@@ -132,13 +132,6 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     }catch(e){fail(e,'notification-history-error');return false}
     finally{setWorking(false)}
   }
-  const changePush=async(enabled:boolean)=>{
-    if(working)return
-    setWorking(true)
-    try{if(enabled)await enablePush(request,csrf);else await disablePush(request,csrf);await sync()}
-    catch(e){fail(e,'notification-push-error')}
-    finally{setWorking(false)}
-  }
   const changeCategory=async(id:string,enabled:boolean)=>{
     if(working)return
     setWorking(true)
@@ -148,7 +141,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     }catch(e){fail(e,'notification-category-error')}
     finally{setWorking(false)}
   }
-  return {state,available,unread,working,sync,manage,changePush,changeCategory}
+  return {state,available,unread,working,sync,manage,changeCategory}
 }
 export type NotificationModel=ReturnType<typeof useNotificationCenter>
 
@@ -215,7 +208,6 @@ export function NotificationCenter({model,navigate}:{model:NotificationModel;nav
   </>
 }
 export function NotificationSettings({model}:{model:NotificationModel}){
-  const supported='Notification' in window&&'PushManager' in window&&'serviceWorker' in navigator
   const standalone=window.matchMedia('(display-mode: standalone)').matches
   return <div className="space-y-3">
     <Card><CardHeader><CardTitle>Aplikacja DevStack (PWA)</CardTitle><CardDescription>Własne okno i ikona w systemie Windows.</CardDescription></CardHeader>
@@ -223,12 +215,12 @@ export function NotificationSettings({model}:{model:NotificationModel}){
         <p>{standalone?'DevStack działa w osobnym oknie aplikacji.':'W Microsoft Edge wybierz menu → Aplikacje → Zainstaluj tę witrynę jako aplikację. Możesz przypiąć DevStack do menu Start i paska zadań.'}</p>
         <p className="text-xs text-muted-foreground">PWA nie przechowuje poczty ani danych projektów w pamięci offline. Nie uruchamia Ubuntu automatycznie.</p>
       </CardContent></Card>
-    <Card><CardHeader><CardTitle>Powiadomienia systemowe</CardTitle><CardDescription>Historia i toasty działają lokalnie, bez Web Push.</CardDescription></CardHeader>
+    <Card><CardHeader><CardTitle>Powiadomienia systemowe Windows</CardTitle><CardDescription>Lokalny transport WinRT, niezależny od internetu i przeglądarki.</CardDescription></CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-sm font-medium">Web Push po zamknięciu panelu</p><p className="text-xs text-muted-foreground">{model.state.subscribed?'Włączone dla jednego profilu przeglądarki.':'Wyłączone.'}</p></div>
-          <Button size="sm" variant={model.state.subscribed?'outline':'default'} disabled={model.working||(!supported&&!model.state.subscribed)} onClick={()=>void model.changePush(!model.state.subscribed)}>{model.state.subscribed?'Wyłącz':'Włącz Web Push'}</Button></div>
-        <p className="text-xs text-muted-foreground">Web Push wymaga internetu, zgody przeglądarki i opcjonalnego pakietu <code>python3-pywebpush</code> w Ubuntu. Przekazuje wyłącznie ogólny typ zdarzenia, bez tematu poczty, adresów i haseł. Otwarte karty (także zminimalizowane) wznawiają obecność; po awarii lub uśpieniu przeglądarki jej wykrycie może być opóźnione.</p>
-        <div className="divide-y rounded-md border px-3">{notificationCategories.map(category=><div key={category.id} className="flex items-center justify-between gap-2 py-2"><span className="text-sm">{category.label}</span><Switch aria-label={'Push: '+category.label} checked={model.state.push_categories.includes(category.id)} disabled={model.working} onCheckedChange={value=>void model.changeCategory(category.id,value)}/></div>)}</div>
+        <div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-sm font-medium">Lokalne powiadomienia</p><p className="text-xs text-muted-foreground">{!model.available?'Stan konfiguracji chwilowo niedostępny.':model.state.windows_enabled?'Transport skonfigurowany w Ubuntu.':'Transport nie jest jeszcze włączony w Ubuntu.'}</p></div></div>
+        {!model.state.windows_enabled&&<p className="text-xs text-muted-foreground">Aby włączyć transport, przygotuj komponent Windows zgodnie z instrukcją instalacji, następnie wykonaj w Ubuntu <code>bash scripts/update.sh --windows-local-notifications</code>.</p>}
+        <p className="text-xs text-muted-foreground">Poniższe kategorie sterują tylko powiadomieniami systemowymi. Historia i toasty panelu działają niezależnie. Windows decyduje o wyświetleniu dymka. Otwarte karty, także zminimalizowane, zachowują obecność w miarę możliwości przeglądarki.</p>
+        <div className="divide-y rounded-md border px-3">{notificationCategories.map(category=><div key={category.id} className="flex items-center justify-between gap-2 py-2"><span className="text-sm">{category.label}</span><Switch aria-label={'Systemowe: '+category.label} checked={model.state.push_categories.includes(category.id)} disabled={model.working} onCheckedChange={value=>void model.changeCategory(category.id,value)}/></div>)}</div>
         <p className="text-xs text-muted-foreground">Historia: maksymalnie 200 najnowszych wpisów, do 30 dni. Możesz usuwać pojedyncze wpisy i wyczyścić wszystko w dowolnym momencie.</p>
       </CardContent></Card>
   </div>

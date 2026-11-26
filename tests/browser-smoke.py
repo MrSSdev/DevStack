@@ -21,6 +21,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, 
 BASE = 'https://devstack.test'
 OUT = pathlib.Path('browser-results')
 HTML_SUBJECT = 'HTML fixture — Zażółć gęślą jaźń'
+FIXTURE_LINK = 'https://example.invalid/reset?token=a%2Fb&signature=c%3D'
 FIXTURE_IMAGES = {'https://example.invalid/tracker', 'https://example.invalid/css-pixel.png'}
 FIXTURE_PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6uoAAAAASUVORK5CYII=')
 CSP_FAILURES = {'csp', 'net::ERR_BLOCKED_BY_CSP'}
@@ -34,7 +35,7 @@ body{background:rgb(248,250,252);color:rgb(17,24,39)}
 <body><div class="remote-probe"></div><div class="mail-card"><h1>Potwierdzenie rezerwacji</h1><p>Cześć <strong>Łukasz</strong>! Zażółć gęślą jaźń.</p>
 <table><tr><th>Usługa</th><th>Cena</th></tr><tr><td>Serwis</td><td>123,45 zł</td></tr></table>
 <ul><li>Pierwszy punkt</li><li>Drugi punkt</li></ul><blockquote>Treść cytowana</blockquote>
-<a class="mail-button" href="https://example.invalid/reset">Potwierdź</a>
+<a class="mail-button" href="https://example.invalid/reset?token=a%2Fb&amp;signature=c%3D" target="_top" ping="https://example.invalid/ping">Potwierdź</a><a href="javascript:alert(1)">Niedozwolony link</a>
 <img src="https://example.invalid/tracker" alt="Remote" onerror="window.mailAttack=1">
 <img src="cid:fixture-logo@test" alt="Fixture logo" width="24" height="24">
 <script>window.mailAttack=1</script><iframe srcdoc="bad"></iframe>
@@ -97,6 +98,8 @@ class BrowserAcceptance(unittest.TestCase):
         self.external = []
         self.unexpected_network = []
         self.fixture_image_requests = []
+        self.fixture_link_requests = []
+        self.external_link_allowed = False
         self.external_images_enabled = False
         self.page.on('pageerror', lambda error: self.errors.append(str(error)))
         # Chromium can emit a request event for a CSS url() even when CSP
@@ -127,6 +130,9 @@ class BrowserAcceptance(unittest.TestCase):
         if self.external_images_enabled and req.resource_type == 'image' and req.url in FIXTURE_IMAGES:
             self.fixture_image_requests.append(req)
             route.fulfill(status=200, content_type='image/png', body=FIXTURE_PNG)
+        elif self.external_link_allowed and req.is_navigation_request() and req.resource_type == 'document' and req.url == FIXTURE_LINK:
+            self.fixture_link_requests.append(req)
+            route.fulfill(status=200, content_type='text/html', body='<!doctype html><title>Verified link</title><h1>Verified link</h1>')
         else:
             self.unexpected_network.append((req.url, req.resource_type))
             route.abort()
@@ -138,7 +144,7 @@ class BrowserAcceptance(unittest.TestCase):
         # DNS failures, generic aborts, pending requests and successes that
         # bypassed the guard are not evidence of CSP protection.
         unexpected = [(req.url, req.failure) for req in self.external
-                      if req not in self.fixture_image_requests and req.failure not in CSP_FAILURES]
+                      if req not in self.fixture_image_requests and req not in self.fixture_link_requests and req.failure not in CSP_FAILURES]
         self.assertEqual(unexpected, [], 'External requests not proven blocked by CSP or explicitly fulfilled')
 
     def post(self, path, data, **kwargs):
@@ -422,13 +428,17 @@ class BrowserAcceptance(unittest.TestCase):
         expect(self.page.frame_locator('iframe[title="Podgląd wiadomości HTML"]').get_by_role('heading',name='Potwierdzenie rezerwacji')).to_be_visible()
         article=self.page.locator('article')
         iframe = article.locator('iframe[title="Podgląd wiadomości HTML"]')
-        expect(iframe).to_have_attribute('sandbox','')
+        expect(iframe).to_have_attribute('sandbox','allow-popups allow-popups-to-escape-sandbox')
         expect(iframe).to_have_attribute('referrerpolicy','no-referrer')
         preview = self.page.frame_locator('iframe[title="Podgląd wiadomości HTML"]')
         expect(preview.get_by_role('cell',name='123,45 zł')).to_be_visible()
         expect(preview.locator('strong').filter(has_text='Łukasz')).to_be_visible()
         expect(preview.locator('script,iframe,svg,math,form,base,link,meta[http-equiv]')).to_have_count(0)
-        expect(preview.locator('a[href]')).to_have_count(0)
+        expect(preview.locator('a[href]')).to_have_count(1)
+        expect(preview.locator('a.mail-button')).to_have_attribute('href',FIXTURE_LINK)
+        expect(preview.locator('a.mail-button')).to_have_attribute('target','_blank')
+        expect(preview.locator('a.mail-button')).to_have_attribute('rel','noopener noreferrer')
+        expect(preview.get_by_text('Niedozwolony link',exact=True)).to_have_attribute('aria-disabled','true')
         expect(preview.locator('a.mail-button')).to_have_css('background-color','rgb(22, 22, 22)')
         expect(preview.locator('a.mail-button')).to_have_css('color','rgb(255, 255, 255)')
         expect(preview.locator('body')).to_have_css('background-color','rgb(248, 250, 252)')
@@ -445,6 +455,27 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertIsNone(self.page.evaluate('window.mailAttack'))
         self.assert_mail_network()
         self.assertEqual(self.fixture_image_requests, [], 'Default preview must not load external images')
+        self.assertEqual(self.fixture_link_requests, [], 'No automatic link request')
+        # Enable only the exact explicitly clicked fixture URL. The context
+        # guard still blocks all other external requests including ping.
+        self.external_link_allowed = True
+        try:
+            with self.context.expect_page() as opened:
+                preview.get_by_role('link',name='Potwierdź',exact=True).click()
+            popup=opened.value
+            try:
+                expect(popup.get_by_role('heading',name='Verified link')).to_be_visible()
+                expect(popup).to_have_url(FIXTURE_LINK)
+                self.assertTrue(popup.evaluate('window.opener === null && document.referrer === ""'))
+                self.assertEqual(len(self.fixture_link_requests),1)
+                self.assertNotIn('referer',self.fixture_link_requests[0].headers)
+            finally:
+                popup.close()
+        finally:
+            self.external_link_allowed = False
+        expect(preview.get_by_role('heading',name='Potwierdzenie rezerwacji')).to_be_visible()
+        self.assertTrue(iframe.evaluate('e=>e.contentDocument===null'))
+        self.assert_mail_network()
         self.shot('853-original-styles-mail')
         # Only the exact fixture image URLs may reach the context guard after
         # opt-in. No network access or blanket allowance of failed requests.
@@ -478,7 +509,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(attachment.headers['content-disposition'],'attachment')
         response=self.context.request.get(BASE+'/api/mail/message/'+message_id+'/preview')
         self.assertEqual(response.status,200)
-        self.assertIn("sandbox; script-src 'none'",response.headers['content-security-policy'])
+        self.assertIn("sandbox allow-popups allow-popups-to-escape-sandbox; script-src 'none'",response.headers['content-security-policy'])
         self.assertIn('img-src data:;',response.headers['content-security-policy'])
         enabled=self.context.request.get(BASE+'/api/mail/message/'+message_id+'/preview?images=1')
         self.assertEqual(enabled.status,200)
@@ -490,7 +521,18 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.get_by_role('button',name='Tekst',exact=True).click()
         expect(article.get_by_text('Plain fixture body — Zażółć gęślą jaźń',exact=False)).to_be_visible()
         self.page.get_by_role('button',name='Źródło HTML',exact=True).click()
-        expect(article.locator('pre')).to_contain_text('<script>window.mailAttack=1</script>')
+        source=article.get_by_role('textbox',name='Kod źródłowy HTML wiadomości')
+        expect(source).to_have_attribute('readonly','')
+        expect(source).to_have_value(message['HTML'].replace('\r\n','\n').replace('\r','\n'))
+        source.click()
+        source.press('Control+a')
+        self.assertTrue(source.evaluate('e=>e.selectionStart===0&&e.selectionEnd===e.value.length&&document.activeElement===e'))
+        # Chromium also exposes the focused textarea selection through the
+        # document Selection API. It must contain only the source, not the
+        # surrounding mail reader or dashboard. The range and focus checks
+        # above independently verify that Ctrl+A selected the entire field.
+        self.assertEqual(self.page.evaluate('window.getSelection().toString()'),
+                         source.input_value())
         self.page.get_by_role('button',name='Usuń',exact=True).click()
         self.page.get_by_role('button',name='Anuluj',exact=True).click()
         self.assertEqual(mailpit()['total'],43)
@@ -733,6 +775,9 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(manifest.status,200)
         info=manifest.json()
         self.assertEqual(info['display'],'standalone')
+        # The installed manifest requests reuse of an existing app window.
+        # Native Windows/Edge window reuse is verified on the device, not here.
+        self.assertEqual(info['launch_handler'],{'client_mode':'navigate-existing'})
         self.assertEqual(info['scope'],'/')
         self.assertEqual(info['id'],'/')
         self.assertEqual(info['start_url'],'/#/dashboard')
@@ -745,6 +790,23 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.wait_for_function("navigator.serviceWorker.controller !== null")
         self.assertTrue(self.page.evaluate("navigator.serviceWorker.getRegistration('/').then(r=>!!r?.active)"))
         self.assertEqual(self.page.evaluate('caches.keys()'),[])
+        # The widget's two fixed launch destinations use the same manifest
+        # mapping as the native notification transport, with no notice ID.
+        for route,title in [('new','Nowy projekt'),('projects','Projekty')]:
+            uri='web+devstack://open/'+route
+            self.page.goto(BASE+info['protocol_handlers'][0]['url'].replace('%s',urllib.parse.quote(uri,safe='')))
+            expect(self.page.get_by_role('heading',name=title,exact=True)).to_be_visible()
+            expect(self.page).to_have_url(BASE+'/#/'+route)
+        self.goto('settings')
+        self.page.locator('main').get_by_role('button',name='Powiadomienia',exact=True).click()
+        settings=self.page.get_by_role('region',name='Powiadomienia',exact=True)
+        expect(settings.get_by_text('Powiadomienia systemowe Windows',exact=True)).to_be_visible()
+        expect(settings.get_by_text('Transport nie jest jeszcze włączony w Ubuntu.',exact=True)).to_be_visible()
+        expect(settings.get_by_role('button',name='Włącz Web Push',exact=True)).to_have_count(0)
+        expect(settings.get_by_role('switch',name='Systemowe: Nowa poczta')).to_be_checked()
+        for endpoint in ['push-key','subscribe']:
+            self.assertEqual(self.post('/api/notifications/'+endpoint,{}).status,410)
+        self.goto('dashboard')
         # Establish the empty-mailbox baseline and finish any prior worker
         # pass before clearing the independent event history.
         self.wait_notification_cycle()

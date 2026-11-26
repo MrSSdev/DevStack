@@ -33,7 +33,7 @@ try {
 } finally { $zip.Dispose() }
 if ($manifest.Package.Identity.Name -ne 'MrSSdev.DevStack.Widgets' -or
     $manifest.Package.Identity.Publisher -ne 'CN=DevStack Widgets Development' -or
-    $manifest.Package.Identity.Version -ne '0.5.2.0') { throw 'Expected DevStack Widgets 0.5.2.0.' }
+    $manifest.Package.Identity.Version -ne '0.5.3.0') { throw 'Expected DevStack Widgets 0.5.3.0.' }
 . (Join-Path $PSScriptRoot 'Widget-Layout.ps1')
 Initialize-DevStackLayout -UserSid $identity.User -Component Widgets
 $configDir = Get-DevStackWidgetDirectory
@@ -85,7 +85,7 @@ if ($resetErrors.Count -gt 0) {
 }
 
 $packages | Select-Object Name, Version, Status
-Write-Host 'Widgets updated to 0.5.2.0. Approved WSL appearance and controls are preserved.'
+Write-Host 'Widgets updated to 0.5.3.0. Approved WSL appearance and controls are preserved.'
 Write-Host 'Existing Ubuntu telemetry setup is retained. Do not reinstall WSL telemetry.'
 Write-Host 'Keep the existing Linux integrations. If explicitly needed, update them separately without elevation.'
 if ($DeferFirstOpenReset) {

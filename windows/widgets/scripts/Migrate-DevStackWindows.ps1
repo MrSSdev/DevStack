@@ -66,7 +66,7 @@ try {
 } finally { $archive.Dispose() }
 if ($manifest.Package.Identity.Name -cne 'MrSSdev.DevStack.Widgets' -or
     $manifest.Package.Identity.Publisher -cne 'CN=DevStack Widgets Development' -or
-    $manifest.Package.Identity.Version -cne '0.5.2.0') {
+    $manifest.Package.Identity.Version -cne '0.5.3.0') {
     throw 'Wrong MSIX identity or version.'
 }
 if ($VerifyOnly) {
@@ -99,7 +99,7 @@ function Invoke-AdminStep([string]$Command,[string]$Label) {
 Assert-UbuntuStopped
 $package = @(Get-AppxPackage -Name 'MrSSdev.DevStack.Widgets' -ErrorAction Stop)
 if ($package.Count -ne 1 -or [string]$package[0].Status -ne 'Ok') { throw 'This migration expects the existing healthy DevStack widget package.' }
-$targetVersion = [version]'0.5.2.0'
+$targetVersion = [version]'0.5.3.0'
 if ([version]$package[0].Version -gt $targetVersion) { throw 'Refusing to downgrade a newer widget package.' }
 
 & (Join-Path $layout 'migrate-notification-layout.ps1')

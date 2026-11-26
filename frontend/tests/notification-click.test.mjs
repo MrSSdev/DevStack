@@ -29,23 +29,20 @@ function worker(existing=false){
     addEventListener:(type,handler)=>listeners.set(type,handler)
   }
   vm.runInNewContext(source,{self,URL,fetch:async(url,options)=>calls.push(['fetch',url,options])})
-  return {calls,dispatch:async(type,event)=>{
+  return {calls,hasListener:type=>listeners.has(type),dispatch:async(type,event)=>{
     let done
     listeners.get(type)({...event,waitUntil:p=>{done=p}})
     await done
   }}
 }
 
-test('push carries the exact journal ID and cold click opens the mail with its read marker',async()=>{
+test('Web Push listener is retired but an existing notification can still be opened',async()=>{
   const w=worker()
-  await w.dispatch('push',{data:{json:()=>({id,category:'mail',kind:'info'})}})
-  const [,title,options]=w.calls[0]
-  assert.equal(title,'Nowa poczta w DevStack')
-  assert.equal(options.data.id,id)
+  assert.equal(w.hasListener('push'),false)
   let closed=false
-  await w.dispatch('notificationclick',{notification:{...options,close:()=>{closed=true}}})
+  await w.dispatch('notificationclick',{notification:{data:{route,id},close:()=>{closed=true}}})
   assert.equal(closed,true)
-  assert.deepEqual(w.calls[1],['open',base+route+'?notice='+id])
+  assert.deepEqual(w.calls,[['open',base+route+'?notice='+id]])
 })
 
 test('existing window is focused and older notifications recover the ID from the tag',async()=>{
@@ -72,9 +69,13 @@ test('fragment parser keeps the normal route and validates the complete journal 
 
 test('manifest protocol launches normalize to the existing route and exact journal marker',()=>{
   const manifest=JSON.parse(readFileSync(new URL('../public/manifest.webmanifest',import.meta.url),'utf8'))
+  assert.deepEqual(manifest.launch_handler,{client_mode:'navigate-existing'})
   assert.deepEqual(manifest.protocol_handlers,[{protocol:'web+devstack',url:'/#/protocol?uri=%s'}])
   const launch=uri=>manifest.protocol_handlers[0].url.replace('%s',encodeURIComponent(uri)).slice(1)
   assert.equal(protocolLaunchHash(launch('web+devstack://open/mail')),'#/mail')
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/new')),'#/new')
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/projects')),'#/projects')
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/new?notice='+id)),'#/dashboard')
   assert.equal(protocolLaunchHash(launch('web+devstack://open/mail/'+mailId+'?notice='+id)),route.slice(1)+'?notice='+id)
   assert.equal(protocolLaunchHash(launch('web+devstack://open/projects?notice=op-'+'a'.repeat(32))),'#/projects?notice=op-'+'a'.repeat(32))
   assert.equal(protocolLaunchHash('#/mail'),undefined)

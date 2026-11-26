@@ -11,7 +11,7 @@ Windows 11 x64 with a compatible Web Widgets host and Windows App Runtime 2.7. S
 
 ## Download
 
-From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-0.5.2.0-migration** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
+From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-0.5.3.0** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
 
 Keep the MSIX, CER, installers, frontend ZIP, and `telemetry/` and `services/` directories from the same build together.
 
@@ -58,7 +58,7 @@ Reopen **Win + W**.
 
 **Ubuntu:** select **Uruchom Ubuntu** to start the distribution. Select **Zatrzymaj Ubuntu** and confirm to stop it; save work first. Click a resource tile for details.
 
-**DevStack:** select a service tile for details. Choose **Uruchom ponownie** and confirm to restart that service. The status line reports progress and verification; a successful result clears after 30 seconds. A later healthy reading clears an earlier service warning. **Dodaj projekt** and **Projekty** open the dashboard in the default browser.
+**DevStack:** select a service tile for details. Choose **Uruchom ponownie** and confirm to restart that service. The status line reports progress and verification; a successful result clears after 30 seconds. A later healthy reading clears an earlier service warning. **Dodaj projekt** and **Projekty** open their exact DevStack routes in the registered PWA, or the default browser if no suitable handler exists. The PWA manifest requests navigation in an existing app window on supported browsers, rather than opening a new window for each click.
 
 Both cards refresh when visible. Opening the panel preserves the current Ubuntu lifecycle state.
 
@@ -69,6 +69,37 @@ Both cards refresh when visible. Opening the panel preserves the current Ubuntu 
 | Nginx / PHP-FPM response | Shared end-to-end HTTPS request. |
 | MariaDB / Redis response | TCP connection establishment time. |
 | Service RAM / CPU | systemd cgroup memory including cache and short CPU delta. 100% CPU represents one logical processor. |
+
+## Extending the managed service catalog
+
+The shared, administrator-controlled [service catalog](../../daemon/service-catalog.json) is the allowlist for the dashboard and the v2 widget bridge. Widget settings select which registered services to display; they do not register arbitrary systemd units. A catalog entry for an already installed, supported service can be deployed through the normal Linux update without rebuilding the current Windows package.
+
+For example, if Memcached were installed and listening on its default TCP port, a maintainer could add this entry to the catalog (this is an example, not an installed dependency):
+
+```json
+{
+  "id": "memcached",
+  "unit": "memcached.service",
+  "name": "Memcached",
+  "description": "Pamięć podręczna",
+  "probe": "tcp",
+  "port": 11211,
+  "widget_default": false,
+  "panel_dependency": false
+}
+```
+
+Use unique IDs and systemd service names. The schema allows up to 24 entries and requires the exact fields shown above; IDs and unit names are validated by [managed_services.py](../../daemon/managed_services.py). Mark panel dependencies accurately. The installed registry must remain root-owned, non-symlinked and not group/world writable. Never accept an arbitrary unit name or shell command from the dashboard or widget.
+
+The bridge resolves the service ID against this catalog, checks that the unit is loaded, blocks conflicting installer/service operations and invokes a bounded `systemctl --no-ask-password restart <unit>` (12-second subprocess timeout, no automatic retry). The widget verifies a fresh post-command snapshot: the unit must be active and the selected service must pass its configured probe. Successful verification is displayed in the widget itself for 30 seconds, without a second PWA toast. Recovery after an error or unconfirmed command is not proof that the restart succeeded.
+
+| Probe | Meaning and limitation |
+| --- | --- |
+| `tcp` | Windows connects to the configured port on 127.0.0.1; this measures reachability, not application-level health or process identity. Requires the service to be reachable through WSL networking. |
+| `unit` | Systemd active state only; use port 0 when no network probe is applicable. |
+| `https` | Shared fixed DevStack HTTPS session endpoint, not a general configurable URL or independent HTTP health check for a new service. Nginx and PHP-FPM retain their dedicated interpretation of that response. |
+
+Test any new catalog entry with real systemd status, selection persistence, metrics, successful and failed restart verification, and the existing no-WSL-wake behavior. Slow-starting services or services requiring application-specific readiness checks may need additional implementation. Keep the legacy v1 bridge behavior intact where required.
 
 ## Updating
 

@@ -21,26 +21,7 @@ self.addEventListener('fetch',event=>{
     {status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}})));
 });
 const validId=id=>typeof id==='string'&&/^(?:(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22})$/.test(id);
-const routeFor=(category,id)=>category==='mail'?(id.startsWith('mail-')?'/#/mail/'+id.slice(5):'/#/mail'):
-  category==='project'?'/#/projects':category==='installer'?'/#/projects':category==='settings'?'/#/settings':'/#/dashboard';
-self.addEventListener('push',event=>{
-  // Edge requires user-visible push. The server suppresses sends while a
-  // client lease is active; a race after transmission must remain visible.
-  event.waitUntil((async()=>{
-    let data={};
-    try{data=event.data?.json()||{}}catch{}
-    const id=validId(data.id)?data.id:'update';
-    const category=['mail','project','installer','service','settings'].includes(data.category)?data.category:'';
-    const title=category==='mail'?'Nowa poczta w DevStack':category==='project'?'Zdarzenie projektu':
-      category==='installer'?'Zakończono operację instalatora':category==='service'?'Zdarzenie usługi':'DevStack';
-    await self.registration.showNotification(title,{
-      body:data.kind==='error'?'Operacja wymaga uwagi. Otwórz DevStack.':'Otwórz DevStack, aby zobaczyć szczegóły.',
-      icon:'/pwa/icon-192.png',badge:'/pwa/icon-192.png',tag:'devstack-'+id,renotify:false,
-      data:{route:routeFor(category,id),id}
-    });
-    try{await self.navigator.setAppBadge?.()}catch{}
-  })());
-});
+// Retain only the click handler for already displayed legacy notifications.
 self.addEventListener('notificationclick',event=>{
   event.notification.close();
   const route=event.notification.data?.route;

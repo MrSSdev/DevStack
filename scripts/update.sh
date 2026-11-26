@@ -28,7 +28,7 @@ fi
 cd "$root"
 
 branch="$(git branch --show-current)"
-if [[ "$branch" != main && "$branch" != test/windows-local-notifications && "$branch" != test/windows-component-layout ]]; then
+if [[ "$branch" != main && "$branch" != test/windows-local-notifications && "$branch" != test/windows-component-layout && "$branch" != test/devstack-final-polish ]]; then
   echo 'Update supports main or an explicitly verified Windows integration test branch.' >&2
   exit 2
 fi
@@ -99,11 +99,10 @@ php -l backend/public/index.php
 php -l backend/security.php
 php -l backend/mail-preview.php
 php -l backend/notifications.php
-php -l backend/push-helper.php
 php -l scripts/notifications-worker.php
 php -l scripts/set-password.php
 php -l scripts/configure-auth.php
-python3 -m py_compile daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py scripts/list-domains.py scripts/watch-domains.py scripts/notification-push.py
+python3 -m py_compile daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py scripts/list-domains.py scripts/watch-domains.py
 
 echo '[4/5] Building frontend as non-root...'
 bash scripts/build-frontend.sh

@@ -5,6 +5,7 @@ import { toast, beginNotice, notify, fail } from '@/components/ui/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { PageHeader } from '@/components/page-header'
 import { notificationRouteHash } from '@/lib/notification-client'
 
@@ -158,12 +159,12 @@ export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:
             {attachments.length>0&&<div className="space-y-1.5"><h3 className="text-xs font-semibold text-muted-foreground">Załączniki ({attachments.length})</h3><div className="flex flex-wrap gap-2">{attachments.map((a,i)=><a key={a.PartID+'-'+i} href={'/api/mail/message/'+message.ID+'/part/'+encodeURIComponent(a.PartID)} download={a.FileName||'mailpit-attachment'} className="flex min-w-0 max-w-full items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-secondary"><Download className="size-4 shrink-0"/><span className="min-w-0 break-all">{a.FileName||a.ContentType||'Załącznik'}</span><span className="shrink-0 text-xs text-muted-foreground">{typeof a.Size==='number'?Math.ceil(a.Size/1024)+' KB':''}</span></a>)}</div></div>}
             {format==='html'?<div className="space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="min-w-0 flex-1 text-xs text-muted-foreground">Oryginalne style HTML. Linki, skrypty i formularze nieaktywne.</p>
+                <p className="min-w-0 flex-1 text-xs text-muted-foreground">Oryginalne style HTML. Linki HTTP(S) otwierają się w osobnym oknie; skrypty i formularze nieaktywne.</p>
                 <Button size="sm" variant="outline" aria-pressed={externalImages} onClick={()=>setExternalImagesFor(externalImages?'':message.ID)}>{externalImages?'Ukryj obrazy zewnętrzne':'Wczytaj obrazy zewnętrzne'}</Button>
               </div>
               <p className="text-xs text-muted-foreground">{externalImages?'Obrazy HTTPS włączone dla tej wiadomości. Mogą kontaktować się z serwerami nadawcy.':'Obrazy zewnętrzne zablokowane. Wczytanie może ujawnić otwarcie wiadomości nadawcy.'}</p>
-              <iframe key={message.ID} title="Podgląd wiadomości HTML" sandbox="" referrerPolicy="no-referrer" src={'/api/mail/message/'+message.ID+'/preview'+(externalImages?'?images=1':'')} className="block h-[max(24rem,calc(100dvh-13rem))] w-full min-w-0 rounded-md border bg-white"/>
-            </div>:<pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 text-sm">{(format==='source'?message.HTML:message.Text)||'(brak treści w tym formacie)'}</pre>}
+              <iframe key={message.ID} title="Podgląd wiadomości HTML" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" src={'/api/mail/message/'+message.ID+'/preview'+(externalImages?'?images=1':'')} className="block h-[max(24rem,calc(100dvh-13rem))] w-full min-w-0 rounded-md border bg-white"/>
+            </div>:format==='source'?<Textarea aria-label="Kod źródłowy HTML wiadomości" readOnly value={message.HTML??''} spellCheck={false} wrap="off" className="h-[max(24rem,calc(100dvh-13rem))] min-w-0 resize-y overflow-auto font-mono text-xs"/>:<pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 text-sm">{message.Text||'(brak treści w tym formacie)'}</pre>}
           </>}
         </article>}
       </CardContent>

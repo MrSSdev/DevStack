@@ -1,3 +1,7 @@
+## 0.5.3.0 — PWA navigation
+
+- Project and new-project shortcuts prefer a registered DevStack PWA with HTTPS fallback. No new notification or WSL background process.
+
 ## 0.5.2.0 — protected Windows layout
 
 - Move configuration, cache and diagnostics to the administrator-provisioned private Widgets directory; no legacy path fallback.

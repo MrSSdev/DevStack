@@ -5,7 +5,7 @@ declare(strict_types=1);
 // Keep this response policy independent of the normal panel's strict CSP.
 function devstack_mail_preview_policy(bool $externalImages): string
 {
-    return "default-src 'none'; sandbox; script-src 'none'; style-src 'unsafe-inline'; img-src data:" .
+    return "default-src 'none'; sandbox allow-popups allow-popups-to-escape-sandbox; script-src 'none'; style-src 'unsafe-inline'; img-src data:" .
         ($externalImages ? " https:" : "") .
         "; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; " .
         "form-action 'none'; base-uri 'none'; frame-ancestors https://devstack.test";
@@ -14,6 +14,21 @@ function devstack_mail_preview_policy(bool $externalImages): string
 function devstack_preview_escape(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+}
+
+// Only deliberate navigation to an absolute HTTP(S) URL is allowed.
+// Preserve the original URL (including signed queries and fragments).
+// Never forward sender-controlled target, rel, ping or download attributes.
+function devstack_preview_link(string $value): ?string
+{
+    if (strlen($value) > 8192 || !preg_match('~^https?://~i', $value) ||
+        preg_match('~[\x00-\x20\x7f]~', $value) || str_contains($value, '\\') ||
+        filter_var($value, FILTER_VALIDATE_URL) === false) return null;
+    $url = parse_url($value);
+    if (!is_array($url) || empty($url['host']) ||
+        !in_array(strtolower($url['scheme'] ?? ''), ['http','https'], true) ||
+        isset($url['user']) || isset($url['pass'])) return null;
+    return $value;
 }
 
 // Accept only bounded raster images, not arbitrary attachments or SVG documents.
@@ -129,8 +144,12 @@ function devstack_render_mail_preview(
             }
         }
         if ($tag === 'a') {
-            // Preserve anchor styling but remove href/target/ping/download.
-            $out .= ' aria-disabled="true"';
+            $href = devstack_preview_link($el->getAttribute('href') ?? '');
+            if ($href !== null) {
+                $out .= ' href="' . devstack_preview_escape($href) . '" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"';
+            } else {
+                $out .= ' aria-disabled="true"';
+            }
         }
         if ($tag === 'img') {
             $alt = $el->getAttribute('alt') ?? '';
