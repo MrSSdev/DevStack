@@ -7,6 +7,10 @@ final class DevStackNotices
 {
     public const CATEGORIES = ['mail', 'project', 'installer', 'service', 'settings'];
     public const LIMIT = 200;
+    private const CLIENT_LEASE_SECONDS = 90;
+    // A document ID is never reused after pagehide. Retain a bounded close
+    // marker well beyond ordinary in-flight HTTP request lifetimes.
+    private const CLOSED_CLIENT_SECONDS = 86400;
     private PDO $db;
 
     public function __construct(string $path = '/var/lib/devstack-web/notifications.sqlite3')
@@ -28,8 +32,10 @@ final class DevStackNotices
             );
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS closed_clients (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS mail_seen (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS job_tombstones (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);");
+            CREATE TABLE IF NOT EXISTS job_tombstones (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS service_results_seen (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);");
         } finally {
             umask($old);
         }
@@ -98,6 +104,7 @@ final class DevStackNotices
     private function prune(): void
     {
         $this->execute('DELETE FROM clients WHERE expires<=?', [time()]);
+        $this->execute('DELETE FROM closed_clients WHERE expires<=?', [time()]);
         $this->execute("INSERT OR IGNORE INTO job_tombstones SELECT id,? FROM notices WHERE id LIKE 'job-%' AND updated<? AND kind!='loading'",[time(),time()-30*86400]);
         $this->execute('DELETE FROM notices WHERE updated<? AND kind!=?', [time()-30*86400,'loading']);
         $this->execute("INSERT OR IGNORE INTO job_tombstones SELECT id,? FROM (SELECT id FROM notices ORDER BY updated DESC,id DESC LIMIT -1 OFFSET " . self::LIMIT . ") WHERE id LIKE 'job-%'",[time()]);
@@ -107,15 +114,33 @@ final class DevStackNotices
         // Delayed results are still in history; never replay a backlog as push.
         $this->execute("UPDATE notices SET delivery='history' WHERE delivery='pending' AND kind!='loading' AND updated<?", [time()-600]);
     }
-    public function touch(string $client): void
+    private function touch(string $client): bool
     {
-        if ($client === '') return;
-        $this->execute('INSERT INTO clients(id,expires) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET expires=excluded.expires',
-            [$client,time()+180]);
+        if ($client === '') return false;
+        $now=time();
+        // Only the authenticated notification poll renews presence. An older
+        // request arriving after leave must not resurrect the closed document.
+        return $this->execute('INSERT INTO clients(id,expires)
+            SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM closed_clients WHERE id=? AND expires>?)
+            ON CONFLICT(id) DO UPDATE SET expires=excluded.expires',
+            [$client,$now+self::CLIENT_LEASE_SECONDS,$client,$now])->rowCount()===1;
+    }
+    private function isClosed(string $client): bool
+    {
+        return (bool)$this->execute('SELECT 1 FROM closed_clients WHERE id=? AND expires>?',[$client,time()])->fetchColumn();
+    }
+    private function closeClient(string $client): void
+    {
+        // Record even a leave that arrives before the first poll.
+        $this->execute('INSERT INTO closed_clients(id,expires) VALUES(?,?)
+            ON CONFLICT(id) DO UPDATE SET expires=excluded.expires',
+            [$client,time()+self::CLOSED_CLIENT_SECONDS]);
+        $this->execute('DELETE FROM clients WHERE id=?',[$client]);
     }
     public function leave(string $client): void
     {
-        if ($client !== '') $this->execute('DELETE FROM clients WHERE id=?', [$client]);
+        if ($client === '') return;
+        $this->atomic(fn()=>$this->closeClient($client));
     }
     private function present(string $client): bool
     {
@@ -155,7 +180,7 @@ final class DevStackNotices
                         $slug,'/#/projects','loading',$owner,false,true,'accepted');
                     if ($owner!=='') $this->execute('UPDATE notices SET owner=? WHERE id=? AND kind=?',[$owner,$id,'loading']);
                     $this->setMeta('job', $job);
-                    $this->touch($owner); $this->prune();
+                    $this->prune();
                     return $id;
                 });
             }
@@ -195,7 +220,6 @@ final class DevStackNotices
         if ($slug!=='' && $path!=='/api/projects/delete') $route='/#/project/'.$slug;
         return $this->atomic(function () use ($category,$title,$description,$route,$kind,$owner,$push) {
             $id='op-'.bin2hex(random_bytes(16));
-            $this->touch($owner);
             $this->insert($id,$category,$title,$description,$route,$kind,$owner,true,$push);
             $this->prune();
             return $id;
@@ -238,7 +262,7 @@ final class DevStackNotices
             $id=$this->observeJobInner($job);
             if ($id===null) return null;
             $row=$this->row($id); $show=false;
-            if ($client!=='' && $row && !in_array($row['delivery'],['push','history'],true)) {
+            if ($client!=='' && !$this->isClosed($client) && $row && !in_array($row['delivery'],['push','history'],true)) {
                 $owner=$row['owner'];
                 // A live initiating/owning tab keeps the installer toast.
                 // Only one tab can claim an unowned running or pending job.
@@ -286,15 +310,48 @@ final class DevStackNotices
         });
     }
 
-    public function observeServices(array $services): void
+    public function observeServices(array $services, array $results = []): void
     {
-        $this->atomic(function () use ($services) {
+        $this->atomic(function () use ($services,$results) {
+            // A completed systemctl action has its own stable identity and
+            // survives panel disconnection. The daemon keeps a bounded
+            // receipt journal; a deleted history item must never be replayed.
+            $now=time();
+            $completed=[];
+            foreach (array_slice($results,0,200) as $result) {
+                if (!is_array($result)) continue;
+                $key=$result['id']??null; $service=$result['service']??null;
+                $action=$result['action']??null; $outcome=$result['outcome']??null;
+                $state=$result['state']??null; $stamp=$result['stamp']??null;
+                if (!is_string($key)||!preg_match('~^[a-f0-9]{32}$~D',$key)||
+                    !is_string($service)||!preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$service)||
+                    !in_array($action,['start','stop','restart'],true)||
+                    !in_array($outcome,['success','error'],true)||
+                    !in_array($state,['active','inactive','failed','activating','deactivating','reloading','refreshing','unknown'],true)||
+                    !is_int($stamp)||$stamp<$now-30*86400||$stamp>$now+5) continue;
+                $id='service-'.$key;
+                if ($this->execute('INSERT OR IGNORE INTO service_results_seen(id,stamp) VALUES(?,?)',[$id,$stamp])->rowCount()!==1) continue;
+                // Defense in depth: even a malformed success receipt cannot
+                // present a stopped service as a successful start/restart.
+                $success=$outcome==='success'&&$state===($action==='stop'?'inactive':'active');
+                $title=$success?['start'=>'Usługa uruchomiona','restart'=>'Usługa uruchomiona ponownie','stop'=>'Usługa zatrzymana'][$action]:
+                    'Nie potwierdzono wykonania polecenia usługi';
+                $description=self::clean($result['name']??$service,60).' — '.['start'=>'uruchomienie','restart'=>'restart','stop'=>'zatrzymanie'][$action];
+                $this->insert($id,'service',$title,$description,'/#/dashboard',$success?'success':'error');
+                $this->execute('UPDATE notices SET created=?,updated=? WHERE id=?',[$stamp,$stamp,$id]);
+                if ($stamp>=$now-120) $completed[$service]=$state;
+            }
+            $this->execute('DELETE FROM service_results_seen WHERE stamp<?',[$now-31*86400]);
+            $this->db->exec('DELETE FROM service_results_seen WHERE id IN (SELECT id FROM service_results_seen ORDER BY stamp DESC,id DESC LIMIT -1 OFFSET 20000)');
             $previous=json_decode($this->meta('service_states','{}'),true);
             $next=[];
             foreach (array_slice($services,0,24) as $service) {
                 $id=$service['id']??null; $state=$service['state']??null;
                 if (!is_string($id)||!preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$id)||!is_string($state)) continue;
                 $next[$id]=$state;
+                // The same observed failure/recovery was already described
+                // by a new terminal receipt. Spontaneous transitions remain.
+                if (($completed[$id]??null)===$state) continue;
                 if (isset($previous[$id])&&$previous[$id]!==$state&&$state==='failed') {
                     $this->insert('service-'.bin2hex(random_bytes(16)),'service','Awaria usługi',
                         self::clean($service['name']??$id,60),'/#/dashboard','error');
@@ -314,10 +371,22 @@ final class DevStackNotices
         if ($client!=='') $this->execute("UPDATE notices SET delivery='toast' WHERE id=? AND owner=? AND direct=1 AND delivery='pending'",[$id,$client]);
     }
 
-    public function poll(string $client, bool $claim = true, mixed $opened = null): array
+    public function poll(string $client, bool $claim = true, mixed $opened = null, mixed $retired = []): array
     {
-        return $this->atomic(function () use ($client,$claim,$opened) {
-            $this->touch($client); $this->prune();
+        // Only bounded, explicitly retired lifetimes may be replayed by a
+        // restored/reloaded document. A duplicate tab never retires a live ID.
+        if (!is_array($retired)||!array_is_list($retired)||count($retired)>16) {
+            throw new InvalidArgumentException('Nieprawidłowa lista zamkniętych klientów.');
+        }
+        foreach ($retired as $old) {
+            if (self::client($old)===''||$old===$client) {
+                throw new InvalidArgumentException('Nieprawidłowy zamknięty klient.');
+            }
+        }
+        return $this->atomic(function () use ($client,$claim,$opened,$retired) {
+            $this->prune();
+            $present=$this->touch($client);
+            if ($present) foreach (array_unique($retired) as $old) $this->closeClient($old);
             if ($opened!==null) {
                 // The clicked journal event alone is read before collecting
                 // toasts and returning the authoritative history snapshot.
@@ -328,7 +397,7 @@ final class DevStackNotices
                     WHERE id=?",[$id]);
             }
             $deliver=[];
-            if ($client!==''&&$claim) {
+            if ($present&&$claim) {
                 $rows=$this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND id NOT LIKE 'job-%' ORDER BY created,id LIMIT 40")->fetchAll();
                 foreach ($rows as $row) {
                     if (count($deliver)>=3) break;
@@ -409,25 +478,27 @@ final class DevStackNotices
         $this->execute("DELETE FROM metadata WHERE key='subscription'");
     }
 
-    public function claimPush(): ?array
+    /** Reserve a background delivery. A local opt-in time selects Windows without a Web Push subscription. */
+    public function claimPush(?int $windowsEnabledSince = null): ?array
     {
-        return $this->atomic(function () {
+        return $this->atomic(function () use ($windowsEnabledSince) {
             $this->prune();
             if ($this->anyPresent()) return null;
-            $subscription=$this->meta('subscription');
-            if ($subscription===null) return null;
+            $subscription=$windowsEnabledSince===null?$this->meta('subscription'):null;
+            if ($windowsEnabledSince===null&&$subscription===null) return null;
             // Automatic mail events have no initiating operation toast to
             // acknowledge. Once no client is present, dispatch in the same
             // collector cycle instead of waiting for the next timer tick.
             // Keep the existing grace period for all other events.
             foreach ($this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND push=1
-                AND ((category='mail' AND direct=0) OR updated<=?) ORDER BY updated,id LIMIT 200",[time()-2])->fetchAll() as $row) {
+                AND updated>=? AND ((category='mail' AND direct=0) OR updated<=?) ORDER BY updated,id LIMIT 200",
+                [$windowsEnabledSince??0,time()-2])->fetchAll() as $row) {
                 if (!in_array($row['category'],$this->categories(),true)) continue;
                 // Claim once before the network call. Unknown delivery is not
                 // retried (avoid duplicate system notifications).
                 $this->execute("UPDATE notices SET delivery='push' WHERE id=?",[$row['id']]);
                 return ['id'=>$row['id'],'journal_age_s'=>max(0,time()-(int)$row['updated']),
-                    'subscription'=>json_decode($subscription,true,16,JSON_THROW_ON_ERROR),
+                    'subscription'=>$subscription===null?null:json_decode($subscription,true,16,JSON_THROW_ON_ERROR),
                     // Generic text only. No subject, recipient, hostname,
                     // project name, secret or original daemon output in push.
                     'payload'=>['id'=>$row['id'],'category'=>$row['category'],'kind'=>$row['kind']]];

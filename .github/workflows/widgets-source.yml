@@ -1,6 +1,8 @@
 name: DevStack Widgets source snapshot
 
 on:
+  push:
+    branches: [test/windows-local-notifications]
   pull_request:
     paths: ['windows/widgets/**', '.github/workflows/widgets-source.yml']
   workflow_dispatch:

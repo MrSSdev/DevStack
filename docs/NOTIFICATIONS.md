@@ -21,8 +21,9 @@ from returning on refresh. Deleted job IDs retain a bounded-lifetime tombstone (
 Authenticated operation results are recorded at the API boundary. Running
 installer states and the final result use one stable job record; the
 existing non-dismissible loading toast and terminal timing are preserved.
-Service control is recorded as an accepted command, not a verified restart.
-The collector separately detects transitions to failed and recovery.
+Service control records command acceptance separately from confirmed
+completion or failure. The collector also detects independent service
+failures and recovery.
 Routine refresh, clipboard and form validation messages remain temporary.
 
 The private SQLite journal is under /var/lib/devstack-web. The timer runs
@@ -33,77 +34,120 @@ A poll scans up to 200 newest messages; an unusually large burst between
 polls may be summarized/incompletely represented. No Windows polling
 agent or privileged outbound network process is installed.
 
-## Optional Web Push
+## Local Windows notifications (WinRT)
 
-Install the distro package on Ubuntu 26.04 if needed:
+DevStack uses local Windows notifications as the intended system delivery
+path. The project does not rely on Web Push, WNS, browser subscriptions,
+Internet connectivity, an external notification service, or a browser
+running in the background. The local history and panel toasts work even
+without the optional Windows component.
 
-    sudo apt install python3-pywebpush
+Enable the local transport once from the reviewed, installed checkout,
+in the ordinary Ubuntu developer session on Windows:
 
-In Settings → Notifications, enable Web Push and grant browser permission.
-One browser profile is subscribed per workstation. Enabling a new profile
-replaces the previous server-side subscription. Disable it in settings to
-remove that subscription; password logout also removes it. The default
-is disabled. The four important categories can be switched independently.
-The private VAPID key persists with the journal. No message subjects,
-addresses, URLs, project names, passwords or command output are sent in
-the encrypted push payload. Only event ID, category and severity are sent.
-The approved provider endpoints are restricted and redirects/proxies are
-disabled. No third-party notification service is configured by DevStack.
+    cd ~/projects/devstack-source
+    bash scripts/update.sh --windows-local-notifications
 
-The browser and its push infrastructure require Internet connectivity,
-permission and OS notification settings. While a page is open it renews
-a lease; a normal pagehide releases it. Minimized/hidden pages also renew.
-If a browser crashes, freezes or suspends a tab, detection can be delayed
-up to the lease interval (180 seconds). A push already in transit can
-race with a newly opened page. Edge requires visible push messages; an
-already sent message cannot be silently suppressed with perfect reliability.
-Short TTL (30 seconds), per-event claims and stable notification tags limit
-duplicates. Unknown delivery failures are not retried automatically;
-the event remains in history. Do not treat this as a guaranteed alerting
-service. Push is not sent for history-only old events when enabled.
-Automatic mail events are eligible for Web Push in the collector cycle
-that discovers them, as long as no client lease is active and the mail
-category is enabled. They no longer wait for an additional timer cycle.
-Other events retain their existing grace period. The normal collector
-interval remains eight seconds after completion (plus timer accuracy and
-processing time); the open panel polls every five seconds. Delivery by
-the browser provider is asynchronous and outside DevStack's control.
-The collector logs category, journal age, send duration and numeric HTTP
-status (or unavailable) without message content, endpoint or key material.
-HTTP acceptance does not prove Windows displayed a banner.
-A click opens DevStack or the specific mail message if still available.
-The click carries the exact notification ID in a local URL fragment. The
-first authenticated notification poll marks only that journal entry read
-and returns the updated unread count, even after a cold launch or password
-login. Clicking a stale, deleted entry does not recreate it. The fragment
-is removed after successful acknowledgement; no GET request changes state.
-Native Windows/Edge delivery and installability must be checked on the
-actual workstation; Chromium CI uses an isolated browser and does not
-send real push messages to an external provider.
+Subsequent updates use the ordinary `bash scripts/update.sh` command and
+preserve existing opt-in. An installation without that opt-in is not
+automatically enabled. See [local Windows notifications](LOCAL-WINDOWS-NOTIFICATIONS.md)
+for installation, ACLs, verification, PWA protocol registration and recovery.
 
-### Edge registration troubleshooting (optional)
+The existing Ubuntu collector invokes a short-lived, developer-identity
+GUI launcher in `C:\DevStack\LocalNotifications`. The launcher calls WinRT
+and exits. No additional resident Windows agent, scheduled task or automatic
+WSL startup is involved. Windows controls whether a banner is displayed.
+Opening a new system notification prefers a registered DevStack PWA through
+`web+devstack`; without a suitable registration, the same local route and
+event ID open over HTTPS in the default browser.
 
-If HTTPS is trusted, permission is granted, the service worker is active
-and the VAPID API works, but Edge reports `AbortError: Registration failed
-- push service error` during subscription, Microsoft documents the
-[ForceBuiltInPushMessagingClient](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/forcebuiltinpushmessagingclient)
-policy. It switches Edge to its built-in WNS client instead of the OS
-client. This is a **browser-wide** policy (not per profile or per PWA).
-Its name is fixed by Microsoft; there is no DevStack-specific equivalent.
-On a private, unmanaged Windows PC only, if explicitly desired, use an
-administrator PowerShell:
+### Delivery and presence
 
-    reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v ForceBuiltInPushMessagingClient /t REG_DWORD /d 1 /f
+- Open panel, including a normally polling minimized PWA: one in-app toast
+  across active clients, no system banner. The taskbar badge reflects unread
+  events where the installed PWA supports it.
+- All panel windows closed: eligible new events receive local WinRT delivery.
+- Disabled system-delivery category: no system banner; the journal and
+  in-app toasts remain available, including on reopening the panel.
+- Ubuntu stopped: no collection and no automatic startup.
 
-Record any pre-existing value before changing it. Restart Edge and check
-`edge://policy` for the value true, then enable Web Push again. The
-workstation test confirmed this resolves the registration error on ASUS.
-If the value did not previously exist, remove it to undo the change:
+The category switches in Settings → Notifications control system delivery
+for new mail, projects/configuration, installers and services. The existing
+Web Push-specific button still manages only the legacy browser subscription,
+not the local transport marker. It is not necessary for WinRT. The user
+interface labels will be aligned separately; do not enable Web Push to
+activate the local launcher.
 
-    reg delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v ForceBuiltInPushMessagingClient /f
+Only the existing five-second authenticated notification poll renews a
+page's 90-second presence lease; ordinary state requests and operation
+results do not. Hidden/minimized pages keep polling as their browser permits.
+On `pagehide` the panel stops polling, invalidates queued responses and sends
+the retiring ID and current CSRF token to its service worker in memory.
+The worker keeps the message event alive while it posts to
+`/api/notifications/leave` with the same-origin session cookie and normal CSRF
+header. Chromium can abort a document-owned beacon even after it reports
+successful queuing. An uncontrolled page uses a keepalive fetch, with a
+beacon fallback if the fetch fails while the page still runs. Only this leave
+endpoint also accepts a session-bound CSRF token in a JSON body with an
+explicit matching origin.
 
-Restart Edge again after restoring/removing it. DevStack never installs or
-modifies this global policy automatically.
+The journal atomically removes the lease and remembers the closed document ID
+for 24 hours, preventing delayed polls from reactivating it. The document
+records up to 16 explicitly retired IDs in tab-local sessionStorage (no token
+or live ID); the next authenticated poll retires them atomically with its new
+heartbeat. Restored pages, including BFCache, and new logins receive new
+lifetime IDs. A missed leave expires after at most the remaining lease
+interval. A frozen or heavily throttled document may lose its lease and
+receive a system notification while still open. Delivery already claimed
+before a new client opens may race with that client. Single-event claims and
+stable identifiers reduce duplicates. Unknown delivery failures are not
+automatically retried; the event remains in history. This is not a guaranteed
+alerting service.
+
+The normal collector interval is eight seconds after completion (plus timer
+accuracy and processing time). Automatic mail events can be delivered in the
+cycle that discovers them, when no active lease exists and the category is
+enabled. Other events retain their grace period. The original opt-in
+timestamp excludes the older backlog and survives ordinary updates. Only a
+validated event ID, category and severity cross the launcher boundary.
+The collector logs category, journal age, send duration and delivery outcome,
+not mail content or secrets. WinRT acceptance does not prove that Windows
+displayed a banner.
+
+### Reading notifications
+
+The system notification click carries the exact journal ID to the local
+route. The first authenticated poll marks only that entry read, even after
+a cold launch and password login. Opening a journal toast follows the same
+path. Closing or expiring a terminal toast in a visible document also reads
+only its own entry; hidden-document expiry and loading toasts do not mark
+entries read. Deleted entries are not recreated. History remains independent
+of the mailbox and project files.
+
+An accepted service command is an information notice, not a verified
+restart. The collector imports a separate result from the actual systemd
+execution and expected service state for commands initiated through the
+DevStack panel; see the local Windows guide. Widget controls keep their own
+existing inline feedback.
+
+### Legacy browser push (not the selected transport)
+
+Earlier releases tested an optional Web Push/WNS implementation. It remains
+in the current code for compatibility and deliberate rollback, but is
+bypassed while the local WinRT marker is active. No new browser subscription,
+`python3-pywebpush` package, VAPID setup or Edge push policy is required or
+recommended for the local configuration. Do not remove the marker as a way
+to disable all notifications: an existing legacy subscription could become
+eligible again. Use system-delivery categories or Windows notification
+settings; removal of the legacy implementation and a dedicated local
+transport switch are separate changes.
+
+An earlier troubleshooting test used the global Edge
+`ForceBuiltInPushMessagingClient` policy. It is not a DevStack requirement
+and is not installed by DevStack. Review any existing legacy subscription
+and user-created policy separately before removing them; ordinary updates
+preserve existing settings. Documentation changes do not remove those
+settings or the compatibility code.
 
 ## Maintenance
 
@@ -125,6 +169,6 @@ The updater repairs the fixed directory to `devstackweb:devstackweb`, mode
 sessions, or VAPID key. A symlink or non-directory at that location is
 rejected. Do not run the collector manually as root.
 
-Do not copy the private journal, subscription endpoints or VAPID private
-key to a public repository. The update preserves this data and does not
+Do not copy the private journal or any legacy subscription endpoints and
+VAPID private keys to a public repository. The update preserves this data and does not
 change Mailpit, application projects or Windows widgets.

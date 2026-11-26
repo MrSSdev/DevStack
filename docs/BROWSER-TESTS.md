@@ -11,7 +11,7 @@ at 640, 853, 1024, 1280 and 1920 CSS pixels; persisted themes; keyboard drawer
 navigation; project creation; installer links; widget persistence; confirmed
 Redis stop/start; isolated HTML with sender CSS, table layouts, CID images and explicit HTTPS image opt-in, HTML/plain/source views, and exact attachment downloads;
 search, pagination, deletion, polling and recovery from a stopped Mailpit;
-long project names; project search, detected Composer versions, home link and shared favicon; shared fixed Base UI toasts, multiple notices, non-dismissible installer progress across polling phases and a six-second success timeout starting only after completion, persistent installer failure details, navigation, acknowledgement across reloads, retirement of older installer results, accessible dismissal without hover (including keyboard activation), and notices inside native service dialogs; unified Nginx editor with both stored rule types, safe validation and reload; authentication, session rotation,
+long project names; project search, detected Composer versions, home link and shared favicon; shared fixed Base UI toasts, multiple notices, non-dismissible installer progress across polling phases and a six-second success timeout starting only after completion, persistent installer failure details, navigation, acknowledgement across reloads, retirement of older installer results, accessible dismissal of the frontmost card without hover (including keyboard activation), native collapsed/expanded Base UI stacks, right alignment, height-aware stacking, frame-by-frame horizontal overflow checks during dismissal, and a live portal inside and after closing native service dialogs; unified Nginx editor with both stored rule types, safe validation and reload; authentication, session rotation,
 CSRF, origin validation, input rejection and login rate limiting.
 
 The dedicated PWA/history scenario exercises the real manifest, service worker, empty cache, live SMTP notification, cross-tab deduplication, read/delete/clear and persistence without deleting mail. All scenarios allow the real network-only service worker. Playwright 1.60's built-in service_workers='block' init script reads navigator.serviceWorker in sandboxed frames and throws a SecurityError in the deliberately opaque mail preview. The mail scenario explicitly verifies the top-level worker is active and the cache is empty before exercising the unchanged sandbox, CSP, external HTTP guard and image opt-in assertions. The worker handles only same-origin root navigations, not API calls or image requests; no browser runtime errors are filtered or ignored. PHP tests cover presence and push claims with a fake subscription; the suite does not contact real push providers or certify Windows notification delivery.
@@ -46,4 +46,49 @@ isolated clients (cold window, focused window, old notification tag and
 unsafe data), plus the real authenticated browser URL/poll flow. Only the
 clicked record becomes read, an unrelated notification stays unread, the
 marker survives password login and is consumed after acknowledgement.
-The tests do not simulate or claim successful native Windows delivery.
+Opening a real mail toast also marks only its own event read. PHP tests
+cover closed-ID tombstones, late poll/operation/job requests, a remaining
+live tab, new lifetime registration and expired leases. A browser lifecycle
+scenario exercises the real authenticated service-worker leave, rejects invalid
+body CSRF/origin/content-type and unrelated API use, tests late API requests,
+blocked polling after pagehide, a synthetic BFCache-style pageshow, actual
+reload, recovery after deliberately dropping both document transports, navigation
+to `about:blank` without a successor poll, and closing one of two Chromium tabs
+while the other tab retains its lease. It checks only the fixture client IDs
+in the isolated database. Use an installed Edge PWA on the physical Windows
+device to validate window closure, background throttling, local WinRT
+delivery and PWA activation. Legacy fake-subscription coverage does not
+make browser Web Push a requirement for local delivery.
+
+The failed run at `533b962` showed the navigation's leave request without
+an HTTP response in the Playwright trace. An isolated Nginx/PHP 8.5
+reproduction saw a trusted `pagehide` and a beacon accepted for queuing,
+followed by Chromium's `net::ERR_ABORTED` and no Nginx access-log entry.
+This also happened with Playwright routing disabled. The worker's
+request reached Nginx and PHP with the same session and received HTTP 200.
+
+The first native-stack run (`9bc5691`) passed the new collapsed/expanded
+stack and frame-by-frame overflow scenario (#12), as well as notification
+history, presence, exact read-on-close and actual service completion.
+Two older browser scenarios failed: layout preparation asserted an empty
+live queue after a late collector response arrived, and an installer
+project action was behind a refresh toast in the collapsed stack. The
+layout helper now dismisses actual expanded cards until a short quiet
+interval, with a bounded deadline; it retries controls only when a toast
+intercepts pointer events. The installer scenario explicitly hovers the
+frontmost card and checks the target is expanded and opaque before the
+real project click. No production changes, forced clicks, notification
+assertion removals or changes to the dedicated stack regression.
+
+The following run (`89add603`) passed 11/12 browser scenarios, including
+both previously failing ones. The stack scenario stopped before inspecting
+the first toast: the systemd journal at 18:08:50 reported "Start request
+repeated too quickly" and `start-limit-hit`. Several manual starts from
+successive tests plus the real timer exhausted systemd's start limit.
+The notification scenarios now use the installed timer exclusively, with
+bounded observation of a new successful collector execution for baseline
+and re-collection assertions. Incoming mail and service receipts are
+awaited through the real browser. No production rate limit, timer interval,
+security setting or toast assertion has been changed. The history deletion
+check additionally inspects the authenticated poll after a real subsequent
+collection.

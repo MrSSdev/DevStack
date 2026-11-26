@@ -10,11 +10,20 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import sqlite3
+import sys
+import time
+import uuid
+from contextlib import closing
 
 CATALOG = Path(__file__).resolve().with_name('service-catalog.json')
 SELECTION = Path('/var/lib/devstack-widget-selection.json')
 SYSTEMCTL = '/usr/bin/systemctl'
 ACTION_UNIT = 'devstack-service-control'
+RESULTS_DB = Path('/var/lib/devstack/service-results.sqlite3')
+RESULT_HELPER = Path(__file__).resolve()
+RESULT_LIMIT = 200
+RESULT_TTL = 30 * 86400
 ACTIONS = frozenset({'start', 'stop', 'restart'})
 ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'SYSTEMD_PAGER': '', 'SYSTEMD_COLORS': '0'}
 ID = re.compile(r'[a-z][a-z0-9-]{0,31}\Z')
@@ -118,9 +127,14 @@ def public_rows():
 
 
 def action_pending():
-    result = subprocess.run([SYSTEMCTL, 'is-active', '--quiet', ACTION_UNIT+'.service', ACTION_UNIT+'.timer'],
-                            capture_output=True, timeout=3, env=ENV, check=False)
-    return result.returncode == 0
+    result = subprocess.run([SYSTEMCTL, 'is-active', ACTION_UNIT+'.service', ACTION_UNIT+'.timer'],
+                            capture_output=True, text=True, timeout=3, env=ENV, check=False)
+    # A one-shot can be activating or running its ExecStopPost while
+    # is-active --quiet returns false. Keep the existing busy guard then.
+    return result.returncode == 0 or any(
+        state in ('active', 'activating', 'deactivating', 'reloading', 'refreshing')
+        for state in result.stdout.splitlines()
+    )
 
 
 def schedule(service, action):
@@ -135,11 +149,71 @@ def schedule(service, action):
         raise ValueError('Usluga nie jest dostepna do sterowania.')
     if action_pending():
         raise RuntimeError('Trwa juz operacja uslugi. Odswiez stan.')
+    receipt = uuid.uuid4().hex
+    # PID 1 invokes the root-deployed helper after the actual systemctl
+    # process exits (including failed starts and timeouts), before collecting
+    # the transient unit. No user-supplied path, shell, extra resident process
+    # or second service-control command is involved.
+    if not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(RESULT_HELPER)):
+        raise RuntimeError('Nieprawidlowa sciezka pomocnika uslug.')
+    completion = f'/usr/bin/python3 -I {RESULT_HELPER} --record-service-result {service} {action} {receipt}'
     command = ['/usr/bin/systemd-run', '--quiet', '--collect', '--unit='+ACTION_UNIT,
                '--on-active=2s', '--timer-property=AccuracySec=100ms', '--timer-property=RemainAfterElapse=no',
-               '--property=TimeoutStartSec=90s', SYSTEMCTL, '--no-ask-password',
-               action, target['unit']]
+               '--property=Type=oneshot', '--property=TimeoutStartSec=90s', '--property=TimeoutStopSec=15s',
+               '--property=UMask=0077', '--property=ExecStopPost='+completion,
+               SYSTEMCTL, '--no-ask-password', action, target['unit']]
     result = subprocess.run(command, capture_output=True, timeout=5, env=ENV, check=False)
     if result.returncode:
         raise RuntimeError('Nie udalo sie zlecic operacji. Sprawdz stan uslugi.')
-    return {'accepted': True, 'service': service, 'action': action}
+    return {'accepted': True, 'service': service, 'action': action, 'receipt': receipt}
+
+
+def record_completion(service, action, receipt, env):
+    """Record a bounded, private receipt; never infer success from queueing."""
+    if not isinstance(receipt, str) or not re.fullmatch(r'[a-f0-9]{32}', receipt) or action not in ACTIONS:
+        raise ValueError('Invalid service result identity')
+    target = next((r for r in catalog() if r['id'] == service), None)
+    if target is None:
+        raise ValueError('Invalid service result target')
+    state = 'unknown'
+    try:
+        values = units_snapshot([target])[target['unit']]
+        candidate = values.get('ActiveState')
+        if values.get('LoadState') == 'loaded' and candidate in (
+                'active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading', 'refreshing'):
+            state = candidate
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        pass
+    command_ok = (env.get('SERVICE_RESULT'), env.get('EXIT_CODE'), env.get('EXIT_STATUS')) == ('success', 'exited', '0')
+    expected = 'inactive' if action == 'stop' else 'active'
+    outcome = 'success' if command_ok and state == expected else 'error'
+    stamp = int(time.time())
+    # The existing /var/lib/devstack directory is root-only. Do not expose
+    # raw systemctl output, unit command lines, or credentials to the web user.
+    fd = os.open(RESULTS_DB, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    os.close(fd)
+    with closing(sqlite3.connect(RESULTS_DB, timeout=3)) as db, db:
+        db.execute('CREATE TABLE IF NOT EXISTS completions (id TEXT PRIMARY KEY, service TEXT NOT NULL, name TEXT NOT NULL, action TEXT NOT NULL, outcome TEXT NOT NULL, state TEXT NOT NULL, stamp INTEGER NOT NULL)')
+        db.execute('INSERT OR IGNORE INTO completions VALUES(?,?,?,?,?,?,?)',
+                   (receipt, service, target['name'], action, outcome, state, stamp))
+        db.execute('DELETE FROM completions WHERE stamp<?', (stamp-RESULT_TTL,))
+        db.execute('DELETE FROM completions WHERE id IN (SELECT id FROM completions ORDER BY stamp DESC,id DESC LIMIT -1 OFFSET ?)', (RESULT_LIMIT,))
+
+
+def completion_results():
+    if not RESULTS_DB.exists():
+        return []
+    # The daemon only reads the fixed root-owned database; the authenticated
+    # collector imports a sanitized snapshot, not the file itself.
+    with closing(sqlite3.connect(RESULTS_DB.as_uri()+'?mode=ro', uri=True, timeout=3)) as db:
+        db.row_factory = sqlite3.Row
+        return [dict(row) for row in db.execute(
+            'SELECT id,service,name,action,outcome,state,stamp FROM completions WHERE stamp>=? ORDER BY stamp,id LIMIT ?',
+            (int(time.time())-RESULT_TTL, RESULT_LIMIT))]
+
+
+if __name__ == '__main__':
+    if os.geteuid() != 0 or len(sys.argv) != 5 or sys.argv[1] != '--record-service-result':
+        raise SystemExit('Run only as root for the scheduled service result.')
+    os.umask(0o077)
+    record_completion(*sys.argv[2:], env=os.environ)

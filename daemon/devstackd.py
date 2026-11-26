@@ -6,6 +6,7 @@ Supported operations are intentionally small and typed.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -51,6 +52,10 @@ ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
 ENGINE_UNIT = re.compile(r'devstack-engine-[0-9a-f]{32}-[a-z-]+\Z')
 WINDOWS_SCHTASKS = pathlib.Path('/mnt/c/Windows/System32/schtasks.exe')
 WINDOWS_HOSTS_TASK = 'DevStack Hosts Event Sync'
+WINDOWS_NOTIFICATION_MODE = pathlib.Path('/etc/devstack/windows-local-notifications')
+WINDOWS_NOTIFICATION_ID = re.compile(r'(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22}')
+WINDOWS_NOTIFICATION_LAUNCHER = ('DevStack', 'LocalNotifications', 'DevStack.Notifications.exe')
+WINDOWS_NOTIFICATION_TARGET = pathlib.Path('/mnt/c').joinpath(*WINDOWS_NOTIFICATION_LAUNCHER)
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 DOMAIN = re.compile(r'[a-z][a-z0-9-]{0,39}\.test\Z')
 WEBROOT = re.compile(r'[a-zA-Z0-9_][a-zA-Z0-9_/-]{0,99}\Z')
@@ -1512,10 +1517,118 @@ def recover_engine_job() -> None:
 
 def notification_snapshot(_: dict[str, Any]) -> dict[str, Any]:
     # Read-only, inexpensive: never scan project trees or reveal credentials.
-    return {'engine_job': public_engine_job(), 'services': managed_services.public_rows()}
+    try:
+        completions = managed_services.completion_results()
+    except Exception:
+        # A receipt-store fault must not suppress ordinary service monitoring.
+        print('DevStack service completion receipts unavailable', file=sys.stderr)
+        completions = []
+    return {'engine_job': public_engine_job(), 'services': managed_services.public_rows(),
+            'service_results': completions}
 
 
-OPS = {'notification_snapshot': notification_snapshot, 'status': status, 'create': create, 'reveal': reveal,
+def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
+    if set(data) != {'id', 'category', 'kind'} or not all(isinstance(value, str) for value in data.values()):
+        raise InputError('Nieprawidlowe powiadomienie Windows.')
+    if (not WINDOWS_NOTIFICATION_ID.fullmatch(data['id'])
+            or data['category'] not in ('mail', 'project', 'installer', 'service', 'settings')
+            or data['kind'] not in ('success', 'error', 'info')):
+        raise InputError('Nieprawidlowe powiadomienie Windows.')
+    if not WINDOWS_NOTIFICATION_MODE.is_file():
+        return {'accepted': False}
+    unit = None
+    try:
+        raw_path = WINDOWS_NOTIFICATION_MODE.read_text(encoding='utf-8').rstrip('\n')
+        launcher = pathlib.Path(raw_path)
+        # Accept the new canonical C:\\DevStack installation, and retain
+        # the old profile layout during an explicit migration/rollback.
+        parts = launcher.parts
+        legacy = (len(parts) >= 7 and parts[:2] == ('/', 'mnt')
+                  and re.fullmatch(r'[a-z]', parts[2])
+                  and parts[-3:] == WINDOWS_NOTIFICATION_LAUNCHER)
+        if (re.search(r'[\x00-\x1f\x7f]', raw_path) or '..' in parts
+                or not (launcher == WINDOWS_NOTIFICATION_TARGET or legacy)
+                or not launcher.is_file()):
+            return {'accepted': False}
+        # As with the framework reader, let PID 1 set the developer's
+        # credentials before applying the service restrictions. Changing
+        # UID/GID/groups in a child of the hardened helper failed with EPERM
+        # on Ubuntu 26.04/WSL. Never execute the Windows user's files as root.
+        account = pwd.getpwnam(config()['dev_user'])
+        if account.pw_uid == 0 or account.pw_gid == 0:
+            return {'accepted': False}
+        encoded = base64.b64encode(json.dumps(data, ensure_ascii=True).encode('ascii')).decode('ascii')
+        unit = 'devstack-windows-notification-' + secrets.token_hex(8) + '.service'
+        # Let PID 1 retain the exit status until we have checked it. A
+        # synchronous Type=oneshot start waits for ExecStart to finish;
+        # RemainAfterExit retains only unit state, not a running process.
+        # Avoid --pipe/--wait/--collect: CI saw ambiguous completion.
+        # WorkingDirectory=/mnt/c would add a hard dependency on every
+        # ancestor mount, including an optional, absent Azure /mnt disk
+        # on CI. Only enter the already validated launcher directory after
+        # PID 1 has applied the developer identity; missing paths still fail.
+        result = subprocess.run(
+            ['/usr/bin/systemd-run', '--system', '--quiet',
+             '--service-type=oneshot', '--unit=' + unit,
+             '--description=DevStack local Windows notification',
+             '--uid=' + str(account.pw_uid), '--gid=' + str(account.pw_gid),
+             '--working-directory=/',
+             '--expand-environment=no',
+             '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
+             '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
+             '--property=ProtectKernelModules=yes', '--property=ProtectControlGroups=yes',
+             '--property=PartOf=devstackd.service',
+             '--property=RemainAfterExit=yes', '--property=CollectMode=inactive',
+             '--property=TimeoutStartSec=10s', '--property=TimeoutStopSec=2s',
+             '--property=StandardInput=null', '--property=StandardOutput=null',
+             '--property=StandardError=null', '--property=UMask=0077',
+             '/usr/bin/env', '-i', '--chdir=' + str(launcher.parent),
+             'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', str(launcher), encoded],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=15, close_fds=True,
+        )
+        expected = {'LoadState': 'loaded', 'ActiveState': 'active',
+                    'SubState': 'exited', 'Result': 'success',
+                    'ExecMainCode': '1', 'ExecMainStatus': '0'}
+        state = subprocess.run(
+            ['/usr/bin/systemctl', '--system', 'show', '--no-pager',
+             *('--property=' + key for key in expected), '--', unit],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, timeout=3, close_fds=True,
+        )
+        properties = dict(line.split('=', 1) for line in state.stdout.splitlines() if '=' in line)
+        accepted = (result.returncode == 0 and state.returncode == 0
+                    and all(properties.get(key) == value for key, value in expected.items()))
+        if not accepted:
+            # Only fixed property names and short, safe status tokens.
+            detail = ' '.join(key + '=' + (value if re.fullmatch(r'[a-zA-Z0-9_-]{1,40}', value) else 'unknown')
+                              for key in expected for value in [properties.get(key, 'missing')])
+            print(f'Windows notification worker failed: start={result.returncode} query={state.returncode} {detail}',
+                  file=sys.stderr, flush=True)
+        return {'accepted': accepted}
+    except (KeyError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        # Never log event content, raw child output, or local account paths.
+        print('Windows notification worker unavailable: ' + type(exc).__name__,
+              file=sys.stderr, flush=True)
+        return {'accepted': False}
+    finally:
+        # Even a start timeout or a failed unit must not leave a retained
+        # transient service. PartOf also ties its lifetime to the daemon.
+        if unit is not None:
+            for action, timeout in (('stop', 4), ('reset-failed', 3)):
+                try:
+                    subprocess.run(
+                        ['/usr/bin/systemctl', '--system', action, '--', unit],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=timeout, close_fds=True,
+                    )
+                except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                    print('Windows notification worker cleanup unavailable: ' + action + ' ' + type(exc).__name__,
+                          file=sys.stderr, flush=True)
+
+
+OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notification': show_windows_notification,
+       'status': status, 'create': create, 'reveal': reveal,
        'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,

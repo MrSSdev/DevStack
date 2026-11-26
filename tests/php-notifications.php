@@ -87,4 +87,119 @@ $clickStore->mutate('delete',$one);
 check_notice(count($clickStore->poll($a,true,$one)['items'])===1,'Stale click does not restore deleted event');
 try {$clickStore->poll($a,true,'invalid');check_notice(false,'Invalid click ID accepted');}
 catch(InvalidArgumentException) {}
-echo "Notification journal, deletion, deduplication, presence, click read and push policy: OK\n";
+// Closed clients must never reclaim a toast or renew their lease with an
+// old poll, regardless of whether leave or the initial poll arrives first.
+// An operation and a state/job snapshot must not renew presence either.
+$presence=new DevStackNotices(':memory:');
+$presence->observeMail([]);
+$presence->subscribe($subscription);
+$presence->setCategories(['mail']);
+$presence->poll($a);$presence->poll($b);
+$presence->leave($a);
+$presence->leave($a); // Idempotent.
+$presence->observeMail([['ID'=>str_repeat('L',22),'Created'=>gmdate('c'),'Subject'=>'Close race']]);
+check_notice($presence->poll($a)['toast']===[],'Late closed-client poll cannot steal a toast');
+check_notice($presence->claimPush()===null,'One remaining live tab still suppresses push');
+$presence->leave($b);
+$c=str_repeat('e',32);
+$presence->leave($c); // Leave can precede registration.
+check_notice($presence->poll($c)['toast']===[],'Leave before initial poll blocks delayed registration');
+$presence->operation('/api/preferences',['theme'=>'dark'],[],$a);
+$lateJob=['id'=>str_repeat('f',32),'slug'=>'demo','state'=>'scaffolding','message'=>'Working'];
+$presence->operation('/api/projects',['slug'=>'demo','engine'=>'laravel'],['job_id'=>$lateJob['id']],$a);
+check_notice($presence->observeJob($lateJob,$a)['show']===false,'Closed client cannot claim job presentation');
+$immediate=$presence->claimPush();
+check_notice(is_array($immediate)&&$immediate['payload']['category']==='mail','Closed clients and late operations do not block same-cycle push');
+$new=str_repeat('9',32);
+$presence->poll($new);
+$presence->observeMail([['ID'=>str_repeat('K',22),'Created'=>gmdate('c'),'Subject'=>'Restored document']]);
+check_notice($presence->claimPush()===null,'New document lifetime renews presence');
+check_notice(array_column($presence->poll($new)['toast'],'id')===['mail-'.str_repeat('K',22)],'New document can receive foreground notifications');
+$presence->leave($new);
+// An unload request can disappear while the browser tears down a document.
+// A new authenticated poll can retire only explicitly recorded old IDs,
+// atomically with its own heartbeat; another live tab remains untouched.
+$recovery=new DevStackNotices(':memory:');
+$recovery->observeMail([]);$recovery->subscribe($subscription);$recovery->setCategories(['mail']);
+$recovery->poll($a);$recovery->poll($b);
+$recovery->poll($c,true,null,[$a,$a]);
+$recovery->observeMail([['ID'=>str_repeat('R',22),'Created'=>gmdate('c')]]);
+check_notice($recovery->poll($a)['toast']===[],'Recovered leave blocks late poll from retired ID');
+$recovery->leave($c);
+check_notice($recovery->claimPush()===null,'Recovery must preserve another live tab');
+$recovery->leave($b);
+check_notice($recovery->claimPush()!==null,'Recovered missing leave does not block push');
+foreach ([[$c],['invalid'],array_fill(0,17,$a),'invalid',['x'=>$a]] as $invalid) {
+    try {$recovery->poll($c,true,null,$invalid);check_notice(false,'Invalid retired list accepted');}
+    catch(InvalidArgumentException) {}
+}
+// Verify the persisted 90-second lease and pruning without sleeping for it.
+$fixture=tempnam(sys_get_temp_dir(),'devstack-notices-');
+try {
+    $leaseStore=new DevStackNotices($fixture);
+    $leaseStore->observeMail([]);$leaseStore->subscribe($subscription);$leaseStore->setCategories(['mail']);
+    $leaseStore->poll($a);
+    $inspect=new PDO('sqlite:'.$fixture);
+    $remaining=(int)$inspect->query('SELECT expires FROM clients')->fetchColumn()-time();
+    check_notice($remaining>=88&&$remaining<=90,'Heartbeat lease is 90 seconds');
+    $inspect->exec('UPDATE clients SET expires=0');
+    $leaseStore->observeMail([['ID'=>str_repeat('J',22),'Created'=>gmdate('c')]]);
+    check_notice($leaseStore->claimPush()!==null,'Expired unclosed client no longer blocks push');
+    $leaseStore->leave($b);$inspect->exec('UPDATE closed_clients SET expires=0');
+    $leaseStore->poll($a,false);
+    check_notice((int)$inspect->query('SELECT COUNT(*) FROM closed_clients')->fetchColumn()===0,'Close markers are pruned after their retention period');
+    unset($inspect,$leaseStore);
+} finally {unlink($fixture);}
+$local=new DevStackNotices(':memory:');
+$local->observeMail([]);
+$localId='mail-'.str_repeat('N',22);
+$local->observeMail([['ID'=>substr($localId,5),'Created'=>gmdate('c'),'Subject'=>'Private fixture subject']]);
+check_notice($local->claimPush()===null,'Web Push still requires a subscription');
+check_notice($local->claimPush(time()+60)===null,'Local opt-in does not dispatch older events');
+$local->poll($a,false);
+check_notice($local->claimPush(time()-60)===null,'Live tab also suppresses local Windows delivery');
+$local->leave($a);
+$native=$local->claimPush(time()-60);
+check_notice(is_array($native)&&$native['subscription']===null&&$native['payload']===
+    ['id'=>$localId,'category'=>'mail','kind'=>'info'],'Local delivery works with no subscription and sends generic data');
+check_notice($local->claimPush(time()-60)===null,'Local delivery shares the one-time claim');
+$local->pushFailed($localId,false);
+$afterLocalFailure=$local->poll($b);
+check_notice($afterLocalFailure['toast']===[]&&$afterLocalFailure['items'][0]['id']===$localId,'Local failure keeps journal history without another automatic delivery');
+$local->leave($b);
+$local->subscribe($subscription);
+$local->observeMail([['ID'=>str_repeat('W',22),'Created'=>gmdate('c')]]);
+check_notice($local->claimPush(time()-60)!==null&&$local->claimPush()===null,
+    'A native claim cannot be delivered again through a saved Web Push subscription');
+// Service completion is a distinct, exactly-once terminal event. The
+// acceptance itself remains info and a restart can finish between polls.
+$svc=new DevStackNotices(':memory:');
+$activeService=[['id'=>'mailpit','name'=>'Mailpit','state'=>'active']];
+$svc->observeServices($activeService);
+$accept=$svc->operation('/api/services/control',['service'=>'mailpit','action'=>'restart'],['accepted'=>true],$a);
+$svc->acknowledge($accept,$a);
+$restart=['id'=>str_repeat('1',32),'service'=>'mailpit','name'=>'Mailpit','action'=>'restart','outcome'=>'success','state'=>'active','stamp'=>time()];
+$svc->observeServices($activeService,[$restart]);
+$terminal='service-'.$restart['id'];
+$result=$svc->poll($a);
+$items=array_column($result['items'],null,'id');
+check_notice(count($items)===2&&$items[$accept]['kind']==='info'&&$items[$terminal]['kind']==='success','Restart acceptance and verified outcome remain distinct');
+check_notice($items[$terminal]['title']==='Usługa uruchomiona ponownie'&&array_column($result['toast'],'id')===[$terminal],'Quick restart has one actual completion toast');
+$svc->mutate('delete',$terminal);
+$svc->observeServices($activeService,[$restart]);
+check_notice(count($svc->poll($a)['items'])===1,'Deleted receipt is not replayed');
+$failure=[...$restart,'id'=>str_repeat('2',32),'outcome'=>'error','state'=>'failed'];
+$failedService=[['id'=>'mailpit','name'=>'Mailpit','state'=>'failed']];
+$svc->observeServices($failedService,[$restart,$failure]);
+$items=array_column($svc->poll($a)['items'],null,'id');
+check_notice(count($items)===2&&$items['service-'.$failure['id']]['kind']==='error','Actual failed action, without duplicate generic failure');
+$svc->mutate('clear');
+$svc->observeServices($failedService,[$restart,$failure]);
+check_notice($svc->poll($a)['items']===[],'Clear does not recreate service receipts');
+$svc->observeServices($activeService);
+check_notice($svc->poll($a)['items'][0]['title']==='Usługa ponownie aktywna','Spontaneous recovery remains monitored');
+$wrong=[...$restart,'id'=>str_repeat('3',32),'state'=>'inactive'];
+$svc->observeServices([['id'=>'mailpit','name'=>'Mailpit','state'=>'inactive']],[$wrong]);
+$items=array_column($svc->poll($a)['items'],null,'id');
+check_notice($items['service-'.$wrong['id']]['kind']==='error','Inconsistent successful receipt cannot report service as active');
+echo "Notification journal, service completion, deletion, deduplication, presence, click read and system delivery policy: OK\n";

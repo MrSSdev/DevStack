@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 export type ManagedService={id:string;unit:string;name:string;description:string;state:string;load_state:string;widget_selected:boolean;panel_dependency:boolean}
-type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown)=>Promise<T>
+type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown,operationToastId?:string)=>Promise<T>
 type Props={services:ManagedService[];csrf:string;request:Request;refresh:()=>Promise<void>}
 type Action='start'|'stop'|'restart'
 const icons={nginx:Globe2,php:Code2,mariadb:Database,redis:HardDrive,mailpit:Mail}
@@ -27,8 +27,8 @@ export function ManagedServices({services,csrf,request,refresh,blocked}:Props&{b
     setBusy(true)
     const pending=beginNotice('Zlecanie operacji…',current.name+' — '+actionLabels[confirm])
     try{
-      await request('POST','/api/services/control',csrf,{service:current.id,action:confirm,confirmed:true})
-      inform('Polecenie przyjęte: '+current.name+' — '+actionLabels[confirm]+'.',pending,'Wynik sprawdź po odświeżeniu stanu.')
+      await request('POST','/api/services/control',csrf,{service:current.id,action:confirm,confirmed:true},pending)
+      inform('Polecenie przyjęte: '+current.name+' — '+actionLabels[confirm]+'.',pending,'Wynik operacji pojawi się w powiadomieniach.')
       setConfirm(null)
       // Do not retry a command. Only refresh status after the one-shot has begun.
       await refresh()
@@ -60,7 +60,7 @@ export function WidgetServiceSettings({services,csrf,request,refresh}:Props){
     setBusy(true)
     const pending=beginNotice('Zapisywanie wyboru usług…')
     try{
-      const result=await request<{services:string[]}>('POST','/api/widget/services',csrf,{services:draft.filter(id=>services.some(s=>s.id===id))})
+      const result=await request<{services:string[]}>('POST','/api/widget/services',csrf,{services:draft.filter(id=>services.some(s=>s.id===id))},pending)
       setDraft(result.services);await refresh()
       setDraft(null);notify('Zapisano wybór usług.',pending)
     }catch(e){fail(e,pending,'Nie udało się zapisać.')}

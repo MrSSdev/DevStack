@@ -9,7 +9,7 @@ $store=new DevStackNotices();
 try {
     $snapshot=devstack_rpc('notification_snapshot',[]);
     $store->observeJob(is_array($snapshot['engine_job']??null)?$snapshot['engine_job']:null);
-    if (is_array($snapshot['services']??null)) $store->observeServices($snapshot['services']);
+    if (is_array($snapshot['services']??null)) $store->observeServices($snapshot['services'],is_array($snapshot['service_results']??null)?$snapshot['service_results']:[]);
 } catch (Throwable) {
     // Do not infer service failure from unavailable status.
 }
@@ -29,9 +29,21 @@ try {
     // Mailpit is optional and can be stopped. Never clear its cursor here.
 }
 try {
-    // At most one delivery per timer cycle; subscriptions are opt-in.
-    if ($claim=$store->claimPush()) {
+    // The root-owned marker's mtime prevents delivery of a pre-opt-in backlog.
+    // Exactly one transport owns the claim in this cycle.
+    $windowsMode='/etc/devstack/windows-local-notifications';
+    $windowsEnabledSince=is_file($windowsMode)?@filemtime($windowsMode):false;
+    if ($claim=$store->claimPush($windowsEnabledSince===false?null:$windowsEnabledSince)) {
         $start=hrtime(true);
+        if ($windowsEnabledSince!==false) {
+            $result=devstack_rpc('show_windows_notification',$claim['payload']);
+            $accepted=($result['accepted']??false)===true;
+            error_log(sprintf('DevStack Windows notification: category=%s journal_age_s=%d send_ms=%d outcome=%s',
+                $claim['payload']['category'],$claim['journal_age_s'],
+                (int)((hrtime(true)-$start)/1000000),$accepted?'accepted':'failed'));
+            if (!$accepted) $store->pushFailed($claim['id'],false);
+            exit(0);
+        }
         $result=devstack_push_helper('send',['subscription'=>$claim['subscription'],'payload'=>$claim['payload']]);
         $ok=($result['ok']??false)===true;
         $status=$result['http_status']??null;
@@ -45,5 +57,5 @@ try {
     }
 } catch (Throwable) {
     if (isset($claim)&&is_array($claim)) $store->pushFailed($claim['id'],false);
-    error_log('DevStack Web Push unavailable.');
+    error_log('DevStack system notification unavailable.');
 }

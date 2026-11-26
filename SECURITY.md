@@ -82,13 +82,22 @@ timer polls the fixed Mailpit API and read-only daemon snapshot; no worker
 starts WSL or executes arbitrary user commands. No browser-provided notice
 text or route is stored. Clear/delete remove records, not underlying
 resources. The PWA service worker does not cache authenticated content.
-Optional Web Push needs explicit browser permission and a local
-subscription; the sender validates provider host, scheme and key lengths
-at both boundaries, disables redirects and proxy environment, and only
-sends generic event identifiers and category/severity. The private VAPID
-key and endpoint credentials must not be shared. Presence leases and
-short delivery TTL reduce duplicate/system notifications; closed-window
-detection is best-effort, not an authorization boundary.
+The intended system notification transport is local Windows WinRT,
+explicitly selected with a protected root-owned marker. The fixed launcher
+runs as the Ubuntu developer, not root, through a bounded one-shot systemd
+unit. Only a validated event ID, category and severity cross the WSL
+boundary. No Internet notification provider, browser subscription or
+VAPID key is needed for this transport. Windows installation ACLs protect
+the launcher; its user-writable installation must not contain code
+executed by an elevated scheduled task. Native notification delivery
+respects Windows settings. Presence leases and single-event delivery
+claims reduce duplicate notifications; closed-window detection is
+best-effort, not an authorization boundary.
+Legacy browser Web Push code remains for compatibility/rollback in this
+revision but is not the selected delivery path while the WinRT marker is
+active. Do not enable it for the local configuration. Existing legacy
+VAPID keys and subscription credentials remain private; preserving these
+during updates does not mean they are used.
 
 ## Windows integration and widgets
 

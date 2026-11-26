@@ -85,3 +85,93 @@
 html { scrollbar-gutter: stable; @apply bg-background text-foreground; }
 body { @apply bg-background text-foreground antialiased; }
 ::selection { @apply bg-foreground/15; }
+
+/* Base UI/shadcn toast stack (MIT): native indexes, measured heights,
+   expanded state and swipe offsets. Keep the portal movable into dialog:modal.
+   Clip animation overflow at the screen boundary, not in a scrolling list. */
+[data-slot="toast-host"] {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  overflow: clip;
+}
+[data-slot="toast-viewport"] {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(24rem, calc(100% - 2rem));
+  pointer-events: none;
+}
+[data-slot="toast"] {
+  --gap: .75rem;
+  --height: var(--toast-frontmost-height, var(--toast-height, auto));
+  --peek: .75rem;
+  --scale: max(.65, calc(1 - var(--toast-index, 0) * .1));
+  --shrink: calc(1 - var(--scale));
+  --swipe-x: var(--toast-swipe-movement-x, 0px);
+  --swipe-y: var(--toast-swipe-movement-y, 0px);
+  --offset-y: calc(-1 * var(--toast-offset-y, 0px) - var(--toast-index, 0) * var(--gap) + var(--swipe-y));
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: calc(1000 - var(--toast-index, 0));
+  width: 100%;
+  height: var(--height);
+  pointer-events: auto;
+  transform-origin: bottom;
+  transform: translateX(var(--swipe-x)) translateY(calc(var(--swipe-y) - var(--toast-index, 0) * var(--peek) - var(--shrink) * var(--height))) scale(var(--scale));
+  transition: transform 500ms cubic-bezier(.22,1,.36,1), opacity 500ms, height 150ms;
+  will-change: transform;
+}
+[data-slot="toast"]::after {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: calc(var(--gap) + 1px);
+  content: "";
+}
+[data-slot="toast"][data-expanded] {
+  height: var(--toast-height, auto);
+  transform: translateX(var(--swipe-x)) translateY(var(--offset-y));
+}
+[data-slot="toast"][data-limited] {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-slot="toast"][data-starting-style],
+[data-slot="toast"][data-ending-style] {
+  transform: translateY(150%);
+  opacity: 0;
+}
+[data-slot="toast"][data-ending-style] {
+  pointer-events: none;
+}
+[data-slot="toast"][data-ending-style][data-swipe-direction="right"] {
+  transform: translateX(calc(var(--swipe-x) + 150%)) translateY(var(--offset-y));
+}
+[data-slot="toast"][data-swiping] {
+  transition: none;
+}
+[data-slot="toast-content"] {
+  height: 100%;
+  overflow: hidden;
+  transition: opacity 250ms cubic-bezier(.22,1,.36,1);
+}
+[data-slot="toast-content"][data-behind]:not([data-expanded]) {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (max-width: 400px) {
+  [data-slot="toast-content"]:has([data-slot="toast-action"]) {
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr) auto;
+    align-items: start;
+  }
+  [data-slot="toast-action"] { grid-area: 2 / 2; justify-self: start; }
+  [data-slot="toast-close"] { grid-area: 1 / 3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="toast"], [data-slot="toast-content"] { transition: none; }
+}

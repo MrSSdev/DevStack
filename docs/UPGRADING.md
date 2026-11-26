@@ -25,6 +25,18 @@ sudo php-fpm8.5 -t
 
 Refresh https://devstack.test in the browser.
 
+If local Windows notifications are already enabled, the same update also
+refreshes their Windows launcher using the existing opt-in marker. Run
+from the signed-in Windows user's ordinary Ubuntu session with WSL Interop
+available. No extra flag is needed for subsequent updates; an installation
+without the opt-in marker remains unchanged unless explicitly requested with
+`--windows-local-notifications`. See [local notifications](LOCAL-WINDOWS-NOTIFICATIONS.md)
+for setup and rollback. Local WinRT is the intended system delivery path;
+no browser Web Push subscription or Internet delivery is required.
+The Windows notification and Linux code deployments
+are separate stages; an error is reported rather than silently skipping an
+enabled component.
+
 ## Optional local mail
 
 A normal DevStack update neither installs nor replaces Mailpit. If you want the

@@ -13,9 +13,10 @@ import subprocess
 import time
 import unittest
 import urllib.request
+import urllib.parse
 from email.message import EmailMessage
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, sync_playwright
 
 BASE = 'https://devstack.test'
 OUT = pathlib.Path('browser-results')
@@ -150,6 +151,33 @@ class BrowserAcceptance(unittest.TestCase):
             time.sleep(.1)
         self.fail(f'Mailpit did not reach {count} messages')
 
+    def wait_notification_cycle(self):
+        # Observe a new, successful run of the installed 8-second timer.
+        # Never issue a burst of manual starts alongside that timer: systemd
+        # correctly limits those bursts, which are not a product workflow.
+        service = 'devstack-notifications.service'
+        subprocess.run(['systemctl','is-active','--quiet','devstack-notifications.timer'],check=True)
+        def snapshot():
+            output = subprocess.check_output([
+                'systemctl','show','-p','ExecMainStartTimestampMonotonic',
+                '-p','ExecMainExitTimestampMonotonic','-p','ActiveState',
+                '-p','Result','-p','ExecMainStatus',service],text=True)
+            return dict(line.split('=',1) for line in output.splitlines() if '=' in line)
+        previous = int(snapshot()['ExecMainStartTimestampMonotonic'])
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = snapshot()
+            if state['ActiveState'] == 'failed':
+                self.fail(f'Notification collector failed: {state}')
+            started = int(state['ExecMainStartTimestampMonotonic'])
+            ended = int(state['ExecMainExitTimestampMonotonic'])
+            if started > previous and ended >= started and state['ActiveState'] == 'inactive':
+                self.assertEqual(state['Result'],'success',state)
+                self.assertEqual(state['ExecMainStatus'],'0',state)
+                return
+            self.page.wait_for_timeout(200)
+        self.fail(f'No new successful timer-driven notification collection: {snapshot()}')
+
     def goto(self, route):
         target=BASE + '/#/' + route
         # An in-memory project detail deliberately retains its source hash.
@@ -168,10 +196,55 @@ class BrowserAcceptance(unittest.TestCase):
             expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
         else:
             expect(self.page.locator('html')).not_to_have_class(re.compile(r'\bdark\b'))
-        # Exclude ending toasts; nth locators shift as each toast is removed.
-        close = self.page.locator('[data-slot="toast"]:not([data-ending-style]) button[aria-label="Zamknij powiadomienie"]')
-        while close.count():
-            close.first.click()
+        self.dismiss_visible_toasts()
+
+    def dismiss_visible_toasts(self):
+        # Layout preparation only: close real cards, including those behind
+        # the frontmost one. A collector response may arrive asynchronously.
+        # Do not break on an empty snapshot and then assert the entire live
+        # queue stays empty: that races a legitimate new notification.
+        active = self.page.locator('[data-slot="toast"]:not([data-ending-style])')
+        close = active.locator('button[aria-label="Zamknij powiadomienie"]')
+        deadline = time.monotonic() + 15
+        empty_since = None
+        while time.monotonic() < deadline:
+            if not close.count():
+                now = time.monotonic()
+                if empty_since is None:
+                    empty_since = now
+                if now - empty_since >= .25:
+                    self.page.mouse.move(1,1)
+                    return
+                self.page.wait_for_timeout(100)
+                continue
+            empty_since = None
+            try:
+                active.first.hover(timeout=3000)
+                if close.count():
+                    close.first.click(timeout=5000)
+            except PlaywrightTimeoutError:
+                # An expiring card can disappear during the hover/click.
+                # An existing blocked control is still a test failure.
+                if close.count():
+                    raise
+        self.fail('Closable toast stack did not become quiet before layout check')
+
+    def click_layout_control(self, control):
+        # Only for the layout walk, after the notification assertion. A real
+        # toast may overlap a control at a narrow viewport. Close it using
+        # the same UI as a user, not force=True or CSS/DOM manipulation.
+        for attempt in range(3):
+            self.dismiss_visible_toasts()
+            try:
+                control.click(timeout=5000)
+                return
+            except PlaywrightTimeoutError as exc:
+                message = str(exc)
+                toast_intercepted = 'intercepts pointer events' in message and (
+                    'toast-host' in message or 'data-slot="toast"' in message
+                    or 'data-slot="toast-content"' in message)
+                if attempt == 2 or not toast_intercepted:
+                    raise
 
     def shot(self, name):
         self.page.evaluate('document.fonts.ready')
@@ -254,6 +327,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(response.status,200,response.text())
         send(HTML_SUBJECT, HTML)
         self.wait_total(1)
+        self.dismiss_visible_toasts()
         for width in [640, 853, 1024, 1280, 1920]:
             self.page.set_viewport_size({'width':width, 'height':950})
             for theme in ['light','dark']:
@@ -262,6 +336,7 @@ class BrowserAcceptance(unittest.TestCase):
                 for route in ['dashboard','projects','new','mail','settings']:
                     with self.subTest(width=width, theme=theme, route=route):
                         self.goto(route)
+                        self.dismiss_visible_toasts()
                         prefix=f'{width}-{theme}-'
                         if route=='mail':expect(self.message_button(HTML_SUBJECT)).to_be_visible()
                         if route=='new':self.page.get_by_role('combobox',name='Framework',exact=True).select_option('none')
@@ -292,7 +367,9 @@ class BrowserAcceptance(unittest.TestCase):
                             expect(self.page.get_by_role('heading',name='Browser fixture',exact=True)).to_be_visible()
                             self.shot(prefix+'project')
                             config=self.page.get_by_role('button',name=re.compile('pełną konfigurację'))
-                            if config.get_attribute('aria-expanded')!='true':config.click()
+                            if config.get_attribute('aria-expanded')!='true':
+                                self.click_layout_control(config)
+                            expect(config).to_have_attribute('aria-expanded','true')
                             self.shot(prefix+'project-nginx')
                             self.goto('projects')
                             self.page.locator('main button').filter(has_text='A'*70).click()
@@ -609,6 +686,11 @@ class BrowserAcceptance(unittest.TestCase):
         job.update(id='d'*32,state='succeeded',message='Drugi wynik testowy gotowy.')
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(installer.get_by_text('Drugi wynik testowy gotowy.',exact=False)).to_be_visible()
+        # Refresh has its own independent success notice. The installer can
+        # be behind it in the collapsed stack; expand as a real user would.
+        self.page.locator('[data-slot="toast"]:not([data-ending-style])').first.hover()
+        expect(installer).to_have_attribute('data-expanded','')
+        expect(installer.locator('[data-slot="toast-content"]')).to_have_css('opacity','1')
         installer.get_by_role('button',name='Przejdź do projektu').click()
         expect(self.page.get_by_role('heading',name='Browser fixture',exact=True)).to_be_visible()
         self.page.reload()
@@ -626,10 +708,13 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(installer.get_by_text('Nowszy błąd instalacji.',exact=False)).to_be_visible()
         expect(installer).to_have_count(1)
-        # Full cards remain expanded visually even when the pointer and focus
-        # are elsewhere. Close must be discoverable by its accessible role
-        # without hovering, forcing the click, or including hidden elements.
+        # The frontmost card's visible close remains accessible without
+        # hover. If another independent notice is in front, expand the stack
+        # with keyboard focus to reveal the installer's real close control.
         self.page.mouse.move(1,1)
+        if installer.locator('[data-slot="toast-content"]').get_attribute('data-behind') is not None:
+            installer.focus()
+            expect(installer).to_have_attribute('data-expanded','')
         close = installer.get_by_role('button',name='Zamknij powiadomienie',exact=True)
         expect(close).to_be_visible()
         expect(close).to_have_attribute('aria-hidden','false')
@@ -651,6 +736,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(info['scope'],'/')
         self.assertEqual(info['id'],'/')
         self.assertEqual(info['start_url'],'/#/dashboard')
+        self.assertEqual(info['protocol_handlers'], [{'protocol':'web+devstack','url':'/#/protocol?uri=%s'}])
         for icon in info['icons']:
             response=self.context.request.get(BASE+icon['src'])
             self.assertEqual(response.status,200)
@@ -661,7 +747,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(self.page.evaluate('caches.keys()'),[])
         # Establish the empty-mailbox baseline and finish any prior worker
         # pass before clearing the independent event history.
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.wait_notification_cycle()
         self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
         self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
         panel=self.page.get_by_role('region',name='Historia powiadomień')
@@ -670,11 +756,11 @@ class BrowserAcceptance(unittest.TestCase):
         # instead of an empty messages array.
         send('Notification fixture alpha')
         self.wait_total(1)
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         item=panel.locator('[data-notification-id]').filter(has_text='Notification fixture alpha')
         expect(item).to_have_count(1,timeout=20000)
         expect(self.page.locator('[data-slot="toast"]').filter(has_text='Notification fixture alpha')).to_be_visible(timeout=10000)
         second=self.context.new_page()
+        external_delivery=None
         try:
             second.goto(BASE+'/#/dashboard')
             expect(second.locator('main')).to_be_visible()
@@ -686,30 +772,49 @@ class BrowserAcceptance(unittest.TestCase):
             expect(item).to_have_count(0)
             expect(other.locator('[data-notification-id]').filter(has_text='Notification fixture alpha')).to_have_count(0,timeout=10000)
             self.assertEqual(mailpit()['total'],1)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+            self.wait_notification_cycle()
+            # Wait for an actual authenticated poll after the completed
+            # collector cycle before asserting that deletion did not replay.
+            with self.page.expect_response(lambda response: response.url.endswith('/api/notifications/poll') and response.ok, timeout=12000) as collected:
+                self.page.wait_for_timeout(100)
+            self.assertEqual(collected.value.json()['result']['items'],[])
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
             second.close()
             send('Notification fixture beta')
             self.wait_total(2)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             item=panel.locator('[data-notification-id]').filter(has_text='Notification fixture beta')
             expect(item).to_have_count(1,timeout=20000)
             item.get_by_role('button').filter(has_text='Notification fixture beta').click()
             expect(self.page.get_by_role('heading',name='Notification fixture beta')).to_be_visible()
             self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
             expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
+            # The browser-only fixture cannot deliver native Windows toasts.
+            # Simulate events whose delivery happened outside this document:
+            # keep real SQLite history, claims and authentication, but do not
+            # present these returned toasts in the panel. Otherwise a visible
+            # toast timeout can legitimately read them before the explicit
+            # click/cold-login assertions. Other toasts are untouched.
+            external_subjects={'Notification fixture gamma','Notification fixture delta',
+                               'Notification fixture epsilon','Notification fixture eta'}
+            def external_delivery(route):
+                response=route.fetch()
+                payload=response.json()
+                if response.ok and isinstance(payload.get('result'),dict):
+                    state=payload['result']
+                    state['toast']=[n for n in state.get('toast',[]) if n['description'] not in external_subjects]
+                    route.fulfill(response=response,json=payload)
+                else:route.fulfill(response=response)
+            self.page.route('**/api/notifications/poll',external_delivery)
             # Simulate the exact same-origin fragment produced by the actual
             # notificationclick handler (unit tested separately). No fake
             # provider delivery or OS banner is claimed by this browser test.
             send('Notification fixture gamma')
             self.wait_total(3)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             gamma=panel.locator('[data-notification-id]').filter(has_text='Notification fixture gamma')
             expect(gamma).to_have_count(1,timeout=20000)
             gamma_id=gamma.get_attribute('data-notification-id')
             send('Notification fixture delta')
             self.wait_total(4)
-            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
             delta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture delta')
             expect(delta).to_have_count(1,timeout=20000)
             delta_id=delta.get_attribute('data-notification-id')
@@ -739,19 +844,200 @@ class BrowserAcceptance(unittest.TestCase):
                 expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible(timeout=10000)
             finally:
                 cold.close()
+            # Opening a real toast, not the history entry, marks only that
+            # event read and navigates to its mail. Keep an unrelated unread
+            # whose toast was not presented to this document.
+            send('Notification fixture epsilon')
+            self.wait_total(5)
+            epsilon=panel.locator('[data-notification-id]').filter(has_text='Notification fixture epsilon')
+            expect(epsilon).to_have_count(1,timeout=20000)
+            send('Notification fixture zeta')
+            self.wait_total(6)
+            zeta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture zeta')
+            expect(zeta).to_have_count(1,timeout=20000)
+            expect(panel.get_by_text('2 nowych',exact=True)).to_be_visible()
+            panel.get_by_role('button',name='Zamknij historię').click()
+            zeta_toast=self.page.locator('[data-slot="toast"]').filter(has_text='Notification fixture zeta')
+            zeta_toast.get_by_role('button',name='Otwórz',exact=True).click()
+            expect(self.page.get_by_role('heading',name='Notification fixture zeta')).to_be_visible()
+            self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
+            expect(panel.get_by_text('1 nowych',exact=True)).to_be_visible()
+            expect(epsilon.locator('[aria-label="Nieprzeczytane"]')).to_have_count(1)
+            expect(zeta.locator('[aria-label="Nieprzeczytane"]')).to_have_count(0)
+            # Simulate the manifest URL mapping, not Windows protocol
+            # registration itself. Exercise a hash change in a live page
+            # and the same authenticated acknowledgement path.
+            epsilon_id=epsilon.get_attribute('data-notification-id')
+            def protocol_url(event_id):
+                uri='web+devstack://open/mail/'+event_id[5:]+'?notice='+event_id
+                return BASE+info['protocol_handlers'][0]['url'].replace('%s',urllib.parse.quote(uri,safe=''))
+            panel.get_by_role('button',name='Zamknij historię').click()
+            self.page.goto(protocol_url(epsilon_id))
+            expect(self.page.get_by_role('heading',name='Notification fixture epsilon')).to_be_visible()
+            expect(self.page).to_have_url(BASE+'/#/mail/'+epsilon_id[5:])
+            self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
+            expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
+            send('Notification fixture eta')
+            self.wait_total(7)
+            eta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture eta')
+            expect(eta).to_have_count(1,timeout=20000)
+            eta_id=eta.get_attribute('data-notification-id')
+            protocol_cold=self.browser.new_context()
+            try:
+                launch=protocol_cold.new_page()
+                launch.goto(protocol_url(eta_id))
+                expect(launch.get_by_role('heading',name='Logowanie',exact=True)).to_be_visible()
+                expect(launch).to_have_url(BASE+'/#/mail/'+eta_id[5:]+'?notice='+eta_id)
+                expect(eta.locator('[aria-label="Nieprzeczytane"]')).to_have_count(1)
+                launch.get_by_label('Hasło administratora',exact=True).fill(os.environ['DEVSTACK_E2E_PASSWORD'])
+                launch.get_by_role('button',name='Zaloguj się',exact=True).click()
+                expect(launch.get_by_role('heading',name='Notification fixture eta')).to_be_visible()
+                expect(launch).to_have_url(BASE+'/#/mail/'+eta_id[5:])
+                expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible(timeout=10000)
+            finally:
+                protocol_cold.close()
             panel.get_by_role('button',name='Wyczyść wszystko',exact=True).click()
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
             self.page.reload()
             expect(self.page.locator('main')).to_be_visible()
             self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
-            self.assertEqual(mailpit()['total'],4)
+            self.assertEqual(mailpit()['total'],7)
         finally:
+            if external_delivery is not None:self.page.unroute('**/api/notifications/poll',external_delivery)
             if not second.is_closed():second.close()
         anonymous=self.browser.new_context()
         try:
             self.assertEqual(anonymous.request.post(BASE+'/api/notifications/poll',data={'client':'a'*32}).status,403)
         finally:anonymous.close()
+
+    def test_09_notification_presence_lifecycle(self):
+        # Inspect only the isolated fixture's client IDs, never push secrets.
+        def present(client):
+            script=("import sqlite3,sys,time;"
+                    "db=sqlite3.connect('file:/var/lib/devstack-web/notifications.sqlite3?mode=ro',uri=True);"
+                    "print(db.execute('SELECT COUNT(*) FROM clients WHERE id=? AND expires>?',"
+                    "(sys.argv[1],int(time.time()))).fetchone()[0])")
+            return subprocess.check_output(['sudo','-u','devstackweb','python3','-c',script,client],text=True).strip()=='1'
+
+        def wait_presence(client,expected):
+            for _ in range(100):
+                if present(client)==expected:return
+                self.page.wait_for_timeout(100)
+            self.fail('Unexpected lease state for '+client)
+
+        def poll_response(response):
+            return response.url==BASE+'/api/notifications/poll' and response.status==200
+
+        with self.page.expect_response(poll_response) as first:
+            self.goto('dashboard')
+        original=first.value.request.post_data_json['client']
+        self.assertTrue(present(original))
+        # Beacon has no custom header. The body-token exception is restricted
+        # to this exact same-origin JSON endpoint and still uses the session
+        # token. Bad requests cannot remove the live document.
+        leave_url=BASE+'/api/notifications/leave'
+        for headers,body in [
+            ({'Origin':BASE},{'client':original,'csrf':'invalid'}),
+            ({'Origin':'https://evil.invalid'},{'client':original,'csrf':self.csrf}),
+            ({},{'client':original,'csrf':self.csrf}),
+            ({'Origin':BASE,'Content-Type':'text/plain'},{'client':original,'csrf':self.csrf}),
+            ({'Origin':BASE},{'client':original,'csrf':self.csrf,'extra':True}),
+            ({'Origin':BASE,'X-CSRF-Token':'invalid'},{'client':original,'csrf':self.csrf}),
+        ]:
+            self.assertEqual(self.context.request.post(leave_url,headers=headers,data=body).status,403)
+        self.assertEqual(self.context.request.post(BASE+'/api/notifications/manage',
+            headers={'Origin':BASE},data={'action':'read-all','csrf':self.csrf}).status,403)
+        self.assertTrue(present(original))
+        probe='c'*32
+        self.assertEqual(self.post('/api/notifications/poll',{'client':probe}).status,200)
+        self.assertTrue(present(probe))
+        self.assertEqual(self.context.request.post(leave_url,headers={'Origin':BASE},
+            data={'client':probe,'csrf':self.csrf}).status,200)
+        self.assertFalse(present(probe))
+        second=self.context.new_page()
+        try:
+            with second.expect_response(poll_response) as other:
+                second.goto(BASE+'/#/dashboard')
+            client=other.value.request.post_data_json['client']
+            self.assertNotEqual(original,client)
+            self.assertTrue(present(client))
+            second.wait_for_function('navigator.serviceWorker.controller !== null')
+            requests=[]
+            second.on('request',lambda req: requests.append(req.url) if req.url==BASE+'/api/notifications/poll' else None)
+            # Drive the actual pagehide handler deterministically, leaving the
+            # test document available to exercise a BFCache-style restoration.
+            with self.context.expect_event('response',lambda r:r.url==leave_url and r.status==200) as leave:
+                second.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}))")
+            self.assertEqual(leave.value.request.post_data_json['client'],client)
+            self.assertIsNotNone(leave.value.request.service_worker)
+            wait_presence(client,False)
+            self.assertTrue(present(original))
+            # Replay an older request at the authenticated API boundary.
+            stale=self.post('/api/notifications/poll',{'client':client})
+            self.assertEqual(stale.status,200)
+            self.assertEqual(stale.json()['result']['toast'],[])
+            self.assertEqual(self.context.request.get(BASE+'/api/state',headers={'X-DevStack-Client':client}).status,200)
+            self.assertFalse(present(client))
+            before=len(requests)
+            second.evaluate("window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('hashchange')); document.dispatchEvent(new Event('visibilitychange'))")
+            second.wait_for_timeout(5500) # Cross the real 5s heartbeat interval.
+            self.assertEqual(len(requests),before,'Closed document started another poll')
+            with second.expect_response(poll_response) as restored:
+                second.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
+            resumed=restored.value.request.post_data_json['client']
+            self.assertNotEqual(resumed,client)
+            self.assertTrue(present(resumed))
+            self.assertFalse(present(client))
+            # A genuine reload also releases the previous lifetime. Verify
+            # that pagehide records the retired ID for the new document;
+            # this covers the teardown-request loss seen in the previous CI.
+            with second.expect_response(poll_response) as reloaded:
+                second.reload()
+            fresh=reloaded.value.request.post_data_json['client']
+            self.assertNotIn(fresh,[original,client,resumed])
+            self.assertIn(resumed,reloaded.value.request.post_data_json.get('retired',[]))
+            wait_presence(resumed,False)
+            self.assertTrue(present(fresh))
+            self.assertTrue(present(original))
+            # Exercise the uncontrolled-document fallback and deliberately
+            # lose its beacon. The next authenticated poll must recover it.
+            second.evaluate("""() => {
+                Object.defineProperty(navigator.serviceWorker,'controller',{get:()=>null});
+                const request=window.fetch;
+                window.fetch=(url,options)=>url==='/api/notifications/leave'
+                    ? Promise.reject(new TypeError('Fixture drops leave fetch')) : request(url,options);
+                Object.defineProperty(navigator,'sendBeacon',{value:()=>true});
+            }""")
+            with second.expect_response(poll_response) as recovered:
+                second.reload()
+            latest=recovered.value.request.post_data_json['client']
+            self.assertNotIn(latest,[original,client,resumed,fresh])
+            self.assertIn(fresh,recovered.value.request.post_data_json.get('retired',[]))
+            wait_presence(fresh,False)
+            self.assertTrue(present(latest))
+            self.assertTrue(present(original))
+            # Real navigation away with no DevStack successor: no recovery
+            # poll is available. The worker must deliver this leave.
+            second.wait_for_function('navigator.serviceWorker.controller !== null')
+            second.goto('about:blank')
+            wait_presence(latest,False)
+            self.assertTrue(present(original))
+            self.assertEqual(self.post('/api/notifications/poll',{'client':latest}).status,200)
+            self.assertFalse(present(latest))
+
+            with second.expect_response(poll_response) as reopened:
+                second.goto(BASE+'/#/dashboard')
+            closing=reopened.value.request.post_data_json['client']
+            self.assertNotIn(closing,[original,client,resumed,fresh,latest])
+            self.assertTrue(present(closing))
+            second.wait_for_function('navigator.serviceWorker.controller !== null')
+            with second.expect_event('close'):
+                second.close(run_before_unload=True)
+            wait_presence(closing,False)
+            self.assertTrue(present(original))
+        finally:
+            if not second.is_closed():second.close()
 
     def test_05_login_screen_and_form(self):
         anonymous=self.browser.new_context(viewport={'width':853,'height':950})
@@ -803,6 +1089,201 @@ class BrowserAcceptance(unittest.TestCase):
             wait_state('active')
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(self.message_button('Retained through Mailpit stop')).to_be_visible()
+
+
+    def test_10_visible_toast_marks_exact_history_read(self):
+        self.goto('dashboard')
+        self.wait_notification_cycle()
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        bell=self.page.get_by_role('button',name='Powiadomienia',exact=True)
+        bell.click()
+        panel=self.page.get_by_role('region',name='Historia powiadomień')
+        expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
+        toasts=self.page.locator('[data-slot="toast"]')
+        dot='[aria-label="Nieprzeczytane"]'
+        send('Toast expiry fixture')
+        self.wait_total(1)
+        expiry=panel.locator('[data-notification-id]').filter(has_text='Toast expiry fixture')
+        expiry_toast=toasts.filter(has_text='Toast expiry fixture')
+        expect(expiry_toast).to_be_visible(timeout=20000)
+        expect(expiry.locator(dot)).to_have_count(1)
+        expect(expiry_toast).to_have_count(0,timeout=22000)
+        expect(expiry.locator(dot)).to_have_count(0,timeout=10000)
+        expect(expiry).to_have_count(1)
+        expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
+        # A real close button must use the same exact-event path.
+        send('Toast close fixture')
+        self.wait_total(2)
+        manual=panel.locator('[data-notification-id]').filter(has_text='Toast close fixture')
+        manual_toast=toasts.filter(has_text='Toast close fixture')
+        expect(manual_toast).to_be_visible(timeout=20000)
+        expect(manual.locator(dot)).to_have_count(1)
+        panel.get_by_role('button',name='Zamknij historię').click()
+        manual_toast.get_by_role('button',name='Zamknij powiadomienie').click()
+        bell.click()
+        expect(manual.locator(dot)).to_have_count(0,timeout=10000)
+        expect(manual).to_have_count(1)
+        # A hidden document cannot acknowledge a toast merely because
+        # its closure callback runs. Override visibility only in this test,
+        # and use the actual close button; the unit test also covers expiry.
+        self.page.evaluate("Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'})")
+        send('Toast hidden fixture')
+        self.wait_total(3)
+        hidden=panel.locator('[data-notification-id]').filter(has_text='Toast hidden fixture')
+        hidden_toast=toasts.filter(has_text='Toast hidden fixture')
+        expect(hidden_toast).to_be_visible(timeout=20000)
+        expect(hidden.locator(dot)).to_have_count(1)
+        panel.get_by_role('button',name='Zamknij historię').click()
+        hidden_toast.get_by_role('button',name='Zamknij powiadomienie').click()
+        expect(hidden_toast).to_have_count(0,timeout=5000)
+        self.page.evaluate("delete document.visibilityState")
+        bell.click()
+        expect(hidden.locator(dot)).to_have_count(1)
+        # Reproduce the reported case: the operation starts as a local
+        # loading toast but the API allocates a separate persistent op-ID.
+        panel.get_by_role('button',name='Zamknij historię').click()
+        self.goto('mail')
+        expect(self.message_button('Toast hidden fixture')).to_be_visible()
+        self.page.get_by_role('button',name='Opróżnij',exact=True).click()
+        self.page.get_by_role('button',name='Potwierdź',exact=True).click()
+        expect(self.page.get_by_text('Skrzynka jest pusta.',exact=True)).to_be_visible()
+        direct_toast=toasts.filter(has_text='Opróżniono skrzynkę.')
+        expect(direct_toast).to_be_visible()
+        bell.click()
+        direct=panel.locator('[data-notification-id]').filter(has_text='Opróżniono skrzynkę')
+        expect(direct.locator(dot)).to_have_count(1,timeout=5000)
+        expect(direct_toast).to_have_count(0,timeout=15000)
+        expect(direct.locator(dot)).to_have_count(0,timeout=10000)
+        expect(hidden.locator(dot)).to_have_count(1)
+        expect(panel.get_by_text('1 nowych',exact=True)).to_be_visible()
+        self.page.reload()
+        expect(self.page.locator('main')).to_be_visible()
+        bell.click()
+        expect(direct).to_have_count(1)
+        expect(direct.locator(dot)).to_have_count(0)
+        expect(hidden.locator(dot)).to_have_count(1)
+
+
+    def test_11_actual_service_completion_notification(self):
+        # Exercise the real installed daemon, delayed systemd unit,
+        # receipt collector and browser history, not a mocked status.
+        self.goto('dashboard')
+        self.wait_notification_cycle()
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        def pid():
+            return subprocess.check_output(['systemctl','show','--property=MainPID','--value','devstack-mailpit.service'],text=True).strip()
+        before=pid()
+        self.assertNotEqual(before,'0')
+        response=self.post('/api/services/control',{'service':'mailpit','action':'restart','confirmed':True})
+        self.assertEqual(response.status,200,response.text())
+        accepted=response.json()['result']
+        self.assertTrue(accepted['accepted'])
+        event_id='service-'+accepted['receipt']
+        self.assertNotEqual(accepted['notification_id'],event_id)
+        for _ in range(150):
+            state=self.context.request.get(BASE+'/api/state').json()['result']
+            if state['mailpit']=='active' and not state['service_action_pending'] and pid()!=before:break
+            self.page.wait_for_timeout(200)
+        else:self.fail('Mailpit did not actually restart')
+        bell=self.page.get_by_role('button',name='Powiadomienia',exact=True)
+        bell.click()
+        panel=self.page.get_by_role('region',name='Historia powiadomień')
+        ack=panel.locator('[data-notification-id="'+accepted['notification_id']+'"]')
+        outcome=panel.locator('[data-notification-id="'+event_id+'"]')
+        expect(ack.get_by_text('Polecenie usługi przyjęte',exact=True)).to_be_visible()
+        expect(outcome.get_by_text('Usługa uruchomiona ponownie',exact=True)).to_be_visible(timeout=20000)
+        expect(outcome.get_by_text('Mailpit — restart',exact=True)).to_be_visible()
+        expect(outcome).to_have_count(1)
+        # Repeated collection and deletion must not recreate the receipt.
+        outcome.get_by_role('button',name='Usuń powiadomienie: Usługa uruchomiona ponownie').click()
+        expect(outcome).to_have_count(0)
+        self.wait_notification_cycle()
+        self.page.reload()
+        expect(self.page.locator('main')).to_be_visible()
+        bell.click()
+        expect(outcome).to_have_count(0)
+        expect(ack).to_have_count(1)
+
+
+    def test_12_native_toast_stack_and_no_animation_overflow(self):
+        # Real mail notices, a native modal, and the real toast manager.
+        self.goto('dashboard')
+        self.page.set_viewport_size({'width':600,'height':850})
+        self.wait_notification_cycle()
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        self.dismiss_visible_toasts()
+        self.page.locator('main button').filter(has_text='MariaDB').click()
+        dialog=self.page.locator('dialog:modal')
+        host=dialog.locator('[data-slot="toast-host"]')
+        expect(host).to_have_count(1)
+        self.page.mouse.move(1,1)
+        send('Stack fixture first')
+        self.wait_total(1)
+        cards=host.locator('[data-slot="toast"]:not([data-ending-style])')
+        first=cards.filter(has_text='Stack fixture first')
+        expect(first).to_be_visible(timeout=20000)
+        # Hold the first toast using actual hover while the next collection
+        # runs, then leave the viewport to see the native collapsed stack.
+        first.hover()
+        expect(first).to_have_attribute('data-expanded','')
+        send('Stack fixture second with a different and longer subject for height measurement')
+        self.wait_total(2)
+        second=cards.filter(has_text='Stack fixture second')
+        expect(second).to_be_visible(timeout=20000)
+        self.page.mouse.move(1,1)
+        expect(first).not_to_have_attribute('data-expanded','')
+        expect(second).not_to_have_attribute('data-expanded','')
+        expect(first.locator('[data-slot="toast-content"]')).to_have_css('opacity','0')
+        expect(second.locator('[data-slot="toast-content"]')).to_have_css('opacity','1')
+        expect(cards).to_have_count(2)
+        self.page.wait_for_timeout(550)
+        collapsed=host.evaluate("""e=>{
+            const cards=[...e.querySelectorAll('[data-slot="toast"]:not([data-ending-style])')];
+            const [front,back]=cards.map(c=>c.getBoundingClientRect());
+            const viewport=e.querySelector('[data-slot="toast-viewport"]').getBoundingClientRect();
+            return {overlap:back.bottom-front.top,frontWidth:front.width,backWidth:back.width,
+              rightGap:innerWidth-front.right,aligned:Math.abs(front.right-viewport.right)<1,
+              clipping:getComputedStyle(e).overflowX};
+        }""")
+        self.assertGreater(collapsed['overlap'],0,collapsed)
+        self.assertLess(collapsed['backWidth'],collapsed['frontWidth'],collapsed)
+        self.assertTrue(collapsed['aligned'],collapsed)
+        self.assertLess(collapsed['rightGap'],40,collapsed)
+        self.assertEqual(collapsed['clipping'],'clip')
+        self.shot('600-toast-collapsed-modal')
+        second.hover()
+        expect(first).to_have_attribute('data-expanded','')
+        expect(first.locator('[data-slot="toast-content"]')).to_have_css('opacity','1')
+        self.page.wait_for_timeout(550)
+        self.assertTrue(host.evaluate("""e=>{
+            const [front,back]=[...e.querySelectorAll('[data-slot="toast"]:not([data-ending-style])')].map(c=>c.getBoundingClientRect());
+            return back.bottom<front.top && Math.abs(back.width-front.width)<1;
+        }"""))
+        self.shot('600-toast-expanded-modal')
+        # Sample every rendered frame of the real dismiss animation, not
+        # just the final screenshot. Neither the document nor the modal
+        # may acquire extra horizontal scrollable width.
+        self.page.evaluate("""()=>{
+            const elements=[document.documentElement,document.body,document.querySelector('dialog:modal')];
+            const baseline=elements.map(e=>e.scrollWidth);
+            window.__toastOverflow=new Promise(resolve=>{
+                const end=performance.now()+1500;let max=0;
+                function sample(){
+                    elements.forEach((e,i)=>{max=Math.max(max,e.scrollWidth-baseline[i])});
+                    if(performance.now()<end)requestAnimationFrame(sample);else resolve(max);
+                }
+                requestAnimationFrame(sample);
+            });
+        }""")
+        second.get_by_role('button',name='Zamknij powiadomienie',exact=True).click()
+        expect(second).to_have_count(0)
+        self.assertEqual(self.page.evaluate('window.__toastOverflow'),0)
+        expect(first).to_be_visible()
+        # Closing the modal moves the same live portal back to the document.
+        dialog.get_by_role('button',name='Zamknij',exact=True).click()
+        expect(self.page.locator('body > [data-slot="toast-host"]')).to_have_count(1)
+        expect(self.page.locator('[data-slot="toast"]').filter(has_text='Stack fixture first')).to_be_visible()
+        self.dismiss_visible_toasts()
 
 
 if __name__=='__main__':

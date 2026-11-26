@@ -1,6 +1,8 @@
 name: DevStack reader sandbox
 
 on:
+  push:
+    branches: [test/windows-local-notifications]
   pull_request:
     paths:
       - 'windows/widgets/services/**'

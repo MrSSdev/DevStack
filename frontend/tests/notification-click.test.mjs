@@ -9,7 +9,7 @@ import ts from 'typescript'
 // Node 20/22 build or when native type stripping is disabled).
 const clientSource=readFileSync(new URL('../src/lib/notification-client.ts',import.meta.url),'utf8')
 const compiled=ts.transpileModule(clientSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText
-const { notificationClickId, notificationRouteHash } =
+const { notificationClickId, notificationRouteHash, protocolLaunchHash, readNoticeOnClose, notificationClient, notificationDismissed } =
   await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'))
 
 const base='https://devstack.test'
@@ -28,7 +28,7 @@ function worker(existing=false){
     clients:{matchAll:async()=>existing?[client]:[],openWindow:async url=>calls.push(['open',url])},
     addEventListener:(type,handler)=>listeners.set(type,handler)
   }
-  vm.runInNewContext(source,{self,URL})
+  vm.runInNewContext(source,{self,URL,fetch:async(url,options)=>calls.push(['fetch',url,options])})
   return {calls,dispatch:async(type,event)=>{
     let done
     listeners.get(type)({...event,waitUntil:p=>{done=p}})
@@ -68,4 +68,80 @@ test('fragment parser keeps the normal route and validates the complete journal 
   assert.equal(notificationClickId('#/unknown?notice='+id),undefined)
   assert.equal(notificationClickId(hash+'&other=1'),undefined)
   assert.equal(notificationClickId('#/mail/'+mailId),undefined)
+})
+
+test('manifest protocol launches normalize to the existing route and exact journal marker',()=>{
+  const manifest=JSON.parse(readFileSync(new URL('../public/manifest.webmanifest',import.meta.url),'utf8'))
+  assert.deepEqual(manifest.protocol_handlers,[{protocol:'web+devstack',url:'/#/protocol?uri=%s'}])
+  const launch=uri=>manifest.protocol_handlers[0].url.replace('%s',encodeURIComponent(uri)).slice(1)
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/mail')),'#/mail')
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/mail/'+mailId+'?notice='+id)),route.slice(1)+'?notice='+id)
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/projects?notice=op-'+'a'.repeat(32))),'#/projects?notice=op-'+'a'.repeat(32))
+  assert.equal(protocolLaunchHash('#/mail'),undefined)
+  for(const uri of [
+    'https://evil.invalid/',
+    'web+devstack://evil.invalid/mail',
+    'web+devstack://open//evil.invalid/',
+    'web+devstack://open/../mail',
+    'web+devstack://open/mail?notice=invalid',
+    'web+devstack://open/mail/'+mailId+'?notice=mail-'+'N'.repeat(22),
+    'web+devstack://open/mail/'+mailId+'?notice='+id+'&extra=1',
+    'web+devstack://open/mail\n',
+    'web+devstack://open/mail?url=https://evil.invalid/',
+    'web+devstack://open/'+ 'a'.repeat(600)
+  ])assert.equal(protocolLaunchHash(launch(uri)),'#/dashboard',uri)
+  assert.equal(protocolLaunchHash('#/protocol?uri=%zz'),'#/dashboard')
+})
+
+test('worker leaves only the named client with the existing session and CSRF header',async()=>{
+  const w=worker()
+  const client='c'.repeat(32)
+  const csrf='a'.repeat(64)
+  const data={type:'devstack:notification-leave',client,csrf,url:'https://example.invalid/'}
+  const event={data,origin:base,source:{type:'window'}}
+  await w.dispatch('message',{...event,origin:'https://example.invalid'})
+  await w.dispatch('message',{...event,source:{type:'worker'}})
+  await w.dispatch('message',{...event,data:{...data,csrf:'invalid'}})
+  await w.dispatch('message',{...event,data:{...data,client:'invalid'}})
+  assert.deepEqual(w.calls,[])
+  await w.dispatch('message',event)
+  const [[operation,url,options]]=w.calls
+  assert.equal(operation,'fetch')
+  assert.equal(url,'/api/notifications/leave')
+  assert.equal(options.method,'POST')
+  assert.equal(options.credentials,'same-origin')
+  assert.equal(options.headers['X-CSRF-Token'],csrf)
+  assert.deepEqual(JSON.parse(options.body),{client})
+})
+
+test('closing a visible terminal toast emits one exact event, never read all',()=>{
+  const events=[]
+  const saved=Object.fromEntries(['window','document','CustomEvent'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]))
+  const documentFixture={visibilityState:'visible'}
+  try{
+    Object.defineProperty(globalThis,'window',{configurable:true,value:{dispatchEvent:event=>events.push(event)}})
+    Object.defineProperty(globalThis,'document',{configurable:true,value:documentFixture})
+    Object.defineProperty(globalThis,'CustomEvent',{configurable:true,value:class{constructor(type,options){this.type=type;this.detail=options.detail}}})
+    const close=readNoticeOnClose(id)
+    assert.deepEqual(events,[])
+    close()
+    close()
+    assert.equal(events.length,1)
+    assert.equal(events[0].type,notificationDismissed)
+    assert.deepEqual(events[0].detail,{id,client:notificationClient})
+    assert.equal(readNoticeOnClose('invalid'),undefined)
+    const stale=readNoticeOnClose(id,'0'.repeat(32))
+    stale()
+    documentFixture.visibilityState='hidden'
+    const hidden=readNoticeOnClose('op-'+'a'.repeat(32))
+    hidden()
+    documentFixture.visibilityState='visible'
+    hidden()
+    assert.equal(events.length,1)
+  }finally{
+    for(const [key,descriptor] of Object.entries(saved)){
+      if(descriptor)Object.defineProperty(globalThis,key,descriptor)
+      else delete globalThis[key]
+    }
+  }
 })

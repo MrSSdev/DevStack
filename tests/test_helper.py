@@ -1,9 +1,11 @@
 """No root or system services are used by these unit tests."""
+import base64
 import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('devstackd', Path(__file__).resolve().parents[1] / 'daemon/devstackd.py')
@@ -478,6 +480,127 @@ class ValidationTests(unittest.TestCase):
             d.write_json_atomic(path, {'key': 'value'})
             self.assertEqual(d.read_json(path)['key'], 'value')
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_windows_notification_uses_only_the_fixed_program_and_typed_input(self):
+        event = {'id': 'mail-' + 'a'*22, 'category': 'mail', 'kind': 'info'}
+        with tempfile.TemporaryDirectory() as tmp:
+            mode = Path(tmp) / 'enabled'
+            legacy = Path('/mnt/c/Users/Test User/AppData/Local/DevStack/LocalNotifications/DevStack.Notifications.exe')
+            exe = Path('/mnt/c/DevStack/LocalNotifications/DevStack.Notifications.exe')
+            is_file = Path.is_file
+            account = SimpleNamespace(pw_name='fixture', pw_uid=1001, pw_gid=1001)
+            good_state = ('LoadState=loaded\nActiveState=active\nSubState=exited\n'
+                          'Result=success\nExecMainCode=1\nExecMainStatus=0\n')
+            start_status = 0
+            query_status = 0
+            state_output = good_state
+            start_error = None
+
+            def fake_run(args, **kwargs):
+                if args[0] == '/usr/bin/systemd-run':
+                    if start_error is not None:
+                        raise start_error
+                    return SimpleNamespace(returncode=start_status)
+                if args[2] == 'show':
+                    return SimpleNamespace(returncode=query_status, stdout=state_output)
+                self.assertIn(args[2], ('stop', 'reset-failed'))
+                return SimpleNamespace(returncode=0)
+
+            with (
+                patch.object(d, 'WINDOWS_NOTIFICATION_MODE', mode),
+                patch.object(Path, 'is_file', lambda file: file in (exe, legacy) or is_file(file)),
+                patch.object(d, 'config', return_value={'dev_user': 'fixture'}),
+                patch.object(d.pwd, 'getpwnam', return_value=account),
+                patch.object(d.subprocess, 'run', side_effect=fake_run) as run,
+            ):
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                mode.write_text('/mnt/c/Users/Test User/powershell.exe\n')
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                mode.write_text(str(exe) + '\n')
+                for bad in ({**event, 'path': 'unexpected'}, {**event, 'id': 'https://other.test/'},
+                            {**event, 'category': ['mail']}, {**event, 'kind': 'loading'}):
+                    with self.assertRaises(d.InputError):
+                        d.show_windows_notification(bad)
+                account.pw_uid = 0
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                account.pw_uid = 1001
+                account.pw_gid = 0
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                run.assert_not_called()
+                account.pw_gid = 1001
+                self.assertTrue(d.show_windows_notification(event)['accepted'])
+                self.assertEqual(run.call_count, 4)
+                launch, query, stop, reset = run.call_args_list
+                arguments = launch.args[0]
+                self.assertEqual(arguments[0], '/usr/bin/systemd-run')
+                self.assertIn('--uid=1001', arguments)
+                self.assertIn('--gid=1001', arguments)
+                self.assertIn('--service-type=oneshot', arguments)
+                self.assertIn('--expand-environment=no', arguments)
+                for flag in ('--wait', '--pipe', '--collect', '--no-block'):
+                    self.assertNotIn(flag, arguments)
+                for option in ('NoNewPrivileges=yes', 'PrivateTmp=yes', 'PrivateDevices=yes',
+                               'ProtectKernelTunables=yes', 'ProtectKernelModules=yes',
+                               'ProtectControlGroups=yes', 'TimeoutStartSec=10s',
+                               'TimeoutStopSec=2s', 'PartOf=devstackd.service',
+                               'RemainAfterExit=yes', 'CollectMode=inactive',
+                               'StandardOutput=null', 'StandardError=null', 'StandardInput=null'):
+                    self.assertIn('--property=' + option, arguments)
+                self.assertIn('--working-directory=/', arguments)
+                self.assertNotIn('--working-directory=' + str(exe.parent), arguments)
+                self.assertIn('--description=DevStack local Windows notification', arguments)
+                self.assertEqual(arguments[-7:-1], ['/usr/bin/env', '-i', '--chdir=' + str(exe.parent),
+                                                      'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', str(exe)])
+                self.assertEqual(json.loads(base64.b64decode(arguments[-1])), event)
+                unit = next(arg.split('=', 1)[1] for arg in arguments if arg.startswith('--unit='))
+                self.assertRegex(unit, r'^devstack-windows-notification-[a-f0-9]{16}\.service$')
+                self.assertEqual(query.args[0][:3], ['/usr/bin/systemctl', '--system', 'show'])
+                self.assertEqual(query.args[0][-2:], ['--', unit])
+                for key in ('LoadState', 'ActiveState', 'SubState', 'Result', 'ExecMainCode', 'ExecMainStatus'):
+                    self.assertIn('--property=' + key, query.args[0])
+                self.assertEqual(stop.args[0], ['/usr/bin/systemctl', '--system', 'stop', '--', unit])
+                self.assertEqual(reset.args[0], ['/usr/bin/systemctl', '--system', 'reset-failed', '--', unit])
+                for key in ('user', 'group', 'extra_groups', 'shell', 'preexec_fn'):
+                    self.assertNotIn(key, launch.kwargs)
+                self.assertEqual(launch.kwargs['timeout'], 15)
+                self.assertEqual(query.kwargs['timeout'], 3)
+                run.reset_mock()
+                mode.write_text(str(legacy) + '\n')
+                self.assertTrue(d.show_windows_notification(event)['accepted'])
+                self.assertEqual(run.call_args_list[0].args[0][-2], str(legacy))
+                self.assertIn('--chdir=' + str(legacy.parent), run.call_args_list[0].args[0])
+                run.reset_mock()
+                mode.write_text('/mnt/d/DevStack/LocalNotifications/DevStack.Notifications.exe\n')
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                run.assert_not_called()
+                mode.write_text(str(exe) + '\n')
+                with patch.object(d.sys, 'stderr') as stderr:
+                    for bad_state in ('', good_state.replace('ExecMainStatus=0', 'ExecMainStatus=23'),
+                                      good_state.replace('Result=success', 'Result=timeout'),
+                                      good_state.replace('ActiveState=active', 'ActiveState=inactive'),
+                                      good_state.replace('ExecMainCode=1', 'ExecMainCode=2')):
+                        state_output = bad_state
+                        run.reset_mock()
+                        self.assertFalse(d.show_windows_notification(event)['accepted'])
+                        self.assertEqual([call.args[0][2] for call in run.call_args_list[-2:]], ['stop', 'reset-failed'])
+                    state_output = good_state
+                    start_status = 1
+                    self.assertFalse(d.show_windows_notification(event)['accepted'])
+                    start_status = 0
+                    query_status = 1
+                    self.assertFalse(d.show_windows_notification(event)['accepted'])
+                    query_status = 0
+                    for error in (PermissionError(1, 'private fixture path'),
+                                  d.subprocess.TimeoutExpired('/private/fixture', 15)):
+                        start_error = error
+                        run.reset_mock()
+                        self.assertFalse(d.show_windows_notification(event)['accepted'])
+                        self.assertEqual([call.args[0][2] for call in run.call_args_list[-2:]], ['stop', 'reset-failed'])
+                    log = ''.join(call.args[0] for call in stderr.write.call_args_list)
+                    self.assertIn('PermissionError', log)
+                    self.assertIn('TimeoutExpired', log)
+                    self.assertNotIn('private fixture path', log)
+                    self.assertNotIn('/private/fixture', log)
 
     def test_nginx_config_rollback_on_validation_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
