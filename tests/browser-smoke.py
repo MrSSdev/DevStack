@@ -1110,6 +1110,48 @@ class BrowserAcceptance(unittest.TestCase):
         expect(hidden.locator(dot)).to_have_count(1)
 
 
+    def test_11_actual_service_completion_notification(self):
+        # Exercise the real installed daemon, delayed systemd unit,
+        # receipt collector and browser history, not a mocked status.
+        self.goto('dashboard')
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        def pid():
+            return subprocess.check_output(['systemctl','show','--property=MainPID','--value','devstack-mailpit.service'],text=True).strip()
+        before=pid()
+        self.assertNotEqual(before,'0')
+        response=self.post('/api/services/control',{'service':'mailpit','action':'restart','confirmed':True})
+        self.assertEqual(response.status,200,response.text())
+        accepted=response.json()['result']
+        self.assertTrue(accepted['accepted'])
+        event_id='service-'+accepted['receipt']
+        self.assertNotEqual(accepted['notification_id'],event_id)
+        for _ in range(150):
+            state=self.context.request.get(BASE+'/api/state').json()['result']
+            if state['mailpit']=='active' and not state['service_action_pending'] and pid()!=before:break
+            self.page.wait_for_timeout(200)
+        else:self.fail('Mailpit did not actually restart')
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        bell=self.page.get_by_role('button',name='Powiadomienia',exact=True)
+        bell.click()
+        panel=self.page.get_by_role('region',name='Historia powiadomień')
+        ack=panel.locator('[data-notification-id="'+accepted['notification_id']+'"]')
+        outcome=panel.locator('[data-notification-id="'+event_id+'"]')
+        expect(ack.get_by_text('Polecenie usługi przyjęte',exact=True)).to_be_visible()
+        expect(outcome.get_by_text('Usługa uruchomiona ponownie',exact=True)).to_be_visible(timeout=15000)
+        expect(outcome.get_by_text('Mailpit — restart',exact=True)).to_be_visible()
+        expect(outcome).to_have_count(1)
+        # Repeated collection and deletion must not recreate the receipt.
+        outcome.get_by_role('button',name='Usuń powiadomienie: Usługa uruchomiona ponownie').click()
+        expect(outcome).to_have_count(0)
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.page.reload()
+        expect(self.page.locator('main')).to_be_visible()
+        bell.click()
+        expect(outcome).to_have_count(0)
+        expect(ack).to_have_count(1)
+
+
 if __name__=='__main__':
     # Rate limiting is tested last because it is deliberately shared by all sessions.
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(BrowserAcceptance)

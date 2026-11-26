@@ -1517,7 +1517,14 @@ def recover_engine_job() -> None:
 
 def notification_snapshot(_: dict[str, Any]) -> dict[str, Any]:
     # Read-only, inexpensive: never scan project trees or reveal credentials.
-    return {'engine_job': public_engine_job(), 'services': managed_services.public_rows()}
+    try:
+        completions = managed_services.completion_results()
+    except Exception:
+        # A receipt-store fault must not suppress ordinary service monitoring.
+        print('DevStack service completion receipts unavailable', file=sys.stderr)
+        completions = []
+    return {'engine_job': public_engine_job(), 'services': managed_services.public_rows(),
+            'service_results': completions}
 
 
 def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:

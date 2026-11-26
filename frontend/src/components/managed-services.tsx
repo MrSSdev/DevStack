@@ -28,7 +28,7 @@ export function ManagedServices({services,csrf,request,refresh,blocked}:Props&{b
     const pending=beginNotice('Zlecanie operacji…',current.name+' — '+actionLabels[confirm])
     try{
       await request('POST','/api/services/control',csrf,{service:current.id,action:confirm,confirmed:true},pending)
-      inform('Polecenie przyjęte: '+current.name+' — '+actionLabels[confirm]+'.',pending,'Wynik sprawdź po odświeżeniu stanu.')
+      inform('Polecenie przyjęte: '+current.name+' — '+actionLabels[confirm]+'.',pending,'Wynik operacji pojawi się w powiadomieniach.')
       setConfirm(null)
       // Do not retry a command. Only refresh status after the one-shot has begun.
       await refresh()

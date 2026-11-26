@@ -34,7 +34,8 @@ final class DevStackNotices
             CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS closed_clients (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS mail_seen (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS job_tombstones (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);");
+            CREATE TABLE IF NOT EXISTS job_tombstones (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS service_results_seen (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);");
         } finally {
             umask($old);
         }
@@ -309,15 +310,48 @@ final class DevStackNotices
         });
     }
 
-    public function observeServices(array $services): void
+    public function observeServices(array $services, array $results = []): void
     {
-        $this->atomic(function () use ($services) {
+        $this->atomic(function () use ($services,$results) {
+            // A completed systemctl action has its own stable identity and
+            // survives panel disconnection. The daemon keeps a bounded
+            // receipt journal; a deleted history item must never be replayed.
+            $now=time();
+            $completed=[];
+            foreach (array_slice($results,0,200) as $result) {
+                if (!is_array($result)) continue;
+                $key=$result['id']??null; $service=$result['service']??null;
+                $action=$result['action']??null; $outcome=$result['outcome']??null;
+                $state=$result['state']??null; $stamp=$result['stamp']??null;
+                if (!is_string($key)||!preg_match('~^[a-f0-9]{32}$~D',$key)||
+                    !is_string($service)||!preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$service)||
+                    !in_array($action,['start','stop','restart'],true)||
+                    !in_array($outcome,['success','error'],true)||
+                    !in_array($state,['active','inactive','failed','activating','deactivating','reloading','refreshing','unknown'],true)||
+                    !is_int($stamp)||$stamp<$now-30*86400||$stamp>$now+5) continue;
+                $id='service-'.$key;
+                if ($this->execute('INSERT OR IGNORE INTO service_results_seen(id,stamp) VALUES(?,?)',[$id,$stamp])->rowCount()!==1) continue;
+                // Defense in depth: even a malformed success receipt cannot
+                // present a stopped service as a successful start/restart.
+                $success=$outcome==='success'&&$state===($action==='stop'?'inactive':'active');
+                $title=$success?['start'=>'Usługa uruchomiona','restart'=>'Usługa uruchomiona ponownie','stop'=>'Usługa zatrzymana'][$action]:
+                    'Nie potwierdzono wykonania polecenia usługi';
+                $description=self::clean($result['name']??$service,60).' — '.['start'=>'uruchomienie','restart'=>'restart','stop'=>'zatrzymanie'][$action];
+                $this->insert($id,'service',$title,$description,'/#/dashboard',$success?'success':'error');
+                $this->execute('UPDATE notices SET created=?,updated=? WHERE id=?',[$stamp,$stamp,$id]);
+                if ($stamp>=$now-120) $completed[$service]=$state;
+            }
+            $this->execute('DELETE FROM service_results_seen WHERE stamp<?',[$now-31*86400]);
+            $this->db->exec('DELETE FROM service_results_seen WHERE id IN (SELECT id FROM service_results_seen ORDER BY stamp DESC,id DESC LIMIT -1 OFFSET 20000)');
             $previous=json_decode($this->meta('service_states','{}'),true);
             $next=[];
             foreach (array_slice($services,0,24) as $service) {
                 $id=$service['id']??null; $state=$service['state']??null;
                 if (!is_string($id)||!preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$id)||!is_string($state)) continue;
                 $next[$id]=$state;
+                // The same observed failure/recovery was already described
+                // by a new terminal receipt. Spontaneous transitions remain.
+                if (($completed[$id]??null)===$state) continue;
                 if (isset($previous[$id])&&$previous[$id]!==$state&&$state==='failed') {
                     $this->insert('service-'.bin2hex(random_bytes(16)),'service','Awaria usługi',
                         self::clean($service['name']??$id,60),'/#/dashboard','error');

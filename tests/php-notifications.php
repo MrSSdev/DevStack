@@ -171,4 +171,35 @@ $local->subscribe($subscription);
 $local->observeMail([['ID'=>str_repeat('W',22),'Created'=>gmdate('c')]]);
 check_notice($local->claimPush(time()-60)!==null&&$local->claimPush()===null,
     'A native claim cannot be delivered again through a saved Web Push subscription');
-echo "Notification journal, deletion, deduplication, presence, click read and system delivery policy: OK\n";
+// Service completion is a distinct, exactly-once terminal event. The
+// acceptance itself remains info and a restart can finish between polls.
+$svc=new DevStackNotices(':memory:');
+$activeService=[['id'=>'mailpit','name'=>'Mailpit','state'=>'active']];
+$svc->observeServices($activeService);
+$accept=$svc->operation('/api/services/control',['service'=>'mailpit','action'=>'restart'],['accepted'=>true],$a);
+$svc->acknowledge($accept,$a);
+$restart=['id'=>str_repeat('1',32),'service'=>'mailpit','name'=>'Mailpit','action'=>'restart','outcome'=>'success','state'=>'active','stamp'=>time()];
+$svc->observeServices($activeService,[$restart]);
+$terminal='service-'.$restart['id'];
+$result=$svc->poll($a);
+$items=array_column($result['items'],null,'id');
+check_notice(count($items)===2&&$items[$accept]['kind']==='info'&&$items[$terminal]['kind']==='success','Restart acceptance and verified outcome remain distinct');
+check_notice($items[$terminal]['title']==='Usługa uruchomiona ponownie'&&array_column($result['toast'],'id')===[$terminal],'Quick restart has one actual completion toast');
+$svc->mutate('delete',$terminal);
+$svc->observeServices($activeService,[$restart]);
+check_notice(count($svc->poll($a)['items'])===1,'Deleted receipt is not replayed');
+$failure=[...$restart,'id'=>str_repeat('2',32),'outcome'=>'error','state'=>'failed'];
+$failedService=[['id'=>'mailpit','name'=>'Mailpit','state'=>'failed']];
+$svc->observeServices($failedService,[$restart,$failure]);
+$items=array_column($svc->poll($a)['items'],null,'id');
+check_notice(count($items)===2&&$items['service-'.$failure['id']]['kind']==='error','Actual failed action, without duplicate generic failure');
+$svc->mutate('clear');
+$svc->observeServices($failedService,[$restart,$failure]);
+check_notice($svc->poll($a)['items']===[],'Clear does not recreate service receipts');
+$svc->observeServices($activeService);
+check_notice($svc->poll($a)['items'][0]['title']==='Usługa ponownie aktywna','Spontaneous recovery remains monitored');
+$wrong=[...$restart,'id'=>str_repeat('3',32),'state'=>'inactive'];
+$svc->observeServices([['id'=>'mailpit','name'=>'Mailpit','state'=>'inactive']],[$wrong]);
+$items=array_column($svc->poll($a)['items'],null,'id');
+check_notice($items['service-'.$wrong['id']]['kind']==='error','Inconsistent successful receipt cannot report service as active');
+echo "Notification journal, service completion, deletion, deduplication, presence, click read and system delivery policy: OK\n";

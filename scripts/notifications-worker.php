@@ -9,7 +9,7 @@ $store=new DevStackNotices();
 try {
     $snapshot=devstack_rpc('notification_snapshot',[]);
     $store->observeJob(is_array($snapshot['engine_job']??null)?$snapshot['engine_job']:null);
-    if (is_array($snapshot['services']??null)) $store->observeServices($snapshot['services']);
+    if (is_array($snapshot['services']??null)) $store->observeServices($snapshot['services'],is_array($snapshot['service_results']??null)?$snapshot['service_results']:[]);
 } catch (Throwable) {
     // Do not infer service failure from unavailable status.
 }

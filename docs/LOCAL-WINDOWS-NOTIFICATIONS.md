@@ -47,6 +47,29 @@ Microsoft Edge może poprosić o jednorazową zgodę.
 
 [Dokumentacja Microsoft](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/handle-protocols).
 
+## Rzeczywiste zakończenie sterowania usługą
+
+Potwierdzenie przyjęcia polecenia pozostaje informacją, a nie sukcesem.
+Dotychczasowy opóźniony systemd-run wykonuje wyłącznie dozwolone polecenie
+systemctl. ExecStopPost jednorazowo zapisuje potwierdzony wynik w chronionej
+bazie /var/lib/devstack/service-results.sqlite3. Sukces wymaga zarówno
+poprawnego kodu zakończenia systemctl, jak i odpowiedniego ActiveState
+(active dla start/restart, inactive dla stop). Nie jest to test
+zdrowia aplikacji ani zgadywanie na podstawie samego upływu czasu.
+Po błędzie lub braku potwierdzenia stanu pojawia się komunikat błędu.
+Kolektor importuje wynik jako osobny wpis i toast lub powiadomienie
+Windows. Stabilne ID i osobny znacznik w dzienniku zapobiegają
+duplikatom i przywracaniu usuniętych wpisów. Baza root jest ograniczona
+do 200 wyników z 30 dni; web nie ma do niej bezpośredniego dostępu.
+Nie zmienia się katalog dozwolonych usług ani sposób uruchamiania WSL.
+Awaryjne zakończenie całego WSL przed zapisaniem wyniku może pozostawić
+tylko potwierdzenie przyjęcia; nie zgłaszamy wtedy niepotwierdzonego sukcesu.
+Obsługa dotyczy poleceń z panelu DevStack, nie zewnętrznego systemctl
+ani odrębnego mostka widżetu Windows.
+
+CI sprawdza rzeczywisty restart (zmiana PID), start, stop, błąd,
+blokadę współbieżności, import i trwałość odczytu historii.
+
 ## Układ katalogów i bezpieczeństwo
 
     C:\DevStack\

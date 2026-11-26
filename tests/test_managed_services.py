@@ -54,6 +54,7 @@ class ManagedServiceTests(unittest.TestCase):
             for action in ('start','stop','restart'):
                 result=m.schedule('mailpit',action)
                 self.assertTrue(result['accepted'])
+                self.assertRegex(result['receipt'],r'^[a-f0-9]{32}
                 self.assertEqual(run.call_args.args[0][-4:],['/usr/bin/systemctl','--no-ask-password',action,'devstack-mailpit.service'])
             for service,action in [('sshd','restart'),('mailpit.service','restart'),('nginx','reset-failed'),('nginx','--force'),([], 'restart')]:
                 with self.assertRaises(ValueError):m.schedule(service,action)
@@ -63,3 +64,42 @@ class ManagedServiceTests(unittest.TestCase):
         with patch.object(m,'units_snapshot',return_value=self.values),patch.object(m,'action_pending',return_value=True),patch.object(m.subprocess,'run') as run:
             with self.assertRaises(RuntimeError):m.schedule('nginx','restart')
             run.assert_not_called()
+)
+                self.assertTrue(any(arg.startswith('--property=ExecStopPost=/usr/bin/python3 -I ') and arg.endswith('mailpit '+action+' '+result['receipt']) for arg in run.call_args.args[0]))
+                self.assertEqual(run.call_args.args[0][-4:],['/usr/bin/systemctl','--no-ask-password',action,'devstack-mailpit.service'])
+            for service,action in [('sshd','restart'),('mailpit.service','restart'),('nginx','reset-failed'),('nginx','--force'),([], 'restart')]:
+                with self.assertRaises(ValueError):m.schedule(service,action)
+            self.values['devstack-mailpit.service']['LoadState']='not-found'
+            with self.assertRaises(ValueError):m.schedule('mailpit','start')
+            self.assertEqual(run.call_count,3)
+        with patch.object(m,'units_snapshot',return_value=self.values),patch.object(m,'action_pending',return_value=True),patch.object(m.subprocess,'run') as run:
+            with self.assertRaises(RuntimeError):m.schedule('nginx','restart')
+            run.assert_not_called()
+
+
+    def test_actual_service_completion_requires_exit_and_expected_state(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(m,'RESULTS_DB',pathlib.Path(tmp)/'results.sqlite3'),patch.object(m,'units_snapshot',return_value=self.values):
+            ok={'SERVICE_RESULT':'success','EXIT_CODE':'exited','EXIT_STATUS':'0'}
+            m.record_completion('mailpit','restart','a'*32,ok)
+            m.record_completion('mailpit','restart','b'*32,{**ok,'EXIT_STATUS':'1'})
+            m.record_completion('mailpit','stop','c'*32,ok)
+            self.values['devstack-mailpit.service']['ActiveState']='inactive'
+            m.record_completion('mailpit','stop','d'*32,ok)
+            m.record_completion('mailpit','start','e'*32,ok)
+            m.record_completion('mailpit','restart','a'*32,{})  # stable receipt
+            with patch.object(m,'units_snapshot',side_effect=RuntimeError('bus unavailable')):
+                m.record_completion('mailpit','start','f'*32,ok)
+            indexed={r['id']:r for r in m.completion_results()}
+            self.assertEqual({key[0]:r['outcome'] for key,r in indexed.items()},
+                             {'a':'success','b':'error','c':'error','d':'success','e':'error','f':'error'})
+            self.assertEqual(indexed['f'*32]['state'],'unknown')
+            self.assertEqual(m.RESULTS_DB.stat().st_mode&0o777,0o600)
+            for service,action,receipt in [('sshd','start','1'*32),('mailpit','--force','2'*32),('mailpit','start','bad')]:
+                with self.assertRaises(ValueError):m.record_completion(service,action,receipt,ok)
+
+    def test_pending_includes_oneshot_and_stop_post(self):
+        for state in ('activating','deactivating','active'):
+            with patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=3,stdout=state+'\ninactive\n')):
+                self.assertTrue(m.action_pending())
+        with patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=3,stdout='inactive\nunknown\n')):
+            self.assertFalse(m.action_pending())
