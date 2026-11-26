@@ -702,6 +702,7 @@ class BrowserAcceptance(unittest.TestCase):
         expect(item).to_have_count(1,timeout=20000)
         expect(self.page.locator('[data-slot="toast"]').filter(has_text='Notification fixture alpha')).to_be_visible(timeout=10000)
         second=self.context.new_page()
+        external_delivery=None
         try:
             second.goto(BASE+'/#/dashboard')
             expect(second.locator('main')).to_be_visible()
@@ -725,6 +726,23 @@ class BrowserAcceptance(unittest.TestCase):
             expect(self.page.get_by_role('heading',name='Notification fixture beta')).to_be_visible()
             self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
             expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
+            # The browser-only fixture cannot deliver native Windows toasts.
+            # Simulate events whose delivery happened outside this document:
+            # keep real SQLite history, claims and authentication, but do not
+            # present these returned toasts in the panel. Otherwise a visible
+            # toast timeout can legitimately read them before the explicit
+            # click/cold-login assertions. Other toasts are untouched.
+            external_subjects={'Notification fixture gamma','Notification fixture delta',
+                               'Notification fixture epsilon','Notification fixture eta'}
+            def external_delivery(route):
+                response=route.fetch()
+                payload=response.json()
+                if response.ok and isinstance(payload.get('result'),dict):
+                    state=payload['result']
+                    state['toast']=[n for n in state.get('toast',[]) if n['description'] not in external_subjects]
+                    route.fulfill(response=response,json=payload)
+                else:route.fulfill(response=response)
+            self.page.route('**/api/notifications/poll',external_delivery)
             # Simulate the exact same-origin fragment produced by the actual
             # notificationclick handler (unit tested separately). No fake
             # provider delivery or OS banner is claimed by this browser test.
@@ -767,7 +785,8 @@ class BrowserAcceptance(unittest.TestCase):
             finally:
                 cold.close()
             # Opening a real toast, not the history entry, marks only that
-            # event read and navigates to its mail. Keep an unrelated unread.
+            # event read and navigates to its mail. Keep an unrelated unread
+            # whose toast was not presented to this document.
             send('Notification fixture epsilon')
             self.wait_total(5)
             subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
@@ -828,6 +847,7 @@ class BrowserAcceptance(unittest.TestCase):
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
             self.assertEqual(mailpit()['total'],7)
         finally:
+            if external_delivery is not None:self.page.unroute('**/api/notifications/poll',external_delivery)
             if not second.is_closed():second.close()
         anonymous=self.browser.new_context()
         try:
@@ -1012,6 +1032,82 @@ class BrowserAcceptance(unittest.TestCase):
             wait_state('active')
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(self.message_button('Retained through Mailpit stop')).to_be_visible()
+
+
+    def test_10_visible_toast_marks_exact_history_read(self):
+        self.goto('dashboard')
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        bell=self.page.get_by_role('button',name='Powiadomienia',exact=True)
+        bell.click()
+        panel=self.page.get_by_role('region',name='Historia powiadomień')
+        expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
+        toasts=self.page.locator('[data-slot="toast"]')
+        dot='[aria-label="Nieprzeczytane"]'
+        send('Toast expiry fixture')
+        self.wait_total(1)
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        expiry=panel.locator('[data-notification-id]').filter(has_text='Toast expiry fixture')
+        expiry_toast=toasts.filter(has_text='Toast expiry fixture')
+        expect(expiry_toast).to_be_visible(timeout=20000)
+        expect(expiry.locator(dot)).to_have_count(1)
+        expect(expiry_toast).to_have_count(0,timeout=22000)
+        expect(expiry.locator(dot)).to_have_count(0,timeout=10000)
+        expect(expiry).to_have_count(1)
+        expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
+        # A real close button must use the same exact-event path.
+        send('Toast close fixture')
+        self.wait_total(2)
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        manual=panel.locator('[data-notification-id]').filter(has_text='Toast close fixture')
+        manual_toast=toasts.filter(has_text='Toast close fixture')
+        expect(manual_toast).to_be_visible(timeout=20000)
+        expect(manual.locator(dot)).to_have_count(1)
+        panel.get_by_role('button',name='Zamknij historię').click()
+        manual_toast.get_by_role('button',name='Zamknij powiadomienie').click()
+        bell.click()
+        expect(manual.locator(dot)).to_have_count(0,timeout=10000)
+        expect(manual).to_have_count(1)
+        # A hidden document cannot acknowledge a toast merely because
+        # its closure callback runs. Override visibility only in this test,
+        # and use the actual close button; the unit test also covers expiry.
+        self.page.evaluate("Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'})")
+        send('Toast hidden fixture')
+        self.wait_total(3)
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        hidden=panel.locator('[data-notification-id]').filter(has_text='Toast hidden fixture')
+        hidden_toast=toasts.filter(has_text='Toast hidden fixture')
+        expect(hidden_toast).to_be_visible(timeout=20000)
+        expect(hidden.locator(dot)).to_have_count(1)
+        panel.get_by_role('button',name='Zamknij historię').click()
+        hidden_toast.get_by_role('button',name='Zamknij powiadomienie').click()
+        expect(hidden_toast).to_have_count(0,timeout=5000)
+        self.page.evaluate("delete document.visibilityState")
+        bell.click()
+        expect(hidden.locator(dot)).to_have_count(1)
+        # Reproduce the reported case: the operation starts as a local
+        # loading toast but the API allocates a separate persistent op-ID.
+        panel.get_by_role('button',name='Zamknij historię').click()
+        self.goto('mail')
+        expect(self.message_button('Toast hidden fixture')).to_be_visible()
+        self.page.get_by_role('button',name='Opróżnij',exact=True).click()
+        self.page.get_by_role('button',name='Potwierdź',exact=True).click()
+        expect(self.page.get_by_text('Skrzynka jest pusta.',exact=True)).to_be_visible()
+        direct_toast=toasts.filter(has_text='Opróżniono skrzynkę.')
+        expect(direct_toast).to_be_visible()
+        bell.click()
+        direct=panel.locator('[data-notification-id]').filter(has_text='Opróżniono skrzynkę')
+        expect(direct.locator(dot)).to_have_count(1,timeout=5000)
+        expect(direct_toast).to_have_count(0,timeout=15000)
+        expect(direct.locator(dot)).to_have_count(0,timeout=10000)
+        expect(hidden.locator(dot)).to_have_count(1)
+        expect(panel.get_by_text('1 nowych',exact=True)).to_be_visible()
+        self.page.reload()
+        expect(self.page.locator('main')).to_be_visible()
+        bell.click()
+        expect(direct).to_have_count(1)
+        expect(direct.locator(dot)).to_have_count(0)
+        expect(hidden.locator(dot)).to_have_count(1)
 
 
 if __name__=='__main__':

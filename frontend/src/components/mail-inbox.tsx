@@ -13,7 +13,7 @@ type Attachment={PartID:string; FileName?:string; ContentType?:string; Size?:num
 type Summary={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null; Created?:string; Read?:boolean; Snippet?:string; Attachments?:number}
 type Message={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null; Cc?:Address[]|null; Bcc?:Address[]|null; Date?:string; Text?:string; HTML?:string; Attachments?:Attachment[]|null; Inline?:Attachment[]|null}
 type Page={total:number; unread:number; messages_count:number; start:number; messages:Summary[]|null}
-type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown)=>Promise<T>
+type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown,operationToastId?:string)=>Promise<T>
 type Props={initialMessage?:string;status?:string; csrf:string; request:Request; refreshStatus:()=>void}
 
 const idPattern=/^[A-Za-z0-9]{22}$/
@@ -95,9 +95,9 @@ export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:
     setDeleting(true)
     const pending=beginNotice(mode==='all'?'Opróżnianie skrzynki…':'Usuwanie wiadomości…')
     try{
-      if(mode==='all')await request('POST','/api/mail/clear',csrf,{confirmation:'delete-all'})
-      else if(mode==='one')await request('POST','/api/mail/delete',csrf,{id:ids[0]})
-      else await request('POST','/api/mail/delete-many',csrf,{ids})
+      if(mode==='all')await request('POST','/api/mail/clear',csrf,{confirmation:'delete-all'},pending)
+      else if(mode==='one')await request('POST','/api/mail/delete',csrf,{id:ids[0]},pending)
+      else await request('POST','/api/mail/delete-many',csrf,{ids},pending)
       if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(notificationRouteHash()))window.location.hash='/mail'
       setSelected('');setMessage(null);setConfirmDelete(null);setChecked([])
       if(mode==='all'){setQuery('');setAppliedQuery('');setStart(0)}

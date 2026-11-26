@@ -8,6 +8,12 @@ Kliknięcie nowego dymka preferuje protokół zarejestrowanej PWA
 web+devstack; bez wykrytej rejestracji pozostaje lokalny adres HTTPS.
 Dymek PWA ma dodatkową akcję otwarcia tego samego zdarzenia przez HTTPS.
 Uwierzytelniony poll oznacza dokładnie wskazane powiadomienie jako przeczytane.
+Toast w widocznym panelu pozostaje nieprzeczytany do zamknięcia lub
+wygaśnięcia; wtedy odczytywany jest tylko jego identyfikator, bez usuwania
+historii. Bezpośrednie operacje używają ID zwróconego przez API, a nie
+lokalnego identyfikatora renderera. Toast wygasający w ukrytej karcie,
+zakończenie życia dokumentu i toast ładowania nie oznaczają odczytu.
+Testy obejmują rzeczywistą pocztę, ręczne zamknięcie i opróżnienie skrzynki.
 
 ## Aktywacja PWA
 

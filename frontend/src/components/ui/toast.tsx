@@ -6,21 +6,38 @@ import { CSPProvider } from '@base-ui/react/csp-provider'
 import { CircleAlert, CircleCheck, Info, RefreshCw, TriangleAlert, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { readNoticeOnClose } from '@/lib/notification-client'
 
 export const toast = ToastPrimitive.createToastManager()
+
+// A direct API operation starts with a local loading ID, then receives the
+// exact persistent op-ID from its response (including error responses).
+// Never match by title, timing, or whichever notice was created last.
+const operationClosures=new Map<string,()=>void>()
+export function bindOperationToast(toastId:string,id:unknown,client:string){
+  if(typeof id!=='string'||!/^op-[a-f0-9]{32}$/.test(id))return
+  const close=readNoticeOnClose(id,client)
+  if(close)operationClosures.set(toastId,close)
+}
+function terminalClosure(id?:string){
+  if(!id)return undefined
+  const close=operationClosures.get(id)
+  operationClosures.delete(id)
+  return close
+}
 
 export function beginNotice(title:string, description?:string) {
   return toast.add({title,description,type:'loading',timeout:0})
 }
 export function notify(title:string,id?:string) {
-  return toast.add({id,title,description:undefined,type:'success',timeout:6000})
+  return toast.add({id,title,description:undefined,type:'success',timeout:6000,onClose:terminalClosure(id)})
 }
 export function inform(title:string,id?:string,description?:string) {
-  return toast.add({id,title,description,type:'info',timeout:9000})
+  return toast.add({id,title,description,type:'info',timeout:9000,onClose:terminalClosure(id)})
 }
 export function fail(reason:unknown,id?:string,fallback='Nieznany błąd.') {
   return toast.add({id,title:reason instanceof Error?reason.message:typeof reason==='string'?reason:fallback,
-    description:undefined,type:'error',timeout:12000})
+    description:undefined,type:'error',timeout:12000,onClose:terminalClosure(id)})
 }
 
 function ToastIcon({type}:{type?:string}) {

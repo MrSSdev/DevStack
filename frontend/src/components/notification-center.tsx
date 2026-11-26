@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch'
 import { toast, fail } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
-import { acknowledgeRetiredNotificationClients, consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, renewNotificationClient, retiredNotificationClients, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
+import { acknowledgeRetiredNotificationClients, consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, notificationDismissed, readNoticeOnClose, renewNotificationClient, retiredNotificationClients, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
 
 export function useNotificationCenter(authenticated:boolean,csrf:string,request:NoticeRequest,navigate:(route:string)=>void){
   const [state,setState]=useState<NoticeState>(emptyNoticeState)
@@ -23,6 +23,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
   const show=(item:Notice)=>{
     toast.add({id:item.id,title:item.title,description:item.description,type:item.kind,
       timeout:item.kind==='error'?12000:9000,
+      onClose:item.kind==='loading'?undefined:readNoticeOnClose(item.id),
       actionProps:isNoticeRoute(item.route)?{children:'Otwórz',onClick:()=>{
         // Use the same exact-event acknowledgement as a Windows click. The
         // server marks it read before returning history; never read all.
@@ -45,9 +46,9 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
       if(!active.current||suspended.current||version!==generation.current)return
       acknowledgeRetiredNotificationClients(retired)
       if(opened){
-        pendingOpened.current.delete(opened)
         consumeNotificationClick(opened)
         toast.close(opened)
+        pendingOpened.current.delete(opened)
         if(pendingOpened.current.size)queued.current=true
       }
       setState(result);setAvailable(true)
@@ -65,6 +66,13 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     if(!authenticated){suspended.current=false;generation.current++;pendingOpened.current.clear();setState(emptyNoticeState);void updateAppBadge(0);return}
     let timer:number|undefined
     const refresh=()=>{void syncRef.current()}
+    const dismissed=(event:Event)=>{
+      if(!active.current||suspended.current||!(event instanceof CustomEvent))return
+      const {id,client}=event.detail??{}
+      if(client!==notificationClient||typeof id!=='string'||pendingOpened.current.has(id))return
+      if(!/^(?:(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22})$/.test(id))return
+      pendingOpened.current.add(id);refresh()
+    }
     const start=()=>{if(timer===undefined)timer=window.setInterval(refresh,5000)}
     const stop=()=>{if(timer!==undefined){window.clearInterval(timer);timer=undefined}}
     const leave=()=>{
@@ -90,6 +98,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     window.addEventListener('hashchange',refresh)
     window.addEventListener('pagehide',leave)
     window.addEventListener(notificationChange,refresh)
+    window.addEventListener(notificationDismissed,dismissed)
     document.addEventListener('visibilitychange',visibility)
     if(!suspended.current){start();refresh()}
     return ()=>{
@@ -99,6 +108,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
       window.removeEventListener('hashchange',refresh)
       window.removeEventListener('pagehide',leave)
       window.removeEventListener(notificationChange,refresh)
+      window.removeEventListener(notificationDismissed,dismissed)
       document.removeEventListener('visibilitychange',visibility)
     }
   },[authenticated,csrf,sync])

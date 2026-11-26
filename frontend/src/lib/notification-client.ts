@@ -6,6 +6,7 @@ export function renewNotificationClient(){
   return notificationClient
 }
 export const notificationChange='devstack:notifications-changed'
+export const notificationDismissed='devstack:notification-dismissed'
 export const notificationCategories=[
   {id:'mail',label:'Nowa poczta'},
   {id:'project',label:'Projekty i konfiguracja'},
@@ -63,6 +64,20 @@ export function consumeNotificationClick(id:string){
   // flight. Never overwrite a newer route. Keep the marker until success.
   if(notificationClickId()===id){
     window.history.replaceState(window.history.state,'',window.location.pathname+window.location.search+notificationRouteHash())
+  }
+}
+// Only terminal toast closures in the currently visible document may
+// acknowledge an event. A hidden tab or retired client must not silently
+// read a notice the user may never have seen.
+export function readNoticeOnClose(id:unknown,client=notificationClient){
+  if(typeof id!=='string'||!/^(?:(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22})$/.test(id))return undefined
+  let closed=false
+  return ()=>{
+    if(closed)return
+    closed=true
+    if(client===notificationClient&&document.visibilityState==='visible'){
+      window.dispatchEvent(new CustomEvent(notificationDismissed,{detail:{id,client}}))
+    }
   }
 }
 export function acknowledgeOperation(id:unknown,csrf:string,client=notificationClient){

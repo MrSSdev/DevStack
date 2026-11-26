@@ -12,14 +12,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { toast, beginNotice, notify, fail } from '@/components/ui/toast'
+import { toast, beginNotice, bindOperationToast, notify, fail } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 import { acknowledgeJob, readAcknowledgedJob, rememberVisibleSuccess, showJobNotice, jobNoticeTimeout } from '@/lib/engine-job-notice'
 import { frameworkWebroot, resolveInstallerFields, type InstallerField, type InstallerValues } from '@/lib/installer-options'
 import { resolveProjectIdentity, projectIdentityPayload, type ProjectIdentityDraft } from '@/lib/project-identity'
 import { MailInbox } from '@/components/mail-inbox'
 import { NotificationCenter, NotificationSettings, useNotificationCenter } from '@/components/notification-center'
-import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange, notificationRouteHash, renewNotificationClient } from '@/lib/notification-client'
+import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange, notificationRouteHash, readNoticeOnClose, renewNotificationClient } from '@/lib/notification-client'
 import { PageHeader } from '@/components/page-header'
 import { ManagedServices, WidgetServiceSettings, type ManagedService } from '@/components/managed-services'
 
@@ -63,7 +63,7 @@ function nginxRules(config?: {overrides?:string;extra_locations?:string}) {
 
 const blank: Draft = { name: '', slug: null, domain: null, webroot: 'public', database: true, https: true, local_mail: false, engine: 'none', starter_kit: 'none' }
 
-async function request<T>(method: 'GET'|'POST', path: string, csrf?: string, data?: unknown): Promise<T> {
+async function request<T>(method: 'GET'|'POST', path: string, csrf?: string, data?: unknown, operationToastId?:string): Promise<T> {
   const client=notificationClient
   const response = await fetch(path, {
     method, credentials: 'same-origin', cache: 'no-store',
@@ -75,7 +75,9 @@ async function request<T>(method: 'GET'|'POST', path: string, csrf?: string, dat
   catch { throw new Error(`Nieprawidłowa odpowiedź serwera (HTTP ${response.status}).`) }
   if(method==='POST'&&csrf){
     const result=body.result as {notification_id?:string}|undefined
-    acknowledgeOperation(result?.notification_id??body.notification_id,csrf,client)
+    const id=result?.notification_id??body.notification_id
+    if(operationToastId)bindOperationToast(operationToastId,id,client)
+    acknowledgeOperation(id,csrf,client)
     if(result?.notification_id?.startsWith('job-'))window.dispatchEvent(new Event(notificationChange))
   }
   if (!response.ok || !body.ok) throw new Error(body.error || `Błąd HTTP ${response.status}.`)
@@ -217,15 +219,16 @@ export function App() {
   async function toggleTheme(){
     if(savingTheme || themeSaveRef.current)return
     const next=theme==='light'?'dark':'light'
+    const pending=crypto.randomUUID()
     themeSaveRef.current=true
     setSavingTheme(true)
     try{
-      const saved=await request<{theme:'light'|'dark'}>('POST','/api/preferences',csrf,{theme:next})
+      const saved=await request<{theme:'light'|'dark'}>('POST','/api/preferences',csrf,{theme:next},pending)
       setTheme(saved.theme)
       setServer(prev=>({...prev,preferences:{theme:saved.theme}}))
-      notify(saved.theme==='dark'?'Zapisano ciemny motyw na serwerze.':'Zapisano jasny motyw na serwerze.')
+      notify(saved.theme==='dark'?'Zapisano ciemny motyw na serwerze.':'Zapisano jasny motyw na serwerze.',pending)
     }catch(e){
-      fail(e,undefined,'Nie udało się zapisać motywu.')
+      fail(e,pending,'Nie udało się zapisać motywu.')
     }finally{
       themeSaveRef.current=false
       setSavingTheme(false)
@@ -316,7 +319,7 @@ export function App() {
   async function logout(){
     try {const info=await request<{csrf:string}>('POST','/api/logout',csrf,{});setCsrf(info.csrf)}
     catch(e){fail(e);return}
-    closingSession.current=true;jobPresentation.current=null;activeEngineToast.current=null;setAwaitingEngineJob('');toast.close()
+    closingSession.current=true;jobPresentation.current=null;activeEngineToast.current=null;setAwaitingEngineJob('');renewNotificationClient();toast.close()
     setNavOpen(false);setAuthenticated(false);setDbSecret('');setProjectSearch('');setRulesDraft(null);setServer({services:{},projects:[],preferences:{theme:'light'}});setSelected('');setView('dashboard')
   }
   useEffect(()=>{
@@ -348,9 +351,10 @@ export function App() {
     if(jobPresentation.current?.signature!==signature){
       const previousState=jobPresentation.current?.state
       jobPresentation.current={signature,state:job.state}
+      const readCompleted=running?undefined:readNoticeOnClose('job-'+job.id)
       const options={title,description,type:running?'loading':job.state==='succeeded'?'success':'error',
         actionProps:canOpen?{children:'Przejdź do projektu',onClick:()=>{details(job.slug!);toast.close(id)}}:undefined,
-        onClose:()=>{if(!closingSession.current&&activeEngineToast.current?.jobId===job.id&&!running)setDismissedJob(acknowledgeJob(job))}}
+        onClose:()=>{if(!closingSession.current&&activeEngineToast.current?.jobId===job.id&&!running){setDismissedJob(acknowledgeJob(job));readCompleted?.()}}}
       // A new state starts its own timeout. Metadata changes within the same
       // terminal state must not restart that timeout on every refresh.
       if(previousState===job.state)toast.update(id,options)
@@ -421,7 +425,7 @@ export function App() {
     const pending=beginNotice(toolDefinition?.tool??'Instalator','Zlecanie operacji…')
     setAwaitingEngineJob('submitting')
     try{
-      const result=await request<{message:string;job_id:string}>('POST','/api/engines/'+encodeURIComponent(toolId),csrf,{action})
+      const result=await request<{message:string;job_id:string}>('POST','/api/engines/'+encodeURIComponent(toolId),csrf,{action},pending)
       acceptEngineJob(result.job_id,pending,toolDefinition?.tool??'Instalator',result.message)
       await refresh()
     }catch(e){setAwaitingEngineJob('');fail(e,pending)}finally{setBusy(false)}
@@ -434,7 +438,7 @@ export function App() {
     if(draftEngine)setAwaitingEngineJob('submitting')
     try {
       const payload={...draft,...projectIdentityPayload(draft),webroot:draftEngine?undefined:draft.webroot.trim(),installer_options:draftEngine?resolvedOptions.values:{}}
-      const answer=await request<{message:string;job_id?:string}>('POST','/api/projects',csrf,payload)
+      const answer=await request<{message:string;job_id?:string}>('POST','/api/projects',csrf,payload,pending)
       if(answer.job_id)acceptEngineJob(answer.job_id,pending,'Instalacja projektu',payload.slug+'\n'+answer.message)
       else setAwaitingEngineJob('')
       await refresh();setDraft(blank);setInstallerChoices({})
@@ -446,7 +450,7 @@ export function App() {
     setTestingDb(true)
     const pending=beginNotice('Sprawdzanie połączenia z bazą…',current.slug)
     try{
-      const result=await request<{message:string}>('POST','/api/projects/test-db',csrf,{slug:current.slug})
+      const result=await request<{message:string}>('POST','/api/projects/test-db',csrf,{slug:current.slug},pending)
       notify(result.message,pending)
     }catch(e){fail(e,pending)}finally{setTestingDb(false)}
   }
@@ -458,7 +462,7 @@ export function App() {
     try{
       const result=await request<{message:string}>('POST','/api/projects/delete',csrf,{
         slug:current.slug,confirmation:deleteConfirmation,delete_database:current.database && deleteDbConfirm
-      })
+      },pending)
       setDeleteOpen(false)
       setDeleteConfirmation('')
       setDeleteDbConfirm(false)
@@ -474,7 +478,7 @@ export function App() {
     if(!current)return;setBusy(true)
     const pending=beginNotice('Sprawdzanie konfiguracji Nginx…',current.slug)
     try {
-      const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config',csrf,{slug:current.slug,rules})
+      const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config',csrf,{slug:current.slug,rules},pending)
       setRulesDraft({slug:current.slug,value:nginxRules(result)})
       await refresh();notify(result.message,pending)
     }catch(e){fail(e,pending)}finally{setBusy(false)}
@@ -484,7 +488,7 @@ export function App() {
     setBusy(true)
     const pending=beginNotice('Sprawdzanie konfiguracji Nginx…',current.slug)
     try {
-      const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword})
+      const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword},pending)
       setRulesDraft({slug:current.slug,value:nginxRules(result)})
       setFullPassword('')
       setFullEditing(false)

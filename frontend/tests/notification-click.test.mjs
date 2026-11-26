@@ -9,7 +9,7 @@ import ts from 'typescript'
 // Node 20/22 build or when native type stripping is disabled).
 const clientSource=readFileSync(new URL('../src/lib/notification-client.ts',import.meta.url),'utf8')
 const compiled=ts.transpileModule(clientSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText
-const { notificationClickId, notificationRouteHash, protocolLaunchHash } =
+const { notificationClickId, notificationRouteHash, protocolLaunchHash, readNoticeOnClose, notificationClient, notificationDismissed } =
   await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'))
 
 const base='https://devstack.test'
@@ -112,4 +112,36 @@ test('worker leaves only the named client with the existing session and CSRF hea
   assert.equal(options.credentials,'same-origin')
   assert.equal(options.headers['X-CSRF-Token'],csrf)
   assert.deepEqual(JSON.parse(options.body),{client})
+})
+
+test('closing a visible terminal toast emits one exact event, never read all',()=>{
+  const events=[]
+  const saved=Object.fromEntries(['window','document','CustomEvent'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]))
+  const documentFixture={visibilityState:'visible'}
+  try{
+    Object.defineProperty(globalThis,'window',{configurable:true,value:{dispatchEvent:event=>events.push(event)}})
+    Object.defineProperty(globalThis,'document',{configurable:true,value:documentFixture})
+    Object.defineProperty(globalThis,'CustomEvent',{configurable:true,value:class{constructor(type,options){this.type=type;this.detail=options.detail}}})
+    const close=readNoticeOnClose(id)
+    assert.deepEqual(events,[])
+    close()
+    close()
+    assert.equal(events.length,1)
+    assert.equal(events[0].type,notificationDismissed)
+    assert.deepEqual(events[0].detail,{id,client:notificationClient})
+    assert.equal(readNoticeOnClose('invalid'),undefined)
+    const stale=readNoticeOnClose(id,'0'.repeat(32))
+    stale()
+    documentFixture.visibilityState='hidden'
+    const hidden=readNoticeOnClose('op-'+'a'.repeat(32))
+    hidden()
+    documentFixture.visibilityState='visible'
+    hidden()
+    assert.equal(events.length,1)
+  }finally{
+    for(const [key,descriptor] of Object.entries(saved)){
+      if(descriptor)Object.defineProperty(globalThis,key,descriptor)
+      else delete globalThis[key]
+    }
+  }
 })
