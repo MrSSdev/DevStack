@@ -2,7 +2,6 @@
 declare(strict_types=1);
 require_once __DIR__.'/../security.php';
 require_once __DIR__.'/../notifications.php';
-require_once __DIR__.'/../push-helper.php';
 
 if (PHP_SAPI!=='cli') exit(2);
 $store=new DevStackNotices();
@@ -29,31 +28,17 @@ try {
     // Mailpit is optional and can be stopped. Never clear its cursor here.
 }
 try {
-    // The root-owned marker's mtime prevents delivery of a pre-opt-in backlog.
-    // Exactly one transport owns the claim in this cycle.
-    $windowsMode='/etc/devstack/windows-local-notifications';
-    $windowsEnabledSince=is_file($windowsMode)?@filemtime($windowsMode):false;
-    if ($claim=$store->claimPush($windowsEnabledSince===false?null:$windowsEnabledSince)) {
+    // WinRT is the only system transport. The protected marker's mtime
+    // prevents replay of pre-opt-in events. No marker means history/toasts.
+    $windowsEnabledSince=devstack_windows_notification_since();
+    if ($claim=$store->claimPush($windowsEnabledSince)) {
         $start=hrtime(true);
-        if ($windowsEnabledSince!==false) {
-            $result=devstack_rpc('show_windows_notification',$claim['payload']);
-            $accepted=($result['accepted']??false)===true;
-            error_log(sprintf('DevStack Windows notification: category=%s journal_age_s=%d send_ms=%d outcome=%s',
-                $claim['payload']['category'],$claim['journal_age_s'],
-                (int)((hrtime(true)-$start)/1000000),$accepted?'accepted':'failed'));
-            if (!$accepted) $store->pushFailed($claim['id'],false);
-            exit(0);
-        }
-        $result=devstack_push_helper('send',['subscription'=>$claim['subscription'],'payload'=>$claim['payload']]);
-        $ok=($result['ok']??false)===true;
-        $status=$result['http_status']??null;
-        $http=is_int($status)&&$status>=100&&$status<=599?(string)$status:'unavailable';
-        // Log timings and provider status only. A successful HTTP response is
-        // acceptance by the push service, not proof of a displayed OS banner.
-        error_log(sprintf('DevStack push: category=%s journal_age_s=%d send_ms=%d outcome=%s http=%s',
+        $result=devstack_rpc('show_windows_notification',$claim['payload']);
+        $accepted=($result['accepted']??false)===true;
+        error_log(sprintf('DevStack Windows notification: category=%s journal_age_s=%d send_ms=%d outcome=%s',
             $claim['payload']['category'],$claim['journal_age_s'],
-            (int)((hrtime(true)-$start)/1000000),$ok?'accepted':'failed',$http));
-        if (!$ok) $store->pushFailed($claim['id'],($result['expired']??false)===true);
+            (int)((hrtime(true)-$start)/1000000),$accepted?'accepted':'failed'));
+        if (!$accepted) $store->pushFailed($claim['id'],false);
     }
 } catch (Throwable) {
     if (isset($claim)&&is_array($claim)) $store->pushFailed($claim['id'],false);

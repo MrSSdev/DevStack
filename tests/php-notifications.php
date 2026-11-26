@@ -40,35 +40,28 @@ check_notice($store->poll($a)['items'][0]['kind']==='info','Accepted service act
 $store->mutate('read-all');
 check_notice(!$store->poll($a)['items'][0]['unread'],'Read all');
 $store->mutate('clear');
-$key=rtrim(strtr(base64_encode("\x04".str_repeat('x',64)),'+/','-_'),'=');
-$auth=rtrim(strtr(base64_encode(str_repeat('y',16)),'+/','-_'),'=');
-$subscription=['endpoint'=>'https://fcm.googleapis.com/fcm/send/fixture','keys'=>['p256dh'=>$key,'auth'=>$auth]];
-$store->subscribe($subscription);
+$since=time()-60;
 $store->setCategories(['mail']);
 $store->observeMail([['ID'=>str_repeat('Z',22),'Created'=>$stamp,'Subject'=>'Never include in push']]);
-check_notice($store->claimPush()===null,'Any live client suppresses system push');
+check_notice($store->claimPush($since)===null,'Any live client suppresses system push');
 $store->leave($a);$store->leave($b);
 // No sleep: fresh automatic mail must be eligible in this same cycle.
-$push=$store->claimPush();
+$push=$store->claimPush($since);
 check_notice(is_array($push)&&$push['payload']['category']==='mail'&&$push['journal_age_s']>=0&&!str_contains(json_encode($push['payload']),'Never include'),'Immediate claim once with generic payload');
-check_notice($store->claimPush()===null,'No repeated delivery');
-$store->pushFailed($push['id'],true);
-check_notice(!$store->poll($a)['subscribed'],'Expired subscription removed');
+check_notice($store->claimPush($since)===null,'No repeated delivery');
+$store->pushFailed($push['id'],false);
+check_notice(!$store->poll($a)['subscribed'],'No browser subscription exposed');
 $store->mutate('clear');
-$store->subscribe($subscription);
+
 $store->setCategories([]);
 $now=gmdate('c');
 $store->observeMail([['ID'=>str_repeat('P',22),'Created'=>$now],['ID'=>str_repeat('Q',22),'Created'=>$now]]);
 $store->leave($a);
-check_notice($store->claimPush()===null,'Disabled mail category suppresses push');
+check_notice($store->claimPush($since)===null,'Disabled mail category suppresses push');
 $store->setCategories(['mail']);
-$group=$store->claimPush();
+$group=$store->claimPush($since);
 check_notice(is_array($group)&&str_starts_with($group['id'],'batch-')&&$group['payload']['category']==='mail','Automatic mail batch is immediately eligible');
-check_notice($store->claimPush()===null,'No repeated grouped delivery');
-foreach (['https://127.0.0.1/x','https://evil.invalid','https://fcm.googleapis.com.evil.invalid/fcm/send/test','http://fcm.googleapis.com/fcm/send/test','https://user@fcm.googleapis.com/fcm/send/test','https://fcm.googleapis.com:123/fcm/send/test','https://fcm.googleapis.com/other'] as $url) {
-    try {DevStackNotices::subscription(['endpoint'=>$url,'keys'=>$subscription['keys']]);check_notice(false,'Unsafe endpoint accepted');}
-    catch(InvalidArgumentException) {}
-}
+check_notice($store->claimPush($since)===null,'No repeated grouped delivery');
 // Clicking a system notification must update exactly one event in the same
 // authenticated poll, without replaying it as a toast or recreating a row.
 $clickStore=new DevStackNotices(':memory:');
@@ -92,14 +85,14 @@ catch(InvalidArgumentException) {}
 // An operation and a state/job snapshot must not renew presence either.
 $presence=new DevStackNotices(':memory:');
 $presence->observeMail([]);
-$presence->subscribe($subscription);
+
 $presence->setCategories(['mail']);
 $presence->poll($a);$presence->poll($b);
 $presence->leave($a);
 $presence->leave($a); // Idempotent.
 $presence->observeMail([['ID'=>str_repeat('L',22),'Created'=>gmdate('c'),'Subject'=>'Close race']]);
 check_notice($presence->poll($a)['toast']===[],'Late closed-client poll cannot steal a toast');
-check_notice($presence->claimPush()===null,'One remaining live tab still suppresses push');
+check_notice($presence->claimPush($since)===null,'One remaining live tab still suppresses push');
 $presence->leave($b);
 $c=str_repeat('e',32);
 $presence->leave($c); // Leave can precede registration.
@@ -108,27 +101,27 @@ $presence->operation('/api/preferences',['theme'=>'dark'],[],$a);
 $lateJob=['id'=>str_repeat('f',32),'slug'=>'demo','state'=>'scaffolding','message'=>'Working'];
 $presence->operation('/api/projects',['slug'=>'demo','engine'=>'laravel'],['job_id'=>$lateJob['id']],$a);
 check_notice($presence->observeJob($lateJob,$a)['show']===false,'Closed client cannot claim job presentation');
-$immediate=$presence->claimPush();
+$immediate=$presence->claimPush($since);
 check_notice(is_array($immediate)&&$immediate['payload']['category']==='mail','Closed clients and late operations do not block same-cycle push');
 $new=str_repeat('9',32);
 $presence->poll($new);
 $presence->observeMail([['ID'=>str_repeat('K',22),'Created'=>gmdate('c'),'Subject'=>'Restored document']]);
-check_notice($presence->claimPush()===null,'New document lifetime renews presence');
+check_notice($presence->claimPush($since)===null,'New document lifetime renews presence');
 check_notice(array_column($presence->poll($new)['toast'],'id')===['mail-'.str_repeat('K',22)],'New document can receive foreground notifications');
 $presence->leave($new);
 // An unload request can disappear while the browser tears down a document.
 // A new authenticated poll can retire only explicitly recorded old IDs,
 // atomically with its own heartbeat; another live tab remains untouched.
 $recovery=new DevStackNotices(':memory:');
-$recovery->observeMail([]);$recovery->subscribe($subscription);$recovery->setCategories(['mail']);
+$recovery->observeMail([]);$recovery->setCategories(['mail']);
 $recovery->poll($a);$recovery->poll($b);
 $recovery->poll($c,true,null,[$a,$a]);
 $recovery->observeMail([['ID'=>str_repeat('R',22),'Created'=>gmdate('c')]]);
 check_notice($recovery->poll($a)['toast']===[],'Recovered leave blocks late poll from retired ID');
 $recovery->leave($c);
-check_notice($recovery->claimPush()===null,'Recovery must preserve another live tab');
+check_notice($recovery->claimPush($since)===null,'Recovery must preserve another live tab');
 $recovery->leave($b);
-check_notice($recovery->claimPush()!==null,'Recovered missing leave does not block push');
+check_notice($recovery->claimPush($since)!==null,'Recovered missing leave does not block push');
 foreach ([[$c],['invalid'],array_fill(0,17,$a),'invalid',['x'=>$a]] as $invalid) {
     try {$recovery->poll($c,true,null,$invalid);check_notice(false,'Invalid retired list accepted');}
     catch(InvalidArgumentException) {}
@@ -137,14 +130,14 @@ foreach ([[$c],['invalid'],array_fill(0,17,$a),'invalid',['x'=>$a]] as $invalid)
 $fixture=tempnam(sys_get_temp_dir(),'devstack-notices-');
 try {
     $leaseStore=new DevStackNotices($fixture);
-    $leaseStore->observeMail([]);$leaseStore->subscribe($subscription);$leaseStore->setCategories(['mail']);
+    $leaseStore->observeMail([]);$leaseStore->setCategories(['mail']);
     $leaseStore->poll($a);
     $inspect=new PDO('sqlite:'.$fixture);
     $remaining=(int)$inspect->query('SELECT expires FROM clients')->fetchColumn()-time();
     check_notice($remaining>=88&&$remaining<=90,'Heartbeat lease is 90 seconds');
     $inspect->exec('UPDATE clients SET expires=0');
     $leaseStore->observeMail([['ID'=>str_repeat('J',22),'Created'=>gmdate('c')]]);
-    check_notice($leaseStore->claimPush()!==null,'Expired unclosed client no longer blocks push');
+    check_notice($leaseStore->claimPush($since)!==null,'Expired unclosed client no longer blocks push');
     $leaseStore->leave($b);$inspect->exec('UPDATE closed_clients SET expires=0');
     $leaseStore->poll($a,false);
     check_notice((int)$inspect->query('SELECT COUNT(*) FROM closed_clients')->fetchColumn()===0,'Close markers are pruned after their retention period');
@@ -154,7 +147,7 @@ $local=new DevStackNotices(':memory:');
 $local->observeMail([]);
 $localId='mail-'.str_repeat('N',22);
 $local->observeMail([['ID'=>substr($localId,5),'Created'=>gmdate('c'),'Subject'=>'Private fixture subject']]);
-check_notice($local->claimPush()===null,'Web Push still requires a subscription');
+check_notice($local->claimPush()===null,'No native opt-in means no background delivery');
 check_notice($local->claimPush(time()+60)===null,'Local opt-in does not dispatch older events');
 $local->poll($a,false);
 check_notice($local->claimPush(time()-60)===null,'Live tab also suppresses local Windows delivery');
@@ -167,10 +160,30 @@ $local->pushFailed($localId,false);
 $afterLocalFailure=$local->poll($b);
 check_notice($afterLocalFailure['toast']===[]&&$afterLocalFailure['items'][0]['id']===$localId,'Local failure keeps journal history without another automatic delivery');
 $local->leave($b);
-$local->subscribe($subscription);
+
 $local->observeMail([['ID'=>str_repeat('W',22),'Created'=>gmdate('c')]]);
 check_notice($local->claimPush(time()-60)!==null&&$local->claimPush()===null,
-    'A native claim cannot be delivered again through a saved Web Push subscription');
+    'A native claim cannot be delivered again without opt-in');
+// An upgrade may encounter the old metadata record. Retire it without
+// clearing preferences, history or a live client's lease; absence of a
+// native marker must not select a browser transport.
+$legacyFile=tempnam(sys_get_temp_dir(),'devstack-legacy-notices-');
+try {
+    $legacy=new DevStackNotices($legacyFile);
+    $inspect=new PDO('sqlite:'.$legacyFile);
+    $inspect->prepare('INSERT INTO metadata(key,value) VALUES (?,?)')->execute(['subscription','{"endpoint":"legacy fixture"}']);
+    $legacy->setCategories(['mail']);
+    $legacy->observeMail([]);
+    $legacy->observeMail([['ID'=>str_repeat('X',22),'Created'=>gmdate('c'),'Subject'=>'Preserve']]);
+    check_notice($legacy->claimPush()===null,'Legacy subscription cannot enable background delivery');
+    check_notice((int)$inspect->query("SELECT COUNT(*) FROM metadata WHERE key='subscription'")->fetchColumn()===0,'Legacy subscription retired');
+    check_notice($legacy->categories()===['mail'],'System categories preserved');
+    check_notice(count($legacy->poll($a,false)['items'])===1,'History preserved');
+    check_notice($legacy->claimPush($since)===null,'Live client still suppresses native delivery');
+    $legacy->leave($a);
+    check_notice($legacy->claimPush($since)!==null,'Native transport still works after legacy cleanup');
+    unset($inspect,$legacy);
+} finally {unlink($legacyFile);}
 // Service completion is a distinct, exactly-once terminal event. The
 // acceptance itself remains info and a restart can finish between polls.
 $svc=new DevStackNotices(':memory:');

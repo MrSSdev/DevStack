@@ -29,23 +29,20 @@ function worker(existing=false){
     addEventListener:(type,handler)=>listeners.set(type,handler)
   }
   vm.runInNewContext(source,{self,URL,fetch:async(url,options)=>calls.push(['fetch',url,options])})
-  return {calls,dispatch:async(type,event)=>{
+  return {calls,hasListener:type=>listeners.has(type),dispatch:async(type,event)=>{
     let done
     listeners.get(type)({...event,waitUntil:p=>{done=p}})
     await done
   }}
 }
 
-test('push carries the exact journal ID and cold click opens the mail with its read marker',async()=>{
+test('Web Push listener is retired but an existing notification can still be opened',async()=>{
   const w=worker()
-  await w.dispatch('push',{data:{json:()=>({id,category:'mail',kind:'info'})}})
-  const [,title,options]=w.calls[0]
-  assert.equal(title,'Nowa poczta w DevStack')
-  assert.equal(options.data.id,id)
+  assert.equal(w.hasListener('push'),false)
   let closed=false
-  await w.dispatch('notificationclick',{notification:{...options,close:()=>{closed=true}}})
+  await w.dispatch('notificationclick',{notification:{data:{route,id},close:()=>{closed=true}}})
   assert.equal(closed,true)
-  assert.deepEqual(w.calls[1],['open',base+route+'?notice='+id])
+  assert.deepEqual(w.calls,[['open',base+route+'?notice='+id]])
 })
 
 test('existing window is focused and older notifications recover the ID from the tag',async()=>{

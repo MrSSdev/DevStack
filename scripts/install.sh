@@ -50,10 +50,10 @@ install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web /var/lib/
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
 cp -a "$SRC/backend/mail-preview.php" /opt/devstack/mail-preview.php
-for item in notifications.php push-helper.php; do
+for item in notifications.php; do
   install -m 0644 -o root -g root "$SRC/backend/$item" "/opt/devstack/$item"
 done
-for item in notifications-worker.php notification-push.py devstack-notifications.service devstack-notifications.timer; do
+for item in notifications-worker.php devstack-notifications.service devstack-notifications.timer; do
   install -m 0644 -o root -g root "$SRC/scripts/$item" "/opt/devstack/scripts/$item"
 done
 install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
