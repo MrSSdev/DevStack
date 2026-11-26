@@ -216,8 +216,7 @@ jobs:
           $manifestPath = Join-Path $bundle 'SHA256SUMS.txt'
           $saved = [IO.File]::ReadAllBytes($manifestPath)
           try {
-            $lines = @(Get-Content -LiteralPath $manifestPath | Where-Object { $_ -notmatch '  layout/install-hosts-sync\.ps1
- })
+            $lines = @(Get-Content -LiteralPath $manifestPath | Where-Object { -not $_.EndsWith('  layout/install-hosts-sync.ps1',[StringComparison]::Ordinal) })
             Set-Content -LiteralPath $manifestPath -Value $lines -Encoding Ascii
             $rejected = $false
             try { & $entry -ExpectedCommit $env:GITHUB_SHA -VerifyOnly | Out-Null } catch { $rejected = $true }
