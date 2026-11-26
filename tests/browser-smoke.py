@@ -652,10 +652,13 @@ class BrowserAcceptance(unittest.TestCase):
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(installer.get_by_text('Nowszy błąd instalacji.',exact=False)).to_be_visible()
         expect(installer).to_have_count(1)
-        # Full cards remain expanded visually even when the pointer and focus
-        # are elsewhere. Close must be discoverable by its accessible role
-        # without hovering, forcing the click, or including hidden elements.
+        # The frontmost card's visible close remains accessible without
+        # hover. If another independent notice is in front, expand the stack
+        # with keyboard focus to reveal the installer's real close control.
         self.page.mouse.move(1,1)
+        if installer.locator('[data-slot="toast-content"]').get_attribute('data-behind') is not None:
+            installer.focus()
+            expect(installer).to_have_attribute('data-expanded','')
         close = installer.get_by_role('button',name='Zamknij powiadomienie',exact=True)
         expect(close).to_be_visible()
         expect(close).to_have_attribute('aria-hidden','false')
@@ -1150,6 +1153,89 @@ class BrowserAcceptance(unittest.TestCase):
         bell.click()
         expect(outcome).to_have_count(0)
         expect(ack).to_have_count(1)
+
+
+    def test_12_native_toast_stack_and_no_animation_overflow(self):
+        # Real mail notices, a native modal, and the real toast manager.
+        self.goto('dashboard')
+        self.page.set_viewport_size({'width':600,'height':850})
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        self.dismiss_visible_toasts()
+        self.page.locator('main button').filter(has_text='MariaDB').click()
+        dialog=self.page.locator('dialog:modal')
+        host=dialog.locator('[data-slot="toast-host"]')
+        expect(host).to_have_count(1)
+        self.page.mouse.move(1,1)
+        send('Stack fixture first')
+        self.wait_total(1)
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        cards=host.locator('[data-slot="toast"]:not([data-ending-style])')
+        first=cards.filter(has_text='Stack fixture first')
+        expect(first).to_be_visible(timeout=20000)
+        # Hold the first toast using actual hover while the next collection
+        # runs, then leave the viewport to see the native collapsed stack.
+        first.hover()
+        expect(first).to_have_attribute('data-expanded','')
+        send('Stack fixture second with a different and longer subject for height measurement')
+        self.wait_total(2)
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        second=cards.filter(has_text='Stack fixture second')
+        expect(second).to_be_visible(timeout=20000)
+        self.page.mouse.move(1,1)
+        expect(first).not_to_have_attribute('data-expanded','')
+        expect(second).not_to_have_attribute('data-expanded','')
+        expect(first.locator('[data-slot="toast-content"]')).to_have_css('opacity','0')
+        expect(second.locator('[data-slot="toast-content"]')).to_have_css('opacity','1')
+        expect(cards).to_have_count(2)
+        self.page.wait_for_timeout(550)
+        collapsed=host.evaluate("""e=>{
+            const cards=[...e.querySelectorAll('[data-slot="toast"]:not([data-ending-style])')];
+            const [front,back]=cards.map(c=>c.getBoundingClientRect());
+            const viewport=e.querySelector('[data-slot="toast-viewport"]').getBoundingClientRect();
+            return {overlap:back.bottom-front.top,frontWidth:front.width,backWidth:back.width,
+              rightGap:innerWidth-front.right,aligned:Math.abs(front.right-viewport.right)<1,
+              clipping:getComputedStyle(e).overflowX};
+        }""")
+        self.assertGreater(collapsed['overlap'],0,collapsed)
+        self.assertLess(collapsed['backWidth'],collapsed['frontWidth'],collapsed)
+        self.assertTrue(collapsed['aligned'],collapsed)
+        self.assertLess(collapsed['rightGap'],40,collapsed)
+        self.assertEqual(collapsed['clipping'],'clip')
+        self.shot('600-toast-collapsed-modal')
+        second.hover()
+        expect(first).to_have_attribute('data-expanded','')
+        expect(first.locator('[data-slot="toast-content"]')).to_have_css('opacity','1')
+        self.page.wait_for_timeout(550)
+        self.assertTrue(host.evaluate("""e=>{
+            const [front,back]=[...e.querySelectorAll('[data-slot="toast"]:not([data-ending-style])')].map(c=>c.getBoundingClientRect());
+            return back.bottom<front.top && Math.abs(back.width-front.width)<1;
+        }"""))
+        self.shot('600-toast-expanded-modal')
+        # Sample every rendered frame of the real dismiss animation, not
+        # just the final screenshot. Neither the document nor the modal
+        # may acquire extra horizontal scrollable width.
+        self.page.evaluate("""()=>{
+            const elements=[document.documentElement,document.body,document.querySelector('dialog:modal')];
+            const baseline=elements.map(e=>e.scrollWidth);
+            window.__toastOverflow=new Promise(resolve=>{
+                const end=performance.now()+1500;let max=0;
+                function sample(){
+                    elements.forEach((e,i)=>{max=Math.max(max,e.scrollWidth-baseline[i])});
+                    if(performance.now()<end)requestAnimationFrame(sample);else resolve(max);
+                }
+                requestAnimationFrame(sample);
+            });
+        }""")
+        second.get_by_role('button',name='Zamknij powiadomienie',exact=True).click()
+        expect(second).to_have_count(0)
+        self.assertEqual(self.page.evaluate('window.__toastOverflow'),0)
+        expect(first).to_be_visible()
+        # Closing the modal moves the same live portal back to the document.
+        dialog.get_by_role('button',name='Zamknij',exact=True).click()
+        expect(self.page.locator('body > [data-slot="toast-host"]')).to_have_count(1)
+        expect(self.page.locator('[data-slot="toast"]').filter(has_text='Stack fixture first')).to_be_visible()
+        self.dismiss_visible_toasts()
 
 
 if __name__=='__main__':
