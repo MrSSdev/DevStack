@@ -1,7 +1,7 @@
 """Destructive acceptance tests for a disposable, fully installed DevStack.
 
 The app, PHP session boundary, Unix helper, Nginx, databases, and Mailpit are
-real. The dedicated notification lifecycle scenario replays only engine_job in a state response; other scenarios use real requests. Never use a personal inbox.
+real. The dedicated notification lifecycle scenario replays only engine_job in a state response. External fixture image requests are intercepted in the explicit image opt-in test. Mailbox requests and writes are real. Never use a personal inbox.
 """
 import base64
 import json
@@ -84,7 +84,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.errors = []
         self.external = []
         self.page.on('pageerror', lambda error: self.errors.append(str(error)))
-        self.page.on('request', lambda req: self.external.append(req.url) if not req.url.startswith(BASE + '/') else None)
+        self.page.on('request', lambda req: self.external.append(req.url) if not req.url.startswith((BASE + '/', 'data:')) else None)
         self.csrf = self.context.request.get(BASE + '/api/session').json()['csrf']
         login = self.post('/api/login', {'password':os.environ['DEVSTACK_E2E_PASSWORD']})
         self.assertEqual(login.status, 200, login.text())
@@ -315,6 +315,9 @@ class BrowserAcceptance(unittest.TestCase):
         logo=preview.locator('img[alt="Fixture logo"]')
         expect(logo).to_have_attribute('src',re.compile('^data:image/png;base64,'))
         expect(logo).to_be_visible()
+        for _ in range(50):
+            if logo.evaluate('e=>e.complete&&e.naturalWidth===1'):break
+            self.page.wait_for_timeout(100)
         self.assertTrue(logo.evaluate('e=>e.complete&&e.naturalWidth===1'))
         expect(preview.locator('img[alt="Remote"]')).not_to_have_attribute('src',re.compile('.+'))
         self.assertTrue(iframe.evaluate('e=>e.contentDocument===null'))

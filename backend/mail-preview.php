@@ -113,11 +113,19 @@ function devstack_render_mail_preview(
         }
         return null;
     };
-    $attributes = static function (\Dom\Element $el, string $tag) use ($attrs, $source): string {
+    // Repeating the same CID must not inflate the response without bound.
+    $imageOutputBytes = 0;
+    $boundedSource = static function (string $value) use ($source, &$imageOutputBytes): ?string {
+        $result = $source($value);
+        if ($result === null || $imageOutputBytes + strlen($result) > 6 * 1024 * 1024) return null;
+        $imageOutputBytes += strlen($result);
+        return $result;
+    };
+    $attributes = static function (\Dom\Element $el, string $tag) use ($attrs, $boundedSource): string {
         $out = '';
         foreach ($attrs as $name) {
             if ($el->hasAttribute($name)) {
-                $out .= ' ' . $name . '="' . devstack_preview_escape($el->getAttribute($name)) . '"';
+                $out .= ' ' . $name . '="' . devstack_preview_escape(($el->getAttribute($name) ?? '')) . '"';
             }
         }
         if ($tag === 'a') {
@@ -125,14 +133,14 @@ function devstack_render_mail_preview(
             $out .= ' aria-disabled="true"';
         }
         if ($tag === 'img') {
-            $alt = $el->getAttribute('alt');
+            $alt = $el->getAttribute('alt') ?? '';
             $out .= ' alt="' . devstack_preview_escape($alt) . '"';
-            $src = $source($el->getAttribute('src'));
+            $src = $boundedSource($el->getAttribute('src') ?? '');
             if ($src !== null) $out .= ' src="' . devstack_preview_escape($src) . '"';
             $out .= ' referrerpolicy="no-referrer"';
         }
         if (in_array($tag, ['body', 'table', 'td', 'th', 'tr'], true) && $el->hasAttribute('background')) {
-            $src = $source($el->getAttribute('background'));
+            $src = $boundedSource($el->getAttribute('background') ?? '');
             if ($src !== null) $out .= ' background="' . devstack_preview_escape($src) . '"';
         }
         return $out;
@@ -152,7 +160,7 @@ function devstack_render_mail_preview(
             $css = $node->textContent;
             // Never serialize raw-text closing tags recovered by a parser.
             if (stripos($css, '</style') !== false) return '';
-            $media = $node->getAttribute('media');
+            $media = $node->getAttribute('media') ?? '';
             return '<style' . ($media !== '' ? ' media="' . devstack_preview_escape($media) . '"' : '') .
                 '>' . $css . '</style>';
         }

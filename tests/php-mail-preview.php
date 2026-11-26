@@ -41,6 +41,8 @@ preview_check(str_contains($withImages, 'src="https://example.invalid/logo.png"'
 preview_check(!str_contains($withImages, 'href=') && !str_contains($withImages, 'onerror='), 'Opt-in does not enable navigation or scripts');
 $unsafe = devstack_render_mail_preview('<img src="javascript:alert(1)"><img src="data:text/html;base64,PHNjcmlwdD4="><img src="https://u:p@example.invalid/a"><img src="http://example.invalid/a">', [], null, true);
 preview_check(!str_contains($unsafe, 'src='), 'Reject unsupported and credentialed image URLs');
+$missing = devstack_render_mail_preview('<style>p{color:red}</style><img><p>Safe text</p>');
+preview_check(str_contains($missing, '<style>p{color:red}</style>') && str_contains($missing, '<img alt=""'), 'Missing optional modern DOM attributes are safe');
 $policy = devstack_mail_preview_policy(false);
 preview_check(str_contains($policy, "sandbox; script-src 'none'; style-src 'unsafe-inline'; img-src data:;"), 'Isolated no-network default policy');
 preview_check(str_contains($policy, "form-action 'none'; base-uri 'none'; frame-ancestors https://devstack.test"), 'Restrict forms and framing');
