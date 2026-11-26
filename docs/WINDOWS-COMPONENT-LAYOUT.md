@@ -58,3 +58,42 @@ The new CI fixture exercises fresh NTFS ACLs, idempotence, selected
 components, legacy root refusal, unexpected ACL refusal and a junction root.
 This does not yet certify an actual workstation migration or a medium-token
 UAC test.
+
+## Root-only migration checkpoint
+
+The migration engine is windows/windows-layout-migration.ps1. Do **not**
+run it on the workstation yet: the future orchestrator must drain the
+notification collector and stage the notification files as the ordinary
+Windows user before publication, and coordinate the Hosts and Widgets
+upgrades. This engine alone does not perform those operations.
+
+Stage prepares a distinct administrator-owned root with the notification
+directory only, under a uniquely named C:\DevStack-migration-<id> container.
+Its administrator-owned journal records the original and replacement NTFS
+directory identities. The old root remains untouched. The root-only engine
+does not read, copy, execute, or delete legacy component files as admin.
+
+Publish moves the old root to previous and the new root to C:\DevStack.
+Each move is a no-replace rename of the verified directory object by handle,
+not a recursive copy or in-place ownership change. There is a gap between
+the two renames: this is not an atomic cross-directory transaction. A
+competing path, identity change, reparse point or incompatible handle is
+refused. Inspect recognizes the staged, between-renames and published
+states by the protected journal and actual directory identities.
+Rollback restores the original directory and retains the replacement in
+next; on ordinary second-rename failure the engine attempts restoration.
+If a name has been occupied or identity/policy changed, keep both trees and
+inspect, rather than overwriting anything. The previous user-owned tree is
+not an immutable backup against the signed-in user.
+
+The root-only rollback is blocked once any additional root component is
+present or the known elevated Hosts task is no longer in its legacy state.
+The full integration must have its own task-aware rollback ordering and
+retire this root-only transaction before activating new privileged code.
+No production cleanup, notification installation, WSL wakeup, task change,
+or registry change is performed by this engine.
+
+CI uses disposable directories and fixture contents to verify object
+identity, no-replacement behavior, interruption/collision recovery,
+idempotence and retention of both trees. It does not prove native WinRT,
+a real medium-token copy, or a complete Windows installation.
