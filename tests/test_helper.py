@@ -1,9 +1,11 @@
 """No root or system services are used by these unit tests."""
+import base64
 import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('devstackd', Path(__file__).resolve().parents[1] / 'daemon/devstackd.py')
@@ -478,6 +480,32 @@ class ValidationTests(unittest.TestCase):
             d.write_json_atomic(path, {'key': 'value'})
             self.assertEqual(d.read_json(path)['key'], 'value')
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_windows_notification_uses_only_the_fixed_program_and_typed_input(self):
+        event = {'id': 'mail-' + 'a'*22, 'category': 'mail', 'kind': 'info'}
+        with tempfile.TemporaryDirectory() as tmp:
+            mode = Path(tmp) / 'enabled'
+            exe = Path(tmp) / 'powershell.exe'
+            exe.touch()
+            with patch.object(d, 'WINDOWS_NOTIFICATION_MODE', mode), patch.object(d, 'WINDOWS_POWERSHELL', exe), patch.object(d.subprocess, 'run') as run:
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                mode.touch()
+                for bad in ({**event, 'path': 'unexpected'}, {**event, 'id': 'https://other.test/'},
+                            {**event, 'category': ['mail']}, {**event, 'kind': 'loading'}):
+                    with self.assertRaises(d.InputError):
+                        d.show_windows_notification(bad)
+                run.assert_not_called()
+                run.return_value = SimpleNamespace(returncode=0)
+                self.assertTrue(d.show_windows_notification(event)['accepted'])
+                arguments = run.call_args.args[0]
+                self.assertEqual(arguments[0], str(exe))
+                self.assertEqual(arguments[-2], '-EncodedCommand')
+                self.assertEqual(base64.b64decode(arguments[-1]).decode('utf-16-le'),
+                                 d.WINDOWS_NOTIFICATION_SCRIPT.read_text(encoding='utf-8-sig'))
+                self.assertEqual(json.loads(run.call_args.kwargs['input']), event)
+                self.assertEqual(run.call_args.kwargs['timeout'], 6)
+                run.return_value = SimpleNamespace(returncode=1)
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
 
     def test_nginx_config_rollback_on_validation_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

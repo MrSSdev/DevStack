@@ -53,7 +53,7 @@ cp -a "$SRC/backend/mail-preview.php" /opt/devstack/mail-preview.php
 for item in notifications.php push-helper.php; do
   install -m 0644 -o root -g root "$SRC/backend/$item" "/opt/devstack/$item"
 done
-for item in notifications-worker.php notification-push.py devstack-notifications.service devstack-notifications.timer; do
+for item in notifications-worker.php notification-push.py windows-local-notification.ps1 devstack-notifications.service devstack-notifications.timer; do
   install -m 0644 -o root -g root "$SRC/scripts/$item" "/opt/devstack/scripts/$item"
 done
 install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py

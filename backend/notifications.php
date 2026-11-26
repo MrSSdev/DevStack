@@ -444,25 +444,27 @@ final class DevStackNotices
         $this->execute("DELETE FROM metadata WHERE key='subscription'");
     }
 
-    public function claimPush(): ?array
+    /** Reserve a background delivery. A local opt-in time selects Windows without a Web Push subscription. */
+    public function claimPush(?int $windowsEnabledSince = null): ?array
     {
-        return $this->atomic(function () {
+        return $this->atomic(function () use ($windowsEnabledSince) {
             $this->prune();
             if ($this->anyPresent()) return null;
-            $subscription=$this->meta('subscription');
-            if ($subscription===null) return null;
+            $subscription=$windowsEnabledSince===null?$this->meta('subscription'):null;
+            if ($windowsEnabledSince===null&&$subscription===null) return null;
             // Automatic mail events have no initiating operation toast to
             // acknowledge. Once no client is present, dispatch in the same
             // collector cycle instead of waiting for the next timer tick.
             // Keep the existing grace period for all other events.
             foreach ($this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND push=1
-                AND ((category='mail' AND direct=0) OR updated<=?) ORDER BY updated,id LIMIT 200",[time()-2])->fetchAll() as $row) {
+                AND updated>=? AND ((category='mail' AND direct=0) OR updated<=?) ORDER BY updated,id LIMIT 200",
+                [$windowsEnabledSince??0,time()-2])->fetchAll() as $row) {
                 if (!in_array($row['category'],$this->categories(),true)) continue;
                 // Claim once before the network call. Unknown delivery is not
                 // retried (avoid duplicate system notifications).
                 $this->execute("UPDATE notices SET delivery='push' WHERE id=?",[$row['id']]);
                 return ['id'=>$row['id'],'journal_age_s'=>max(0,time()-(int)$row['updated']),
-                    'subscription'=>json_decode($subscription,true,16,JSON_THROW_ON_ERROR),
+                    'subscription'=>$subscription===null?null:json_decode($subscription,true,16,JSON_THROW_ON_ERROR),
                     // Generic text only. No subject, recipient, hostname,
                     // project name, secret or original daemon output in push.
                     'payload'=>['id'=>$row['id'],'category'=>$row['category'],'kind'=>$row['kind']]];

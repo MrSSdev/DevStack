@@ -6,6 +6,7 @@ Supported operations are intentionally small and typed.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -51,6 +52,10 @@ ENGINE_VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+\Z')
 ENGINE_UNIT = re.compile(r'devstack-engine-[0-9a-f]{32}-[a-z-]+\Z')
 WINDOWS_SCHTASKS = pathlib.Path('/mnt/c/Windows/System32/schtasks.exe')
 WINDOWS_HOSTS_TASK = 'DevStack Hosts Event Sync'
+WINDOWS_POWERSHELL = WINDOWS_SCHTASKS.with_name('WindowsPowerShell') / 'v1.0' / 'powershell.exe'
+WINDOWS_NOTIFICATION_MODE = pathlib.Path('/etc/devstack/windows-local-notifications')
+WINDOWS_NOTIFICATION_SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'scripts/windows-local-notification.ps1'
+WINDOWS_NOTIFICATION_ID = re.compile(r'(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22}')
 SLUG = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 DOMAIN = re.compile(r'[a-z][a-z0-9-]{0,39}\.test\Z')
 WEBROOT = re.compile(r'[a-zA-Z0-9_][a-zA-Z0-9_/-]{0,99}\Z')
@@ -1515,7 +1520,34 @@ def notification_snapshot(_: dict[str, Any]) -> dict[str, Any]:
     return {'engine_job': public_engine_job(), 'services': managed_services.public_rows()}
 
 
-OPS = {'notification_snapshot': notification_snapshot, 'status': status, 'create': create, 'reveal': reveal,
+def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
+    if set(data) != {'id', 'category', 'kind'} or not all(isinstance(value, str) for value in data.values()):
+        raise InputError('Nieprawidlowe powiadomienie Windows.')
+    if (not WINDOWS_NOTIFICATION_ID.fullmatch(data['id'])
+            or data['category'] not in ('mail', 'project', 'installer', 'service', 'settings')
+            or data['kind'] not in ('success', 'error', 'info')):
+        raise InputError('Nieprawidlowe powiadomienie Windows.')
+    if not WINDOWS_NOTIFICATION_MODE.is_file() or not WINDOWS_POWERSHELL.is_file():
+        return {'accepted': False}
+    try:
+        # Only this deployed script is executable. The event travels as JSON
+        # on stdin regardless of the Windows command-line quoting rules.
+        script = WINDOWS_NOTIFICATION_SCRIPT.read_text(encoding='utf-8-sig')
+        encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
+        result = subprocess.run(
+            [str(WINDOWS_POWERSHELL), '-NoLogo', '-NoProfile', '-NonInteractive',
+             '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
+            cwd=WINDOWS_POWERSHELL.parent,
+            input=(json.dumps(data, ensure_ascii=True) + '\n').encode('ascii'),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6,
+        )
+        return {'accepted': result.returncode == 0}
+    except (OSError, subprocess.TimeoutExpired):
+        return {'accepted': False}
+
+
+OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notification': show_windows_notification,
+       'status': status, 'create': create, 'reveal': reveal,
        'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,

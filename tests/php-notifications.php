@@ -150,4 +150,25 @@ try {
     check_notice((int)$inspect->query('SELECT COUNT(*) FROM closed_clients')->fetchColumn()===0,'Close markers are pruned after their retention period');
     unset($inspect,$leaseStore);
 } finally {unlink($fixture);}
-echo "Notification journal, deletion, deduplication, presence, click read and push policy: OK\n";
+$local=new DevStackNotices(':memory:');
+$local->observeMail([]);
+$localId='mail-'.str_repeat('N',22);
+$local->observeMail([['ID'=>substr($localId,5),'Created'=>gmdate('c'),'Subject'=>'Private fixture subject']]);
+check_notice($local->claimPush()===null,'Web Push still requires a subscription');
+check_notice($local->claimPush(time()+60)===null,'Local opt-in does not dispatch older events');
+$local->poll($a,false);
+check_notice($local->claimPush(time()-60)===null,'Live tab also suppresses local Windows delivery');
+$local->leave($a);
+$native=$local->claimPush(time()-60);
+check_notice(is_array($native)&&$native['subscription']===null&&$native['payload']===
+    ['id'=>$localId,'category'=>'mail','kind'=>'info'],'Local delivery works with no subscription and sends generic data');
+check_notice($local->claimPush(time()-60)===null,'Local delivery shares the one-time claim');
+$local->pushFailed($localId,false);
+$afterLocalFailure=$local->poll($b);
+check_notice($afterLocalFailure['toast']===[]&&$afterLocalFailure['items'][0]['id']===$localId,'Local failure keeps journal history without another automatic delivery');
+$local->leave($b);
+$local->subscribe($subscription);
+$local->observeMail([['ID'=>str_repeat('W',22),'Created'=>gmdate('c')]]);
+check_notice($local->claimPush(time()-60)!==null&&$local->claimPush()===null,
+    'A native claim cannot be delivered again through a saved Web Push subscription');
+echo "Notification journal, deletion, deduplication, presence, click read and system delivery policy: OK\n";
