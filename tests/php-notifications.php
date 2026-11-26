@@ -87,4 +87,50 @@ $clickStore->mutate('delete',$one);
 check_notice(count($clickStore->poll($a,true,$one)['items'])===1,'Stale click does not restore deleted event');
 try {$clickStore->poll($a,true,'invalid');check_notice(false,'Invalid click ID accepted');}
 catch(InvalidArgumentException) {}
+// Closed clients must never reclaim a toast or renew their lease with an
+// old poll, regardless of whether leave or the initial poll arrives first.
+// An operation and a state/job snapshot must not renew presence either.
+$presence=new DevStackNotices(':memory:');
+$presence->observeMail([]);
+$presence->subscribe($subscription);
+$presence->setCategories(['mail']);
+$presence->poll($a);$presence->poll($b);
+$presence->leave($a);
+$presence->leave($a); // Idempotent.
+$presence->observeMail([['ID'=>str_repeat('L',22),'Created'=>gmdate('c'),'Subject'=>'Close race']]);
+check_notice($presence->poll($a)['toast']===[],'Late closed-client poll cannot steal a toast');
+check_notice($presence->claimPush()===null,'One remaining live tab still suppresses push');
+$presence->leave($b);
+$c=str_repeat('e',32);
+$presence->leave($c); // Leave can precede registration.
+check_notice($presence->poll($c)['toast']===[],'Leave before initial poll blocks delayed registration');
+$presence->operation('/api/preferences',['theme'=>'dark'],[],$a);
+$lateJob=['id'=>str_repeat('f',32),'slug'=>'demo','state'=>'scaffolding','message'=>'Working'];
+$presence->operation('/api/projects',['slug'=>'demo','engine'=>'laravel'],['job_id'=>$lateJob['id']],$a);
+check_notice($presence->observeJob($lateJob,$a)['show']===false,'Closed client cannot claim job presentation');
+$immediate=$presence->claimPush();
+check_notice(is_array($immediate)&&$immediate['payload']['category']==='mail','Closed clients and late operations do not block same-cycle push');
+$new=str_repeat('9',32);
+$presence->poll($new);
+$presence->observeMail([['ID'=>str_repeat('K',22),'Created'=>gmdate('c'),'Subject'=>'Restored document']]);
+check_notice($presence->claimPush()===null,'New document lifetime renews presence');
+check_notice(array_column($presence->poll($new)['toast'],'id')===['mail-'.str_repeat('K',22)],'New document can receive foreground notifications');
+$presence->leave($new);
+// Verify the persisted 90-second lease and pruning without sleeping for it.
+$fixture=tempnam(sys_get_temp_dir(),'devstack-notices-');
+try {
+    $leaseStore=new DevStackNotices($fixture);
+    $leaseStore->observeMail([]);$leaseStore->subscribe($subscription);$leaseStore->setCategories(['mail']);
+    $leaseStore->poll($a);
+    $inspect=new PDO('sqlite:'.$fixture);
+    $remaining=(int)$inspect->query('SELECT expires FROM clients')->fetchColumn()-time();
+    check_notice($remaining>=88&&$remaining<=90,'Heartbeat lease is 90 seconds');
+    $inspect->exec('UPDATE clients SET expires=0');
+    $leaseStore->observeMail([['ID'=>str_repeat('J',22),'Created'=>gmdate('c')]]);
+    check_notice($leaseStore->claimPush()!==null,'Expired unclosed client no longer blocks push');
+    $leaseStore->leave($b);$inspect->exec('UPDATE closed_clients SET expires=0');
+    $leaseStore->poll($a,false);
+    check_notice((int)$inspect->query('SELECT COUNT(*) FROM closed_clients')->fetchColumn()===0,'Close markers are pruned after their retention period');
+    unset($inspect,$leaseStore);
+} finally {unlink($fixture);}
 echo "Notification journal, deletion, deduplication, presence, click read and push policy: OK\n";

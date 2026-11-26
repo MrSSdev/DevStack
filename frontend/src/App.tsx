@@ -19,7 +19,7 @@ import { frameworkWebroot, resolveInstallerFields, type InstallerField, type Ins
 import { resolveProjectIdentity, projectIdentityPayload, type ProjectIdentityDraft } from '@/lib/project-identity'
 import { MailInbox } from '@/components/mail-inbox'
 import { NotificationCenter, NotificationSettings, useNotificationCenter } from '@/components/notification-center'
-import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange, notificationRouteHash } from '@/lib/notification-client'
+import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange, notificationRouteHash, renewNotificationClient } from '@/lib/notification-client'
 import { PageHeader } from '@/components/page-header'
 import { ManagedServices, WidgetServiceSettings, type ManagedService } from '@/components/managed-services'
 
@@ -64,9 +64,10 @@ function nginxRules(config?: {overrides?:string;extra_locations?:string}) {
 const blank: Draft = { name: '', slug: null, domain: null, webroot: 'public', database: true, https: true, local_mail: false, engine: 'none', starter_kit: 'none' }
 
 async function request<T>(method: 'GET'|'POST', path: string, csrf?: string, data?: unknown): Promise<T> {
+  const client=notificationClient
   const response = await fetch(path, {
     method, credentials: 'same-origin', cache: 'no-store',
-    headers: { 'X-DevStack-Client':notificationClient, ...(data ? {'Content-Type':'application/json'} : {}), ...(method === 'POST' ? {'X-CSRF-Token':csrf ?? ''} : {}) },
+    headers: { 'X-DevStack-Client':client, ...(data ? {'Content-Type':'application/json'} : {}), ...(method === 'POST' ? {'X-CSRF-Token':csrf ?? ''} : {}) },
     ...(data ? {body:JSON.stringify(data)} : {}),
   })
   let body: Envelope<T>
@@ -74,7 +75,7 @@ async function request<T>(method: 'GET'|'POST', path: string, csrf?: string, dat
   catch { throw new Error(`Nieprawidłowa odpowiedź serwera (HTTP ${response.status}).`) }
   if(method==='POST'&&csrf){
     const result=body.result as {notification_id?:string}|undefined
-    acknowledgeOperation(result?.notification_id??body.notification_id,csrf)
+    acknowledgeOperation(result?.notification_id??body.notification_id,csrf,client)
     if(result?.notification_id?.startsWith('job-'))window.dispatchEvent(new Event(notificationChange))
   }
   if (!response.ok || !body.ok) throw new Error(body.error || `Błąd HTTP ${response.status}.`)
@@ -309,7 +310,7 @@ export function App() {
     e.preventDefault();setBusy(true);toast.close('login-error')
     try {
       const info=await request<{authenticated:boolean;csrf:string}>('POST','/api/login',csrf,{password:loginPassword})
-      closingSession.current=false;setDismissedJob(readAcknowledgedJob());setCsrf(info.csrf);setAuthenticated(true);setLoginPassword('');await refresh()
+      renewNotificationClient();closingSession.current=false;setDismissedJob(readAcknowledgedJob());setCsrf(info.csrf);setAuthenticated(true);setLoginPassword('');await refresh()
     }catch(e){fail(e,'login-error')}finally{setBusy(false)}
   }
   async function logout(){

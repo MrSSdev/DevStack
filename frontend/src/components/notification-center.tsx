@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch'
 import { toast, fail } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
-import { consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
+import { consumeNotificationClick, disablePush, emptyNoticeState, enablePush, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, renewNotificationClient, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
 
 export function useNotificationCenter(authenticated:boolean,csrf:string,request:NoticeRequest,navigate:(route:string)=>void){
   const [state,setState]=useState<NoticeState>(emptyNoticeState)
@@ -15,16 +15,23 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
   const queued=useRef(false)
   const generation=useRef(0)
   const active=useRef(false)
+  const suspended=useRef(false)
+  const syncRef=useRef<()=>Promise<void>>(async()=>{})
   const pendingOpened=useRef(new Set<string>())
   const navigateRef=useRef(navigate)
   navigateRef.current=navigate
   const show=(item:Notice)=>{
     toast.add({id:item.id,title:item.title,description:item.description,type:item.kind,
       timeout:item.kind==='error'?12000:9000,
-      actionProps:isNoticeRoute(item.route)?{children:'Otwórz',onClick:()=>{navigateRef.current(item.route);toast.close(item.id)}}:undefined})
+      actionProps:isNoticeRoute(item.route)?{children:'Otwórz',onClick:()=>{
+        // Use the same exact-event acknowledgement as a Windows click. The
+        // server marks it read before returning history; never read all.
+        pendingOpened.current.add(item.id)
+        navigateRef.current(item.route);toast.close(item.id);void syncRef.current()
+      }}:undefined})
   }
   const sync=useCallback(async()=>{
-    if(!active.current||!csrf)return
+    if(!active.current||suspended.current||!csrf)return
     const clicked=notificationClickId()
     if(clicked)pendingOpened.current.add(clicked)
     if(inFlight.current){queued.current=true;return}
@@ -33,7 +40,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     const opened=pendingOpened.current.values().next().value
     try{
       const result=await request<NoticeState>('POST','/api/notifications/poll',csrf,{client:notificationClient,...(opened?{opened}:{})})
-      if(!active.current||version!==generation.current)return
+      if(!active.current||suspended.current||version!==generation.current)return
       if(opened){
         pendingOpened.current.delete(opened)
         consumeNotificationClick(opened)
@@ -43,33 +50,53 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
       setState(result);setAvailable(true)
       for(const item of result.toast)show(item)
     }catch{
-      if(active.current&&version===generation.current)setAvailable(false)
+      if(active.current&&!suspended.current&&version===generation.current)setAvailable(false)
     }finally{
       inFlight.current=false
-      if(queued.current){queued.current=false;void sync()}
+      if(queued.current){queued.current=false;if(active.current&&!suspended.current)void syncRef.current()}
     }
   },[csrf,request])
+  syncRef.current=sync
   useEffect(()=>{
     active.current=authenticated
-    if(!authenticated){generation.current++;pendingOpened.current.clear();setState(emptyNoticeState);void updateAppBadge(0);return}
-    void sync()
-    const timer=window.setInterval(()=>{void sync()},5000)
-    const refresh=()=>{void sync()}
-    const leave=()=>leaveNotifications(csrf)
-    // A hidden/minimized page continues renewing its lease, rather than
-    // falsely declaring itself closed on visibilitychange.
+    if(!authenticated){suspended.current=false;generation.current++;pendingOpened.current.clear();setState(emptyNoticeState);void updateAppBadge(0);return}
+    let timer:number|undefined
+    const refresh=()=>{void syncRef.current()}
+    const start=()=>{if(timer===undefined)timer=window.setInterval(refresh,5000)}
+    const stop=()=>{if(timer!==undefined){window.clearInterval(timer);timer=undefined}}
+    const leave=()=>{
+      if(suspended.current)return
+      // Stop before sending leave. An in-flight response must not schedule
+      // another heartbeat or update the closed page.
+      suspended.current=true;generation.current++;queued.current=false;stop()
+      leaveNotifications(csrf,notificationClient)
+    }
+    const restore=()=>{
+      if(suspended.current){
+        // A BFCache document resumes with a new lifetime/ID. Its old keepalive
+        // leave and any old HTTP requests can arrive in either order.
+        renewNotificationClient();suspended.current=false;start()
+      }
+      refresh()
+    }
+    // Hidden/minimized is not closed. Keep the existing interval, but don't
+    // start an extra poll as visibility changes to hidden during pagehide.
+    const visibility=()=>{if(document.visibilityState==='visible')refresh()}
     window.addEventListener('focus',refresh)
-    window.addEventListener('pageshow',refresh)
+    window.addEventListener('pageshow',restore)
     window.addEventListener('hashchange',refresh)
     window.addEventListener('pagehide',leave)
     window.addEventListener(notificationChange,refresh)
-    document.addEventListener('visibilitychange',refresh)
+    document.addEventListener('visibilitychange',visibility)
+    if(!suspended.current){start();refresh()}
     return ()=>{
-      active.current=false;generation.current++;window.clearInterval(timer)
-      window.removeEventListener('focus',refresh);window.removeEventListener('pageshow',refresh)
+      active.current=false;generation.current++;queued.current=false;stop()
+      window.removeEventListener('focus',refresh)
+      window.removeEventListener('pageshow',restore)
       window.removeEventListener('hashchange',refresh)
-      window.removeEventListener('pagehide',leave);window.removeEventListener(notificationChange,refresh)
-      document.removeEventListener('visibilitychange',refresh)
+      window.removeEventListener('pagehide',leave)
+      window.removeEventListener(notificationChange,refresh)
+      document.removeEventListener('visibilitychange',visibility)
     }
   },[authenticated,csrf,sync])
   const unread=state.items.filter(item=>item.unread).length

@@ -51,10 +51,21 @@ The approved provider endpoints are restricted and redirects/proxies are
 disabled. No third-party notification service is configured by DevStack.
 
 The browser and its push infrastructure require Internet connectivity,
-permission and OS notification settings. While a page is open it renews
-a lease; a normal pagehide releases it. Minimized/hidden pages also renew.
-If a browser crashes, freezes or suspends a tab, detection can be delayed
-up to the lease interval (180 seconds). A push already in transit can
+permission and OS notification settings. Only the existing five-second
+authenticated notification poll renews a page's 90-second presence lease;
+ordinary state requests and operation results do not. Minimized/hidden
+pages keep polling as their browser permits. On pagehide the panel stops
+polling, invalidates queued responses and sends the authenticated keepalive
+leave request. The journal atomically removes the lease and remembers the
+closed document ID for 24 hours, so delayed polls cannot reactivate it
+within that retention period. A restored page (including BFCache) or a
+new login uses a fresh document lifetime ID. A hidden visibility transition
+alone is not a close. If the browser fails to deliver leave, crashes,
+freezes or throttles/suspends a page beyond the lease interval, presence
+can still be inaccurate; a missed leave expires after at most the remaining
+lease interval, and a frozen open page may receive system push instead of
+a toast. Actual Windows/Edge closure and minimized behavior require
+workstation testing. A push already in transit can
 race with a newly opened page. Edge requires visible push messages; an
 already sent message cannot be silently suppressed with perfect reliability.
 Short TTL (30 seconds), per-event claims and stable notification tags limit
@@ -75,7 +86,9 @@ A click opens DevStack or the specific mail message if still available.
 The click carries the exact notification ID in a local URL fragment. The
 first authenticated notification poll marks only that journal entry read
 and returns the updated unread count, even after a cold launch or password
-login. Clicking a stale, deleted entry does not recreate it. The fragment
+login. Opening a journal toast uses the same exact-event authenticated
+poll acknowledgement and does not mark unrelated entries read. Clicking
+a stale, deleted entry does not recreate it. The fragment
 is removed after successful acknowledgement; no GET request changes state.
 Native Windows/Edge delivery and installability must be checked on the
 actual workstation; Chromium CI uses an isolated browser and does not

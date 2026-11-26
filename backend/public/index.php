@@ -107,7 +107,6 @@ try {
         try {
             $notices=new DevStackNotices();
             $client=DevStackNotices::client($_SERVER['HTTP_X_DEVSTACK_CLIENT']??null);
-            $notices->touch($client);
             $state['engine_notice']=$notices->observeJob(is_array($state['engine_job']??null)?$state['engine_job']:null,$client);
         } catch (Throwable) { error_log('DevStack notification journal unavailable.'); }
         devstack_json(200, ['ok' => true, 'result' => $state]);

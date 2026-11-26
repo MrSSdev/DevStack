@@ -46,4 +46,12 @@ isolated clients (cold window, focused window, old notification tag and
 unsafe data), plus the real authenticated browser URL/poll flow. Only the
 clicked record becomes read, an unrelated notification stays unread, the
 marker survives password login and is consumed after acknowledgement.
-The tests do not simulate or claim successful native Windows delivery.
+Opening a real mail toast also marks only its own event read. PHP tests
+cover closed-ID tombstones, late poll/operation/job requests, a remaining
+live tab, new lifetime registration and expired leases. A browser lifecycle
+scenario exercises the real authenticated keepalive leave, late API requests,
+blocked polling after pagehide, a synthetic BFCache-style pageshow and an
+actual reload, checking only lease presence in the isolated fixture database.
+The synthetic lifecycle events are not evidence of native window closure or
+background throttling. The tests do not simulate or claim successful native
+Windows delivery.

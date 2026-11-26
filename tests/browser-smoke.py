@@ -739,19 +739,106 @@ class BrowserAcceptance(unittest.TestCase):
                 expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible(timeout=10000)
             finally:
                 cold.close()
+            # Opening a real toast, not the history entry, marks only that
+            # event read and navigates to its mail. Keep an unrelated unread.
+            send('Notification fixture epsilon')
+            self.wait_total(5)
+            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+            epsilon=panel.locator('[data-notification-id]').filter(has_text='Notification fixture epsilon')
+            expect(epsilon).to_have_count(1,timeout=20000)
+            send('Notification fixture zeta')
+            self.wait_total(6)
+            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+            zeta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture zeta')
+            expect(zeta).to_have_count(1,timeout=20000)
+            expect(panel.get_by_text('2 nowych',exact=True)).to_be_visible()
+            panel.get_by_role('button',name='Zamknij historię').click()
+            zeta_toast=self.page.locator('[data-slot="toast"]').filter(has_text='Notification fixture zeta')
+            zeta_toast.get_by_role('button',name='Otwórz',exact=True).click()
+            expect(self.page.get_by_role('heading',name='Notification fixture zeta')).to_be_visible()
+            self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
+            expect(panel.get_by_text('1 nowych',exact=True)).to_be_visible()
+            expect(epsilon.locator('[aria-label="Nieprzeczytane"]')).to_have_count(1)
+            expect(zeta.locator('[aria-label="Nieprzeczytane"]')).to_have_count(0)
             panel.get_by_role('button',name='Wyczyść wszystko',exact=True).click()
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
             self.page.reload()
             expect(self.page.locator('main')).to_be_visible()
             self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
-            self.assertEqual(mailpit()['total'],4)
+            self.assertEqual(mailpit()['total'],6)
         finally:
             if not second.is_closed():second.close()
         anonymous=self.browser.new_context()
         try:
             self.assertEqual(anonymous.request.post(BASE+'/api/notifications/poll',data={'client':'a'*32}).status,403)
         finally:anonymous.close()
+
+    def test_09_notification_presence_lifecycle(self):
+        # Inspect only the isolated fixture's client IDs, never push secrets.
+        def present(client):
+            script=("import sqlite3,sys,time;"
+                    "db=sqlite3.connect('file:/var/lib/devstack-web/notifications.sqlite3?mode=ro',uri=True);"
+                    "print(db.execute('SELECT COUNT(*) FROM clients WHERE id=? AND expires>?',"
+                    "(sys.argv[1],int(time.time()))).fetchone()[0])")
+            return subprocess.check_output(['sudo','-u','devstackweb','python3','-c',script,client],text=True).strip()=='1'
+
+        def wait_presence(client,expected):
+            for _ in range(100):
+                if present(client)==expected:return
+                self.page.wait_for_timeout(100)
+            self.fail('Unexpected lease state for '+client)
+
+        def poll_response(response):
+            return response.url==BASE+'/api/notifications/poll' and response.status==200
+
+        with self.page.expect_response(poll_response) as first:
+            self.goto('dashboard')
+        original=first.value.request.post_data_json['client']
+        self.assertTrue(present(original))
+        second=self.context.new_page()
+        try:
+            with second.expect_response(poll_response) as other:
+                second.goto(BASE+'/#/dashboard')
+            client=other.value.request.post_data_json['client']
+            self.assertNotEqual(original,client)
+            self.assertTrue(present(client))
+            requests=[]
+            second.on('request',lambda req: requests.append(req.url) if req.url==BASE+'/api/notifications/poll' else None)
+            # Drive the actual pagehide handler deterministically, leaving the
+            # test document available to exercise a BFCache-style restoration.
+            with second.expect_response(lambda r:r.url==BASE+'/api/notifications/leave' and r.status==200) as leave:
+                second.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}))")
+            self.assertEqual(leave.value.request.post_data_json['client'],client)
+            wait_presence(client,False)
+            self.assertTrue(present(original))
+            # Replay an older request at the authenticated API boundary.
+            stale=self.post('/api/notifications/poll',{'client':client})
+            self.assertEqual(stale.status,200)
+            self.assertEqual(stale.json()['result']['toast'],[])
+            self.assertEqual(self.context.request.get(BASE+'/api/state',headers={'X-DevStack-Client':client}).status,200)
+            self.assertFalse(present(client))
+            before=len(requests)
+            second.evaluate("window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('hashchange')); document.dispatchEvent(new Event('visibilitychange'))")
+            second.wait_for_timeout(5500) # Cross the real 5s heartbeat interval.
+            self.assertEqual(len(requests),before,'Closed document started another poll')
+            with second.expect_response(poll_response) as restored:
+                second.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
+            resumed=restored.value.request.post_data_json['client']
+            self.assertNotEqual(resumed,client)
+            self.assertTrue(present(resumed))
+            self.assertFalse(present(client))
+            # A genuine reload also releases the previous lifetime; no fake
+            # push provider or native Windows event is required.
+            with second.expect_response(poll_response) as reloaded:
+                second.reload()
+            fresh=reloaded.value.request.post_data_json['client']
+            self.assertNotIn(fresh,[original,client,resumed])
+            wait_presence(resumed,False)
+            self.assertTrue(present(fresh))
+            self.assertTrue(present(original))
+        finally:
+            second.close()
 
     def test_05_login_screen_and_form(self):
         anonymous=self.browser.new_context(viewport={'width':853,'height':950})

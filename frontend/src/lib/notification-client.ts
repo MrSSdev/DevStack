@@ -1,5 +1,10 @@
-// Each document has its own lease; duplicated tabs must not share an ID.
-export const notificationClient=crypto.randomUUID().replaceAll('-','')
+// Each live document lifetime has its own lease. Never reuse an ID after
+// pagehide or after a successful new login in the same document.
+export let notificationClient=crypto.randomUUID().replaceAll('-','')
+export function renewNotificationClient(){
+  notificationClient=crypto.randomUUID().replaceAll('-','')
+  return notificationClient
+}
 export const notificationChange='devstack:notifications-changed'
 export const notificationCategories=[
   {id:'mail',label:'Nowa poczta'},
@@ -37,20 +42,20 @@ export function consumeNotificationClick(id:string){
     window.history.replaceState(window.history.state,'',window.location.pathname+window.location.search+notificationRouteHash())
   }
 }
-export function acknowledgeOperation(id:unknown,csrf:string){
+export function acknowledgeOperation(id:unknown,csrf:string,client=notificationClient){
   if(typeof id!=='string'||!/^op-[a-f0-9]{32}$/.test(id))return
   // A failure to acknowledge history must not make the actual operation fail.
   void fetch('/api/notifications/ack',{method:'POST',credentials:'same-origin',cache:'no-store',
     headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
-    body:JSON.stringify({client:notificationClient,id})})
+    body:JSON.stringify({client,id})})
     .catch(()=>undefined).finally(()=>window.dispatchEvent(new Event(notificationChange)))
 }
 
-export function leaveNotifications(csrf:string){
+export function leaveNotifications(csrf:string,client=notificationClient){
   if(!csrf)return
   void fetch('/api/notifications/leave',{method:'POST',credentials:'same-origin',keepalive:true,
     headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
-    body:JSON.stringify({client:notificationClient})}).catch(()=>undefined)
+    body:JSON.stringify({client})}).catch(()=>undefined)
 }
 
 export async function updateAppBadge(count:number){
