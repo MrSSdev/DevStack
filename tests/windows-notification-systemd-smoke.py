@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import pwd
 import subprocess
-import sys
 
 if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.geteuid() != 0
         or 'microsoft' in Path('/proc/sys/kernel/osrelease').read_text().lower()):
@@ -18,6 +17,7 @@ if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.geteuid() != 0
 marker = Path('/etc/devstack/windows-local-notifications')
 mount = Path('/mnt/c')
 launcher = mount / 'DevStack/LocalNotifications/DevStack.Notifications.exe'
+observed = launcher.parent / '.ci-observed'
 if marker.exists() or marker.is_symlink() or mount.exists() or mount.is_symlink():
     raise SystemExit('Unexpected existing Windows data; refusing fixture.')
 
@@ -31,6 +31,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 assert os.geteuid() == {account.pw_uid}
 assert os.getegid() == {account.pw_gid}
@@ -39,7 +40,18 @@ assert os.environ['PATH'] == '/usr/bin:/bin'
 assert os.environ['LANG'] == 'C.UTF-8'
 assert 'WSL_INTEROP' not in os.environ
 assert any(line.split() == ['NoNewPrivs:', '1'] for line in Path('/proc/self/status').read_text().splitlines())
-assert json.loads(base64.b64decode(sys.argv[1])) == {event!r}
+data = json.loads(base64.b64decode(sys.argv[1]))
+assert data in ({event!r}, {{**{event!r}, 'kind': 'error'}}, {{**{event!r}, 'kind': 'success'}})
+with Path({str(observed)!r}).open('a') as f:
+    f.write(data['kind'] + '\\n')
+# Even this identical stdout line must not be treated as the completion
+# marker if the launcher fails: the fixed wrapper discards launcher output.
+print('DEVSTACK_NOTIFICATION_ACCEPTED', flush=True)
+if data['kind'] == 'error':
+    sys.exit(23)
+if data['kind'] == 'success':
+    time.sleep(20)
+    sys.exit(24)
 """
 
 def ctl(*args):
@@ -72,20 +84,31 @@ try:
         directory.chmod(0o755)
     launcher.write_text(fixture)
     launcher.chmod(0o755)
+    observed.touch(mode=0o600, exist_ok=False)
+    os.chown(observed, account.pw_uid, account.pw_gid)
     with marker.open('x') as f:
         marker_created = True
         f.write(str(launcher) + '\n')
     marker.chmod(0o644)
-    assert rpc(event) == {'accepted': True}, 'Actual daemon failed to deliver to the developer-UID fixture.'
-    # A valid different event must not be reported as delivered when the
-    # fixture exits nonzero. No retry/fallback may disguise this error.
-    assert rpc({**event, 'kind': 'error'}) == {'accepted': False}, 'Failed worker reported success.'
-    print('PASS: actual restricted daemon RPC, transient unit developer identity, bounded typed payload, and nonzero exit handling.')
+    expected = []
+    # Repeated fast exits exercise the race that was missed by the mocked
+    # unit test. Check independently that the fixture actually ran.
+    for _ in range(3):
+        assert rpc(event) == {'accepted': True}, 'Actual daemon failed to deliver to the developer-UID fixture.'
+        expected.append('info')
+        assert rpc({**event, 'kind': 'error'}) == {'accepted': False}, 'Failed worker reported success.'
+        expected.append('error')
+        assert observed.read_text().splitlines() == expected, 'Fixture not invoked exactly once per request.'
+    assert rpc({**event, 'kind': 'success'}) == {'accepted': False}, 'Timed-out worker reported success.'
+    expected.append('success')
+    assert observed.read_text().splitlines() == expected, 'Timeout fixture did not run.'
+    print('PASS: actual restricted RPC, developer identity, repeated completion, failed/spoofed output and timeout handling.')
 finally:
     if marker_created:
         marker.unlink()
     if mount_created:
         launcher.unlink(missing_ok=True)
+        observed.unlink(missing_ok=True)
         for directory in (launcher.parent, mount / 'DevStack', mount):
             if directory.exists():
                 directory.rmdir()

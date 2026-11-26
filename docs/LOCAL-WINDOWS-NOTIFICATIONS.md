@@ -39,9 +39,14 @@ PID 1 ustawia tożsamość przed ograniczeniami. Bezpośrednia zmiana UID/GID
 w dziecku zabezpieczonej usługi została odrzucona przez jądro na WSL
 (EPERM), dlatego nie wolno wracać do subprocess.run(user=..., group=...).
 Jednostka ma limit czasu, nie jest utrzymywana w spoczynku i nie zmienia
-zabezpieczeń devstackd. CI sprawdza rzeczywisty RPC i systemd z izolowanym
-linuksowym programem testowym, a Windows i WSL Interop wymagają odbioru
-na urządzeniu.
+zabezpieczeń devstackd. Jednostka Type=oneshot czeka na zakończenie
+programu, a stały wrapper działający jako deweloper emituje krótki znacznik
+potwierdzenia wyłącznie po kodzie wyjścia 0. Sam kod wyjścia systemd-run
+nie wystarcza: CI ujawnił fałszywy sukces błyskawicznie kończącej się
+jednostki Type=exec. Limit 10 s dotyczy całej operacji. Nie zapisujemy
+treści powiadomienia ani surowego wyjścia programu. CI sprawdza rzeczywisty
+RPC i systemd z izolowanym linuksowym programem testowym (sukces, błąd,
+limit czasu); Windows i WSL Interop wymagają odbioru na urządzeniu.
 
 ## Zintegrowana aktualizacja testowa
 

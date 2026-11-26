@@ -512,7 +512,7 @@ class ValidationTests(unittest.TestCase):
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
                 run.assert_not_called()
                 account.pw_gid = 1001
-                run.return_value = SimpleNamespace(returncode=0)
+                run.return_value = SimpleNamespace(returncode=0, stdout=b'DEVSTACK_NOTIFICATION_ACCEPTED\n')
                 self.assertTrue(d.show_windows_notification(event)['accepted'])
                 arguments = run.call_args.args[0]
                 self.assertEqual(arguments[0], '/usr/bin/systemd-run')
@@ -521,15 +521,21 @@ class ValidationTests(unittest.TestCase):
                 self.assertIn('--wait', arguments)
                 self.assertIn('--pipe', arguments)
                 self.assertIn('--collect', arguments)
-                self.assertIn('--service-type=exec', arguments)
+                self.assertIn('--service-type=oneshot', arguments)
                 self.assertIn('--expand-environment=no', arguments)
                 for option in ('NoNewPrivileges=yes', 'PrivateTmp=yes', 'PrivateDevices=yes',
                                'ProtectKernelTunables=yes', 'ProtectKernelModules=yes',
-                               'ProtectControlGroups=yes', 'RuntimeMaxSec=10s',
+                               'ProtectControlGroups=yes', 'TimeoutStartSec=10s',
+                               'TimeoutStopSec=2s',
                                'PartOf=devstackd.service'):
                     self.assertIn('--property=' + option, arguments)
                 self.assertIn('--working-directory=' + str(exe.parent), arguments)
-                self.assertEqual(arguments[-6:-1], ['/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', str(exe)])
+                self.assertEqual(arguments[-10:-6], ['/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8'])
+                self.assertEqual(arguments[-6:-2], ['/bin/sh', '-c',
+                    r'"$@" >/dev/null 2>&1 && printf "%s\n" DEVSTACK_NOTIFICATION_ACCEPTED',
+                    'devstack-notification'])
+                self.assertEqual(arguments[-2], str(exe))
+                self.assertEqual(run.call_args.kwargs['stdout'], d.subprocess.PIPE)
                 self.assertEqual(json.loads(base64.b64decode(arguments[-1])), event)
                 for key in ('user', 'group', 'extra_groups', 'shell', 'preexec_fn'):
                     self.assertNotIn(key, run.call_args.kwargs)
@@ -540,7 +546,13 @@ class ValidationTests(unittest.TestCase):
                 mode.write_text('/mnt/d/DevStack/LocalNotifications/DevStack.Notifications.exe\n')
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
                 mode.write_text(str(exe) + '\n')
-                run.return_value = SimpleNamespace(returncode=1)
+                # A successful systemd-run status alone is insufficient.
+                for output in (b'', b'unexpected output\n', b'DEVSTACK_NOTIFICATION_ACCEPTED\nextra\n'):
+                    run.return_value = SimpleNamespace(returncode=0, stdout=output)
+                    with patch.object(d.sys, 'stderr') as stderr:
+                        self.assertFalse(d.show_windows_notification(event)['accepted'])
+                        self.assertIn('missing completion marker', ''.join(call.args[0] for call in stderr.write.call_args_list))
+                run.return_value = SimpleNamespace(returncode=1, stdout=b'DEVSTACK_NOTIFICATION_ACCEPTED\n')
                 with patch.object(d.sys, 'stderr') as stderr:
                     self.assertFalse(d.show_windows_notification(event)['accepted'])
                     self.assertIn('exit 1', ''.join(call.args[0] for call in stderr.write.call_args_list))

@@ -1551,30 +1551,39 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
             return {'accepted': False}
         encoded = base64.b64encode(json.dumps(data, ensure_ascii=True).encode('ascii')).decode('ascii')
         unit = 'devstack-windows-notification-' + secrets.token_hex(8)
-        # A fixed, short-lived unit, not an additional resident service.
-        # Use the same clean environment and restrictions verified on WSL.
-        # Do not carry a stale WSL_INTEROP socket from the daemon.
+        # Wait for the whole one-shot operation, not merely successful execve.
+        # In CI an immediately failing Type=exec unit returned zero from
+        # systemd-run. Require both a successful job and an explicit completion
+        # marker written by a fixed, unprivileged wrapper AFTER the launcher
+        # returns zero. The launcher cannot accidentally supply that marker
+        # through stdout. No event data is interpreted as shell source.
         result = subprocess.run(
             ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
-             '--service-type=exec', '--unit=' + unit,
+             '--service-type=oneshot', '--unit=' + unit,
              '--uid=' + str(account.pw_uid), '--gid=' + str(account.pw_gid),
              '--working-directory=' + str(launcher.parent),
              '--expand-environment=no',
              '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
              '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
              '--property=ProtectKernelModules=yes', '--property=ProtectControlGroups=yes',
-             '--property=PartOf=devstackd.service', '--property=RuntimeMaxSec=10s',
-             '--property=TimeoutStartSec=5s', '--property=TimeoutStopSec=2s',
+             '--property=PartOf=devstackd.service',
+             '--property=TimeoutStartSec=10s', '--property=TimeoutStopSec=2s',
              '--property=UMask=0077',
              '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8',
-             str(launcher), encoded],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+             '/bin/sh', '-c', r'"$@" >/dev/null 2>&1 && printf "%s\n" DEVSTACK_NOTIFICATION_ACCEPTED',
+             'devstack-notification', str(launcher), encoded],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=18, close_fds=True,
         )
         if result.returncode != 0:
             print('Windows notification worker failed: exit ' + str(result.returncode),
                   file=sys.stderr, flush=True)
-        return {'accepted': result.returncode == 0}
+            return {'accepted': False}
+        if result.stdout != b'DEVSTACK_NOTIFICATION_ACCEPTED\n':
+            print('Windows notification worker failed: missing completion marker',
+                  file=sys.stderr, flush=True)
+            return {'accepted': False}
+        return {'accepted': True}
     except (KeyError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         # Never log event content, raw child output, or local account paths.
         print('Windows notification worker unavailable: ' + type(exc).__name__,
