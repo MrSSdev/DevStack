@@ -66,6 +66,8 @@ class NotificationPushTests(unittest.TestCase):
         class PushError(Exception):
             pass
 
+        status = 201
+
         def fake_webpush(subscription, **kwargs):
             session = kwargs["requests_session"]
             self.assertFalse(session.trust_env)
@@ -75,14 +77,21 @@ class NotificationPushTests(unittest.TestCase):
             self.assertEqual(kwargs["ttl"], 30)
             self.assertEqual(kwargs["timeout"], 8)
             self.assertNotIn("subject", kwargs["data"])
-            return SimpleNamespace(status_code=201)
+            if status == 410:
+                error = PushError('Do not expose provider data')
+                error.response = SimpleNamespace(status_code=410, text='Private response body')
+                raise error
+            return SimpleNamespace(status_code=status)
 
         mods = {"pywebpush": SimpleNamespace(webpush=fake_webpush, WebPushException=PushError),
                 "requests": SimpleNamespace(Session=Session)}
         with patch.dict(sys.modules, mods), patch.object(push, "KEY", MagicMock(is_file=lambda: True)):
-            result = push.send({"subscription": self.subscription(), "payload": {
-                "id": "mail-" + "M"*22, "category": "mail", "kind": "info"}})
-            self.assertTrue(result["ok"])
+            request = {"subscription": self.subscription(), "payload": {
+                "id": "mail-" + "M"*22, "category": "mail", "kind": "info"}}
+            result = push.send(request)
+            self.assertEqual(result, {"ok": True, "http_status": 201})
+            status = 410
+            self.assertEqual(push.send(request), {"ok": False, "expired": True, "http_status": 410})
 
 
 if __name__ == "__main__":

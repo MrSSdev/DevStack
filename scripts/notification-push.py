@@ -90,10 +90,13 @@ def send(value):
             response = webpush(subscription, data=json.dumps(payload, separators=(',', ':')),
                 vapid_private_key=str(KEY), vapid_claims={'sub': 'https://devstack.test'},
                 ttl=30, timeout=8, headers=headers, requests_session=session)
-            return {'ok': 200 <= response.status_code < 300}
+            return {'ok': 200 <= response.status_code < 300, 'http_status': response.status_code}
         except WebPushException as error:
             response = error.response
-            return {'ok': False, 'expired': response is not None and response.status_code in (404,410)}
+            # Only the numeric status crosses the helper boundary. Never
+            # include response bodies, request URLs, tokens or key material.
+            return {'ok': False, 'expired': response is not None and response.status_code in (404,410),
+                    'http_status': response.status_code if response is not None else None}
 
 
 def main():

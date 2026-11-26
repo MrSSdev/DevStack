@@ -61,6 +61,16 @@ Short TTL (30 seconds), per-event claims and stable notification tags limit
 duplicates. Unknown delivery failures are not retried automatically;
 the event remains in history. Do not treat this as a guaranteed alerting
 service. Push is not sent for history-only old events when enabled.
+Automatic mail events are eligible for Web Push in the collector cycle
+that discovers them, as long as no client lease is active and the mail
+category is enabled. They no longer wait for an additional timer cycle.
+Other events retain their existing grace period. The normal collector
+interval remains eight seconds after completion (plus timer accuracy and
+processing time); the open panel polls every five seconds. Delivery by
+the browser provider is asynchronous and outside DevStack's control.
+The collector logs category, journal age, send duration and numeric HTTP
+status (or unavailable) without message content, endpoint or key material.
+HTTP acceptance does not prove Windows displayed a banner.
 A click opens DevStack or the specific mail message if still available.
 Native Windows/Edge delivery and installability must be checked on the
 actual workstation; Chromium CI uses an isolated browser and does not
