@@ -17,6 +17,7 @@ on:
       - 'scripts/notifications-worker.php'
       - 'scripts/install-mailpit.sh'
       - 'tests/browser-smoke.py'
+      - 'tests/windows-notification-systemd-smoke.py'
       - '.github/workflows/browser.yml'
   workflow_dispatch:
 
@@ -89,6 +90,8 @@ jobs:
           test "$(systemctl show -p ExecMainStatus --value devstack-notifications.service)" = 0
           systemctl is-active --quiet devstack-notifications.timer
           sudo -u devstackweb /usr/bin/php -r 'require "/opt/devstack/notifications.php"; $db = new DevStackNotices(); if ($db->categories() !== ["mail"]) { exit(1); } $db->setCategories(DevStackNotices::CATEGORIES);'
+      - name: Exercise the Windows notification RPC through real restricted systemd
+        run: sudo env GITHUB_ACTIONS=true python3 tests/windows-notification-systemd-smoke.py
       - name: Install browser tooling
         run: |
           python3 -m venv /tmp/devstack-browser-venv

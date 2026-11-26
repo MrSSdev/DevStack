@@ -33,6 +33,16 @@ normalne wywołanie Show, które nadal respektuje politykę systemu.
 Wszelkie inne błędy lub jawnie wyłączone powiadomienia pozostają błędem.
 Nie ma sztucznego dymka podczas instalacji.
 
+Kolektor zleca wysyłkę istniejącemu pomocnikowi devstackd. Pomocnik
+uruchamia ograniczoną jednorazową jednostkę systemd z UID/GID dewelopera;
+PID 1 ustawia tożsamość przed ograniczeniami. Bezpośrednia zmiana UID/GID
+w dziecku zabezpieczonej usługi została odrzucona przez jądro na WSL
+(EPERM), dlatego nie wolno wracać do subprocess.run(user=..., group=...).
+Jednostka ma limit czasu, nie jest utrzymywana w spoczynku i nie zmienia
+zabezpieczeń devstackd. CI sprawdza rzeczywisty RPC i systemd z izolowanym
+linuksowym programem testowym, a Windows i WSL Interop wymagają odbioru
+na urządzeniu.
+
 ## Zintegrowana aktualizacja testowa
 
 Użyj działającej dystrybucji Ubuntu, izolowanych danych testowych,
@@ -49,13 +59,15 @@ Jeśli checkout jest czysty, zapisz dokładną kopię poprzedniego commita:
 
     git branch backup/before-local-notifications HEAD
     git fetch origin refs/heads/test/windows-local-notifications:refs/remotes/origin/test/windows-local-notifications
-    git switch --track origin/test/windows-local-notifications
+    git switch --no-track -c test/windows-local-notifications origin/test/windows-local-notifications
     git rev-parse HEAD
 
 Jeżeli gałąź lokalna już istnieje, przełącz się na nią i wykonaj
 git merge --ff-only origin/test/windows-local-notifications. Porównaj SHA
 z zielonym przebiegiem CI przed instalacją. Aktualizator testowej gałęzi
-nie pobiera sam kolejnych commitów.
+nie pobiera sam kolejnych commitów. Nie wymagamy skonfigurowanego
+upstreamu (checkout może śledzić tylko main). Wygenerowane kopie PWA
+w backend/public są ignorowane przez Git; źródła są w frontend/public.
 
     bash scripts/update.sh --windows-local-notifications
 

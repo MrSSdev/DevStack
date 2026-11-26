@@ -494,7 +494,6 @@ class ValidationTests(unittest.TestCase):
                 patch.object(Path, 'is_file', lambda file: file in (exe, legacy) or is_file(file)),
                 patch.object(d, 'config', return_value={'dev_user': 'fixture'}),
                 patch.object(d.pwd, 'getpwnam', return_value=account),
-                patch.object(d.os, 'getgrouplist', return_value=[1001, 27]),
                 patch.object(d.subprocess, 'run') as run,
             ):
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
@@ -509,23 +508,49 @@ class ValidationTests(unittest.TestCase):
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
                 run.assert_not_called()
                 account.pw_uid = 1001
+                account.pw_gid = 0
+                self.assertFalse(d.show_windows_notification(event)['accepted'])
+                run.assert_not_called()
+                account.pw_gid = 1001
                 run.return_value = SimpleNamespace(returncode=0)
                 self.assertTrue(d.show_windows_notification(event)['accepted'])
                 arguments = run.call_args.args[0]
-                self.assertEqual(arguments[0], str(exe))
-                self.assertEqual(len(arguments), 2)
-                self.assertEqual(json.loads(base64.b64decode(arguments[1])), event)
-                self.assertEqual(run.call_args.kwargs['user'], 1001)
-                self.assertEqual(run.call_args.kwargs['group'], 1001)
-                self.assertEqual(run.call_args.kwargs['extra_groups'], [1001, 27])
-                self.assertEqual(run.call_args.kwargs['timeout'], 8)
+                self.assertEqual(arguments[0], '/usr/bin/systemd-run')
+                self.assertIn('--uid=1001', arguments)
+                self.assertIn('--gid=1001', arguments)
+                self.assertIn('--wait', arguments)
+                self.assertIn('--pipe', arguments)
+                self.assertIn('--collect', arguments)
+                self.assertIn('--service-type=exec', arguments)
+                self.assertIn('--expand-environment=no', arguments)
+                for option in ('NoNewPrivileges=yes', 'PrivateTmp=yes', 'PrivateDevices=yes',
+                               'ProtectKernelTunables=yes', 'ProtectKernelModules=yes',
+                               'ProtectControlGroups=yes', 'RuntimeMaxSec=10s',
+                               'PartOf=devstackd.service'):
+                    self.assertIn('--property=' + option, arguments)
+                self.assertIn('--working-directory=' + str(exe.parent), arguments)
+                self.assertEqual(arguments[-6:-1], ['/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', str(exe)])
+                self.assertEqual(json.loads(base64.b64decode(arguments[-1])), event)
+                for key in ('user', 'group', 'extra_groups', 'shell', 'preexec_fn'):
+                    self.assertNotIn(key, run.call_args.kwargs)
+                self.assertEqual(run.call_args.kwargs['timeout'], 18)
                 mode.write_text(str(legacy) + '\n')
                 self.assertTrue(d.show_windows_notification(event)['accepted'])
-                self.assertEqual(run.call_args.args[0][0], str(legacy))
+                self.assertEqual(run.call_args.args[0][-2], str(legacy))
                 mode.write_text('/mnt/d/DevStack/LocalNotifications/DevStack.Notifications.exe\n')
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
                 mode.write_text(str(exe) + '\n')
                 run.return_value = SimpleNamespace(returncode=1)
+                with patch.object(d.sys, 'stderr') as stderr:
+                    self.assertFalse(d.show_windows_notification(event)['accepted'])
+                    self.assertIn('exit 1', ''.join(call.args[0] for call in stderr.write.call_args_list))
+                run.side_effect = PermissionError(1, 'private fixture path')
+                with patch.object(d.sys, 'stderr') as stderr:
+                    self.assertFalse(d.show_windows_notification(event)['accepted'])
+                    log = ''.join(call.args[0] for call in stderr.write.call_args_list)
+                    self.assertIn('PermissionError', log)
+                    self.assertNotIn('private fixture path', log)
+                run.side_effect = d.subprocess.TimeoutExpired('/private/fixture', 18)
                 self.assertFalse(d.show_windows_notification(event)['accepted'])
 
     def test_nginx_config_rollback_on_validation_failure(self):

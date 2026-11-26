@@ -1542,22 +1542,43 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
                 or not (launcher == WINDOWS_NOTIFICATION_TARGET or legacy)
                 or not launcher.is_file()):
             return {'accepted': False}
-        # The launcher lives in the Windows user's writable profile. Never
-        # execute it with the daemon's Linux credentials.
+        # As with the framework reader, let PID 1 set the developer's
+        # credentials before applying the service restrictions. Changing
+        # UID/GID/groups in a child of the hardened helper failed with EPERM
+        # on Ubuntu 26.04/WSL. Never execute the Windows user's files as root.
         account = pwd.getpwnam(config()['dev_user'])
-        if account.pw_uid == 0:
+        if account.pw_uid == 0 or account.pw_gid == 0:
             return {'accepted': False}
-        environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
-        if 'WSL_INTEROP' in os.environ:
-            environment['WSL_INTEROP'] = os.environ['WSL_INTEROP']
         encoded = base64.b64encode(json.dumps(data, ensure_ascii=True).encode('ascii')).decode('ascii')
+        unit = 'devstack-windows-notification-' + secrets.token_hex(8)
+        # A fixed, short-lived unit, not an additional resident service.
+        # Use the same clean environment and restrictions verified on WSL.
+        # Do not carry a stale WSL_INTEROP socket from the daemon.
         result = subprocess.run(
-            [str(launcher), encoded], cwd=launcher.parent, env=environment,
-            user=account.pw_uid, group=account.pw_gid, extra_groups=os.getgrouplist(account.pw_name, account.pw_gid),
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8,
+            ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+             '--service-type=exec', '--unit=' + unit,
+             '--uid=' + str(account.pw_uid), '--gid=' + str(account.pw_gid),
+             '--working-directory=' + str(launcher.parent),
+             '--expand-environment=no',
+             '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
+             '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
+             '--property=ProtectKernelModules=yes', '--property=ProtectControlGroups=yes',
+             '--property=PartOf=devstackd.service', '--property=RuntimeMaxSec=10s',
+             '--property=TimeoutStartSec=5s', '--property=TimeoutStopSec=2s',
+             '--property=UMask=0077',
+             '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8',
+             str(launcher), encoded],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=18, close_fds=True,
         )
+        if result.returncode != 0:
+            print('Windows notification worker failed: exit ' + str(result.returncode),
+                  file=sys.stderr, flush=True)
         return {'accepted': result.returncode == 0}
-    except (KeyError, OSError, ValueError, subprocess.TimeoutExpired):
+    except (KeyError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        # Never log event content, raw child output, or local account paths.
+        print('Windows notification worker unavailable: ' + type(exc).__name__,
+              file=sys.stderr, flush=True)
         return {'accepted': False}
 
 
