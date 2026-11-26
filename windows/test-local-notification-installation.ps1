@@ -13,6 +13,32 @@ function Assert-Rejected([scriptblock]$Action, [string]$Label) {
 function Assert-True([bool]$Condition, [string]$Label) {
     if (-not $Condition) { throw $Label }
 }
+# Compare the actual security properties, not NTFS's representation of
+# descriptor control flags (e.g. auto-inheritance) in a raw SDDL string.
+# Get-Acl after Set-Acl also observes any normalization by Windows.
+function Get-AclSignature([System.Security.AccessControl.FileSystemSecurity]$Acl) {
+    $sidType = [Security.Principal.SecurityIdentifier]
+    $rules = @($Acl.GetAccessRules($true, $true, $sidType) | ForEach-Object {
+        '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.IdentityReference.Value,
+            [int]$_.FileSystemRights, $_.AccessControlType,
+            $_.InheritanceFlags, $_.PropagationFlags, $_.IsInherited
+    } | Sort-Object)
+    return (@(
+        $Acl.GetOwner($sidType).Value
+        $Acl.GetGroup($sidType).Value
+        [string]$Acl.AreAccessRulesProtected
+        [string]$Acl.AreAccessRulesCanonical
+    ) + $rules) -join ';'
+}
+function Assert-UnchangedAcl([string]$Path, [System.Security.AccessControl.FileSystemSecurity]$Before, [string]$Label) {
+    $after = Get-Acl -LiteralPath $Path
+    if ((Get-AclSignature $Before) -cne (Get-AclSignature $after)) {
+        throw "$Label. Before: $($Before.Sddl); after: $($after.Sddl)"
+    }
+    if ($Before.Sddl -cne $after.Sddl) {
+        Write-Output "ACL rules, owner, group and inheritance unchanged; descriptor normalized for $Path. Before: $($Before.Sddl); after: $($after.Sddl)"
+    }
+}
 
 # Exercise the actual permission-check function without sending notifications
 # to an unattended desktop. The real first toast is a workstation test.
@@ -187,12 +213,18 @@ try {
         $sid, $deniedRights, [Security.AccessControl.AccessControlType]::Deny)
     $restrictedRootAcl.AddAccessRule($deny)
     $denyProbe = Join-Path $root 'root-write-probe'
-    $componentAcl = (Get-Acl -LiteralPath $component).Sddl
+    $componentBeforeRestriction = Get-Acl -LiteralPath $component
     try {
         Set-Acl -LiteralPath $root -AclObject $restrictedRootAcl
         Assert-Rejected { New-Item -ItemType Directory -Path $denyProbe -ErrorAction Stop } 'Root must reject new children'
+        # Separate the fixture's Set-Acl from the installer's behavior.
+        Assert-UnchangedAcl $component $componentBeforeRestriction 'Restricting parent changed private component permissions'
+        $componentAcl = Get-Acl -LiteralPath $component
+        $rootAcl = Get-Acl -LiteralPath $root
+        Assert-True $componentAcl.AreAccessRulesProtected 'Private component inherited parent ACL'
         & $packageInstaller -UseBuiltLauncher
-        Assert-True ((Get-Acl -LiteralPath $component).Sddl -eq $componentAcl) 'Update changed stable component ACL'
+        Assert-UnchangedAcl $component $componentAcl 'Update changed stable component ACL'
+        Assert-UnchangedAcl $root $rootAcl 'Update changed protected root ACL'
         Assert-True ((Get-FileHash -LiteralPath $launcher).Hash -eq (Get-FileHash -LiteralPath $built).Hash) 'Read-only parent update failed'
         $installedHash = (Get-FileHash -LiteralPath $launcher).Hash
         $scriptHash = (Get-FileHash -LiteralPath $installedScript).Hash
@@ -210,7 +242,9 @@ try {
         }
         $remaining = @(Get-ChildItem -LiteralPath $component -Force)
         Assert-True ($remaining.Count -eq 2 -and @($remaining | Where-Object { $_.PSIsContainer }).Count -eq 0) 'Staging/backup leftovers'
-        Assert-True ((Get-Acl -LiteralPath $root).Sddl -eq $restrictedRootAcl.Sddl) 'Update changed protected root ACL'
+        Assert-UnchangedAcl $component $componentAcl 'Rollback changed stable component ACL'
+        Assert-UnchangedAcl $root $rootAcl 'Rollback changed protected root ACL'
+        Assert-Rejected { New-Item -ItemType Directory -Path $denyProbe -ErrorAction Stop } 'Parent must still reject new children after update and rollback'
     } finally {
         Set-Acl -LiteralPath $root -AclObject $savedRootAcl
         if (Test-Path -LiteralPath $denyProbe) { Remove-Item -LiteralPath $denyProbe }
