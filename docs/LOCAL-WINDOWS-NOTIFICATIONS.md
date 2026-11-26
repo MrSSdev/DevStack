@@ -6,7 +6,7 @@ wywołuje WinRT i kończy działanie. Nie wymaga internetu, zewnętrznego
 modułu, nowej usługi, zadania harmonogramu ani stale działającego procesu.
 Kliknięcie nowego dymka preferuje protokół zarejestrowanej PWA
 web+devstack; bez wykrytej rejestracji pozostaje lokalny adres HTTPS.
-Dymek PWA ma dodatkową akcję otwarcia tego samego zdarzenia przez HTTPS.
+Wybór jest automatyczny, bez dodatkowego przycisku wyboru przeglądarki.
 Uwierzytelniony poll oznacza dokładnie wskazane powiadomienie jako przeczytane.
 Toast w widocznym panelu pozostaje nieprzeczytany do zamknięcia lub
 wygaśnięcia; wtedy odczytywany jest tylko jego identyfikator, bez usuwania
@@ -37,10 +37,12 @@ Render nadal generował HTTPS. Diagnostyka potwierdziła pakiet Edge PWA,
 AppX ProgID bez domyślnej komendy i brak UserChoice. Nowy test odtwarza
 ten układ bez identyfikatorów konkretnej instalacji. Jest to odczyt rejestru, nie
 uruchomienie komendy ani modyfikacja skojarzeń. Brak rejestracji
-lub błąd odczytu daje HTTPS. Akcja Otworz w przegladarce zachowuje
-dokładnie tę samą trasę i ID; stan skojarzenia może się zmienić
-między wyświetleniem a kliknięciem. Dymki już wyświetlone nie
-zmieniają adresu. Nie dodajemy usługi ani procesu w tle.
+lub błąd odczytu daje HTTPS. Oba warianty zachowują dokładnie tę samą
+trasę i ID, bez dodatkowego przycisku otwarcia w przeglądarce.
+Wybór następuje przy tworzeniu dymka: odinstalowanie PWA po jego
+wyświetleniu nie zmieni zapisanego adresu i stary dymek może nie
+otworzyć aplikacji. Następne dymki wybiorą HTTPS. Nie dodajemy
+usługi ani procesu w tle.
 
 Manifest mapuje web+devstack do /#/protocol?uri=%s; frontend sprowadza
 ten fragment do sprawdzonej lokalnej trasy i ID. Odczyt nadal wymaga

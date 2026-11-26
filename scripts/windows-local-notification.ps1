@@ -134,20 +134,17 @@ function New-DevStackToastXml($Event, [bool]$UsePwa = (Test-DevStackPwaProtocol)
     } else {
         'Zobacz szczegoly w DevStack.'
     }
-    $https = 'https://devstack.test/#' + $route + '?notice=' + $Event.id
-    $launch = $https
-    $actions = ''
+    # Select one destination automatically when creating the notification.
+    # No browser-choice button: registered PWA first, HTTPS otherwise.
+    $launch = 'https://devstack.test/#' + $route + '?notice=' + $Event.id
     if ($UsePwa) {
         $launch = 'web+devstack://open' + $route + '?notice=' + $Event.id
-        # The app may be removed or its association changed after delivery.
-        # Keep an explicit HTTPS route to the same event on those toasts.
-        $actions = '<actions><action content="Otworz w przegladarce" arguments="{0}" activationType="protocol"/></actions>' -f [Security.SecurityElement]::Escape($https)
     }
 
     # Use protocol activation so Windows can open the URL after this process exits.
     return (
-        '<toast activationType="protocol" launch="{0}"><visual><binding template="ToastGeneric"><text>{1}</text><text>{2}</text></binding></visual>{3}</toast>' -f
-        [Security.SecurityElement]::Escape($launch), [Security.SecurityElement]::Escape($title), [Security.SecurityElement]::Escape($message), $actions
+        '<toast activationType="protocol" launch="{0}"><visual><binding template="ToastGeneric"><text>{1}</text><text>{2}</text></binding></visual></toast>' -f
+        [Security.SecurityElement]::Escape($launch), [Security.SecurityElement]::Escape($title), [Security.SecurityElement]::Escape($message)
     )
 }
 

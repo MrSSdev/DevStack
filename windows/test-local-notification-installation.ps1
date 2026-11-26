@@ -126,11 +126,11 @@ foreach ($case in $cases) {
     [xml]$pwa = New-DevStackToastXml $event $true
     Assert-True ($pwa.toast.activationType -ceq 'protocol') 'PWA toast must use protocol activation'
     Assert-True ($pwa.toast.launch -ceq ('web+devstack://open' + $suffix)) "Incorrect PWA launch: $suffix"
-    Assert-True ($pwa.toast.actions.action.activationType -ceq 'protocol') 'Browser action must use protocol activation'
-    Assert-True ($pwa.toast.actions.action.arguments -ceq $https) 'Browser fallback lost the event route or ID'
+    Assert-True ($null -eq $pwa.SelectSingleNode('/toast/actions')) 'PWA toast must not offer a browser-choice button'
     [xml]$browser = New-DevStackToastXml $event $false
+    Assert-True ($browser.toast.activationType -ceq 'protocol') 'HTTPS toast must use protocol activation'
     Assert-True ($browser.toast.launch -ceq $https) 'Absent PWA must use HTTPS for the main click'
-    Assert-True ($null -eq $browser.SelectSingleNode('/toast/actions')) 'Unnecessary browser fallback action'
+    Assert-True ($null -eq $browser.SelectSingleNode('/toast/actions')) 'HTTPS toast must not contain extra actions'
 }
 Write-Output 'PWA association selection, exact event activation, and HTTPS fallback: OK.'
 
