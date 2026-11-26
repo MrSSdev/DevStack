@@ -1,7 +1,8 @@
 param(
     [ValidateSet('Install', 'Demo', 'Uninstall', 'CleanupLegacy', 'PrepareDirectory')]
     [string]$Mode = 'Install',
-    [switch]$UseBuiltLauncher
+    [switch]$UseBuiltLauncher,
+    [string]$ExpectedUserSid
 )
 
 Set-StrictMode -Version Latest
@@ -10,6 +11,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
     [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) {
     throw 'Run in the signed-in Windows user session.'
 }
+. (Join-Path $PSScriptRoot 'windows-layout.ps1')
 $parent = 'C:\DevStack'
 $directory = Join-Path $parent 'LocalNotifications'
 $launcher = Join-Path $directory 'DevStack.Notifications.exe'
@@ -71,11 +73,7 @@ function New-PrivateDirectory([string]$Path) {
 
 function Ensure-Root {
     if (-not (Test-Path -LiteralPath $parent)) {
-        try {
-            New-PrivateDirectory $parent
-        } catch {
-            throw "Cannot provision $parent for this Windows account. If access is denied, run this installer with -Mode PrepareDirectory in elevated Windows PowerShell under the same account. $($_.Exception.Message)"
-        }
+        throw 'DevStack root is not provisioned. Run PrepareDirectory once in elevated Windows PowerShell under the intended account.'
     }
     Assert-SafeItem $parent $true
 }
@@ -121,16 +119,16 @@ function Remove-LegacyComponent {
 function Ensure-ComponentDirectory {
     Ensure-Root
     if (-not (Test-Path -LiteralPath $directory)) {
-        try {
-            New-PrivateDirectory $directory
-        } catch {
-            throw "Cannot provision $directory. Run -Mode PrepareDirectory once in elevated Windows PowerShell under the same signed-in account. $($_.Exception.Message)"
-        }
+        throw 'Notification component is not provisioned. Run PrepareDirectory once in elevated Windows PowerShell under the intended account.'
     }
     Assert-Component $directory
 }
 
 if ($Mode -eq 'PrepareDirectory') {
+    if (-not $ExpectedUserSid -or $ExpectedUserSid -cne $userSid.Value) {
+        throw 'PrepareDirectory requires -ExpectedUserSid from the intended ordinary Windows account.'
+    }
+    Initialize-DevStackLayout -UserSid $userSid -Component LocalNotifications
     Ensure-ComponentDirectory
     Write-Output $parent
     return

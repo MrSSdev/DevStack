@@ -177,6 +177,9 @@ $fixtureConfig = Join-Path $root 'Config'
 $fixtureWidgets = Join-Path $legacyRoot 'Widgets'
 $unexpected = Join-Path $component 'unexpected.txt'
 try {
+    $signedInSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    Assert-Rejected { & $installer } 'Ordinary install must not create root'
+    & $installer -Mode PrepareDirectory -ExpectedUserSid $signedInSid
     & $installer
     Assert-True (Test-Path -LiteralPath $launcher -PathType Leaf) 'Missing compiled launcher'
     Assert-True ((Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $installedScript).Hash) 'Incorrect WinRT script'
@@ -251,7 +254,8 @@ try {
     }
     Write-Output 'Stable component update and rollback with denied parent writes: OK.'
     # Simulate the old profile layout, including unrelated widget data.
-    [IO.Directory]::CreateDirectory($legacyRoot, (Get-Acl -LiteralPath $root)) | Out-Null
+    . (Join-Path $PSScriptRoot 'windows-layout.ps1')
+    [IO.Directory]::CreateDirectory($legacyRoot, (New-DevStackLayoutAcl -Kind LegacyRoot -UserSid $sid)) | Out-Null
     New-Item -ItemType Directory -Path $legacy, $fixtureWidgets, $fixtureConfig | Out-Null
     Copy-Item -LiteralPath $launcher, $installedScript -Destination $legacy
     Set-Content -LiteralPath (Join-Path $fixtureWidgets 'keep.txt') -Value 'widget data'

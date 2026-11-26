@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Disposable GitHub runner required.' }
 . (Join-Path $PSScriptRoot 'windows-layout.ps1')
+. (Join-Path $PSScriptRoot 'notification-layout-copy.ps1')
 $script = Join-Path $PSScriptRoot 'windows-layout-migration.ps1'
 $root = 'C:\DevStack'
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -21,15 +22,18 @@ Assert-Rejected { & $script -Mode Stage -ExpectedUserSid 'S-1-5-18' } 'Wrong acc
 [IO.Directory]::CreateDirectory($root,(New-DevStackLayoutAcl -Kind LegacyRoot -UserSid $user)) | Out-Null
 $oldNotifications = Join-Path $root 'LocalNotifications'
 [IO.Directory]::CreateDirectory($oldNotifications,(New-DevStackLayoutAcl -Kind LocalNotifications -UserSid $user)) | Out-Null
-$oldFile = Join-Path $oldNotifications 'old-fixture.txt'
+$oldFile = Join-Path $oldNotifications 'DevStack.Notifications.exe'
+$oldScript = Join-Path $oldNotifications 'show-local-notification.ps1'
 Set-Content -LiteralPath $oldFile -Value 'original' -Encoding Ascii
+Set-Content -LiteralPath $oldScript -Value 'original script fixture' -Encoding Ascii
 $hash = (Get-FileHash -LiteralPath $oldFile).Hash
 $state = & $script -Mode Stage -ExpectedUserSid $user.Value
 $id = $state.TransactionId
 $transaction = Split-Path $state.StagingRoot
 $next = $state.StagingRoot
 $previous = $state.PreviousRoot
-$nextFile = Join-Path $next 'LocalNotifications\new-fixture.txt'
+$nextFile = Join-Path $next 'LocalNotifications\DevStack.Notifications.exe'
+$nextScript = Join-Path $next 'LocalNotifications\show-local-notification.ps1'
 try {
     Assert-True ($state.Phase -eq 'Staged') 'Wrong staged phase'
     Assert-True ((Get-DevStackLayoutState $user) -eq 'LegacyUserOwned') 'Stage changed old root'
@@ -37,9 +41,19 @@ try {
     $oldId = [DevStack.WindowsLayout.DirectoryIdentity]::Get($root)
     $newId = [DevStack.WindowsLayout.DirectoryIdentity]::Get($next)
     Assert-True ($oldId -cne $newId) 'Staging reused the old directory object'
-    # Represents later unelevated staging. No production code is copied.
-    Set-Content -LiteralPath $nextFile -Value 'replacement' -Encoding Ascii
+    Assert-Rejected { Invoke-Migration Publish $id } 'Empty staging payload'
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'stage-windows-notifications.ps1') -TransactionId $id } 'Elevated payload copy'
+    # Execute the actual copy helper on fake files. The production entry
+    # point rejects elevation; this elevated fixture is not medium-token proof.
+    $foreign = Join-Path $oldNotifications 'foreign.txt'
+    Set-Content -LiteralPath $foreign -Value 'preserve'
+    try { Assert-Rejected { Copy-DevStackNotificationLayout $id $user } 'Unexpected old component file' }
+    finally { Remove-Item -LiteralPath $foreign }
+    Copy-DevStackNotificationLayout $id $user
+    Copy-DevStackNotificationLayout $id $user
     $newHash = (Get-FileHash -LiteralPath $nextFile).Hash
+    Assert-True ($newHash -ceq $hash) 'Copied launcher differs'
+    Assert-True ((Get-FileHash -LiteralPath $nextScript).Hash -ceq (Get-FileHash -LiteralPath $oldScript).Hash) 'Copied script differs'
     # Wrong source identity or existing destination must never be replaced.
     Assert-Rejected { [DevStack.WindowsLayout.DirectoryIdentity]::Move($root,$previous,$newId) } 'Wrong source ID'
     Assert-Rejected { [DevStack.WindowsLayout.DirectoryIdentity]::Move($root,$next,$oldId) } 'Occupied destination'
@@ -63,8 +77,8 @@ try {
     Assert-True ((Get-DevStackLayoutState $user) -eq 'Secure') 'Published root is not protected'
     Assert-True (([DevStack.WindowsLayout.DirectoryIdentity]::Get($root)) -ceq $newId) 'Published root identity changed'
     Assert-True (([DevStack.WindowsLayout.DirectoryIdentity]::Get($previous)) -ceq $oldId) 'Backup identity changed'
-    Assert-True ((Get-FileHash -LiteralPath (Join-Path $previous 'LocalNotifications\old-fixture.txt')).Hash -eq $hash) 'Backup content changed'
-    $published = Join-Path $root 'LocalNotifications\new-fixture.txt'
+    Assert-True ((Get-FileHash -LiteralPath (Join-Path $previous 'LocalNotifications\DevStack.Notifications.exe')).Hash -eq $hash) 'Backup content changed'
+    $published = Join-Path $root 'LocalNotifications\DevStack.Notifications.exe'
     Assert-True ((Get-FileHash -LiteralPath $published).Hash -eq $newHash) 'Staged data changed'
     Assert-True ((Invoke-Migration Publish $id).Phase -eq 'Published') 'Repeat publication not idempotent'
     # Once Hosts appears, even an empty directory, do not allow a root-only rollback.
@@ -82,7 +96,7 @@ try {
     # Only fixture paths on a disposable runner. On an unexpected phase,
     # leave the fixture for diagnostics rather than deleting arbitrary data.
     if ((Invoke-Migration Inspect $id).Phase -eq 'Staged') {
-        Remove-Item -LiteralPath $oldFile,$nextFile
+        Remove-Item -LiteralPath $oldFile,$oldScript,$nextFile,$nextScript
         [IO.Directory]::Delete($oldNotifications,$false)
         [IO.Directory]::Delete($root,$false)
         [IO.Directory]::Delete((Join-Path $next 'LocalNotifications'),$false)

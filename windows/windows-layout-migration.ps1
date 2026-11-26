@@ -13,6 +13,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or $PSVersionTa
     throw 'Use Windows PowerShell 5.1.'
 }
 . (Join-Path $PSScriptRoot 'windows-layout.ps1')
+. (Join-Path $PSScriptRoot 'notification-layout-copy.ps1')
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $userSid = $identity.User
 if ($ExpectedUserSid -cne $userSid.Value -or
@@ -28,15 +29,7 @@ $admin = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
 $system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
 
 function New-TransactionAcl {
-    # User can traverse/list the transaction parent for the later ordinary
-    # user staging step, but cannot modify the journal or the parent.
-    $acl = New-DevStackLayoutAcl -Kind Hosts -UserSid $userSid
-    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-        $userSid, [Security.AccessControl.FileSystemRights]::ReadAndExecute,
-        [Security.AccessControl.InheritanceFlags]::None,
-        [Security.AccessControl.PropagationFlags]::None,
-        [Security.AccessControl.AccessControlType]::Allow))
-    return $acl
+    return (New-DevStackMigrationContainerAcl $userSid)
 }
 function New-JournalAcl {
     $acl = [Security.AccessControl.FileSecurity]::new()
@@ -135,12 +128,11 @@ function Read-Manifest {
 }
 
 if ($Mode -eq 'Stage') {
-    if ($TransactionId) { throw 'Stage generates a new transaction ID.' }
     if ((Get-DevStackLayoutState $userSid) -ne 'LegacyUserOwned') {
         throw 'Root-only migration requires the known legacy user-owned root.'
     }
     Assert-LegacyHostsTask
-    $TransactionId = [Guid]::NewGuid().ToString('N')
+    if (-not $TransactionId) { $TransactionId = [Guid]::NewGuid().ToString('N') }
 } elseif (-not $TransactionId) {
     throw 'An existing transaction ID is required.'
 }
@@ -185,8 +177,9 @@ if ($Mode -eq 'Publish' -or $Mode -eq 'Rollback') {
     Assert-LegacyHostsTask
 }
 if ($Mode -eq 'Publish' -and $phase -ne 'Published') {
-    # The later orchestration must first drain notifications and populate
-    # next\LocalNotifications using the ordinary user, not this elevated script.
+    # Metadata-only check. The ordinary user must already have copied and
+    # verified the payload. No privileged read or execution of that payload.
+    Assert-DevStackNotificationPayload (Join-Path $next 'LocalNotifications')
     if ($phase -eq 'Staged') {
         Move-Checked $root $previous $manifest.oldId
     }

@@ -97,3 +97,27 @@ CI uses disposable directories and fixture contents to verify object
 identity, no-replacement behavior, interruption/collision recovery,
 idempotence and retention of both trees. It does not prove native WinRT,
 a real medium-token copy, or a complete Windows installation.
+
+## Notification integration checkpoint
+
+The notification installer no longer creates C:\DevStack or its component
+implicitly. PrepareDirectory requires elevation, the intended user SID and
+the shared protected-root policy. Existing legacy installations can still
+update their existing private notification component until migration.
+
+The root-only orchestrator migrate-notification-layout.ps1 runs from an
+ordinary Windows PowerShell 5.1 session in a verified bundle, with Ubuntu
+already deliberately stopped and no launcher running. It requests elevation
+only for Stage and Publish (or a needed Rollback). The ordinary process
+copies the two known files with no clobber, validates SHA-256 and file ACLs
+and checks the published files again. No notification code is executed by
+the elevated process, no registry identity/opt-in marker changes, and no WSL
+startup. Publish refuses incomplete payloads by metadata. Keep Ubuntu
+stopped throughout; the list-running guard is not an atomic maintenance lock.
+The previous tree and protected journal are retained for inspection.
+
+This is not yet the complete workstation migration: Hosts and Widgets,
+package/release coordination and controlled retirement of the old tree
+still need implementation and acceptance. Do not run the partial branch on
+ASUS yet. The copy helper is tested with fixture files, not a real medium
+token; production staging rejects elevation.

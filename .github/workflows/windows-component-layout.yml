@@ -11,6 +11,9 @@ on:
       - 'windows/initialize-windows-layout.ps1'
       - 'windows/test-windows-layout.ps1'
       - 'windows/windows-layout-migration.ps1'
+      - 'windows/notification-layout-copy.ps1'
+      - 'windows/stage-windows-notifications.ps1'
+      - 'windows/migrate-notification-layout.ps1'
       - 'windows/layout-directory-identity.cs'
       - 'windows/test-windows-layout-migration.ps1'
       - '.github/workflows/windows-component-layout.yml'
@@ -29,7 +32,7 @@ jobs:
       - name: Parse PowerShell layout scripts
         shell: powershell
         run: |
-          foreach ($path in @('windows/windows-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/test-windows-layout.ps1', 'windows/windows-layout-migration.ps1', 'windows/test-windows-layout-migration.ps1')) {
+          foreach ($path in @('windows/windows-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/test-windows-layout.ps1', 'windows/windows-layout-migration.ps1', 'windows/test-windows-layout-migration.ps1', 'windows/notification-layout-copy.ps1', 'windows/stage-windows-notifications.ps1', 'windows/migrate-notification-layout.ps1')) {
             $tokens = $null
             $errors = $null
             [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
