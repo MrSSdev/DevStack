@@ -84,7 +84,7 @@ def compare_workdir_dependencies():
                  '--uid=' + str(account.pw_uid), '--gid=' + str(account.pw_gid),
                  '--working-directory=' + working_directory,
                  '--expand-environment=no', '--property=RemainAfterExit=yes',
-                 '--property=JobTimeoutSec=6s', '--property=TimeoutStartSec=3s',
+                 '--property=TimeoutStartSec=3s',
                  '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
                  '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
                  '--property=ProtectKernelModules=yes', '--property=ProtectControlGroups=yes',
