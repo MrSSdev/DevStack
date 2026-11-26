@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - test/windows-local-notifications
+      - test/windows-component-layout
 
 permissions:
   contents: read

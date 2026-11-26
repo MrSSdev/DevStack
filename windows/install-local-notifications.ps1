@@ -28,8 +28,10 @@ $writeRights = [Security.AccessControl.FileSystemRights]::WriteData -bor
     [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
     [Security.AccessControl.FileSystemRights]::TakeOwnership
 
-# This directory is deliberately user-owned. Never place code executed by
-# an elevated scheduled task here. The hosts integration stays in ProgramData.
+# Legacy installations may have a user-owned root. Never place elevated
+# code beneath that root. The notification component remains user-owned,
+# including when the parent is provisioned separately by an administrator.
+# Normal updates must not write to, rename or change the ACL of the parent.
 function Assert-SafeItem([string]$Path, [bool]$IsDirectory) {
     $item = Get-Item -LiteralPath $Path -Force
     if ($item.PSIsContainer -ne $IsDirectory -or
@@ -116,8 +118,20 @@ function Remove-LegacyComponent {
     }
 }
 
-if ($Mode -eq 'PrepareDirectory') {
+function Ensure-ComponentDirectory {
     Ensure-Root
+    if (-not (Test-Path -LiteralPath $directory)) {
+        try {
+            New-PrivateDirectory $directory
+        } catch {
+            throw "Cannot provision $directory. Run -Mode PrepareDirectory once in elevated Windows PowerShell under the same signed-in account. $($_.Exception.Message)"
+        }
+    }
+    Assert-Component $directory
+}
+
+if ($Mode -eq 'PrepareDirectory') {
+    Ensure-ComponentDirectory
     Write-Output $parent
     return
 }
@@ -139,7 +153,11 @@ if ($Mode -eq 'Uninstall') {
     & $source -Mode Unregister
     Remove-Component $directory
     Remove-LegacyComponent
-    Remove-EmptyDirectory $parent
+    # An administrator-owned root is shared infrastructure.
+    if ((Test-Path -LiteralPath $parent) -and
+        (Get-Acl -LiteralPath $parent).GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $userSid.Value) {
+        Remove-EmptyDirectory $parent
+    }
     return
 }
 if ($Mode -eq 'Demo') {
@@ -155,17 +173,20 @@ if ($Mode -eq 'Demo') {
     return
 }
 
-Ensure-Root
-if (Test-Path -LiteralPath $directory) { Assert-Component $directory }
-$staging = Join-Path $parent ('LocalNotifications.stage-' + [Guid]::NewGuid().ToString('N'))
-$backup = Join-Path $parent ('LocalNotifications.previous-' + [Guid]::NewGuid().ToString('N'))
+Ensure-ComponentDirectory
+# Keep the component directory and ACL stable. Only write beneath it.
+# The integrated updater pauses and drains the collector: two files
+# cannot be replaced as an atomic pair.
+$staging = Join-Path $directory ('stage-' + [Guid]::NewGuid().ToString('N'))
+$backup = Join-Path $directory ('previous-' + [Guid]::NewGuid().ToString('N'))
 $registration = 'HKCU:\Software\Classes\AppUserModelId\DevStack.LocalNotifications'
 $hadRegistration = Test-Path -LiteralPath $registration
-$oldMoved = $false
-$newMoved = $false
+$oldMoved = [Collections.Generic.List[string]]::new()
+$newMoved = [Collections.Generic.List[string]]::new()
 $committed = $false
-New-PrivateDirectory $staging
+$rolledBack = $false
 try {
+    New-PrivateDirectory $staging
     $temporaryLauncher = Join-Path $staging 'DevStack.Notifications.exe'
     $temporaryScript = Join-Path $staging 'show-local-notification.ps1'
     if ($UseBuiltLauncher) {
@@ -186,24 +207,49 @@ try {
         -not (Test-Path -LiteralPath $temporaryScript -PathType Leaf)) {
         throw 'Incomplete staged notification component.'
     }
-    if (Test-Path -LiteralPath $directory) {
-        Move-Item -LiteralPath $directory -Destination $backup
-        $oldMoved = $true
+    New-PrivateDirectory $backup
+    foreach ($name in $componentFiles) {
+        $installed = Join-Path $directory $name
+        if (Test-Path -LiteralPath $installed) {
+            Assert-SafeItem $installed $false
+            Move-Item -LiteralPath $installed -Destination (Join-Path $backup $name)
+            $oldMoved.Add($name)
+        }
     }
-    Move-Item -LiteralPath $staging -Destination $directory
-    $newMoved = $true
+    foreach ($name in $componentFiles) {
+        Move-Item -LiteralPath (Join-Path $staging $name) -Destination (Join-Path $directory $name)
+        $newMoved.Add($name)
+    }
     & (Join-Path $directory 'show-local-notification.ps1') -Mode Register
     $committed = $true
 } catch {
-    if ($newMoved) { Remove-Component $directory }
-    if ($oldMoved) { Move-Item -LiteralPath $backup -Destination $directory }
-    if (-not $hadRegistration -and (Test-Path -LiteralPath $registration)) {
-        Remove-Item -LiteralPath $registration -Recurse
+    $installError = $_
+    try {
+        foreach ($name in $newMoved) {
+            $installed = Join-Path $directory $name
+            Assert-SafeItem $installed $false
+            Remove-Item -LiteralPath $installed
+        }
+        foreach ($name in $oldMoved) {
+            $saved = Join-Path $backup $name
+            Assert-SafeItem $saved $false
+            Move-Item -LiteralPath $saved -Destination (Join-Path $directory $name)
+        }
+        if (-not $hadRegistration -and (Test-Path -LiteralPath $registration)) {
+            Remove-Item -LiteralPath $registration -Recurse
+        }
+        $rolledBack = $true
+    } catch {
+        # Preserve the backup if restoration is incomplete.
+        throw "Notification installation failed: $installError. Rollback failed: $_. Preserve $backup and inspect before retrying."
     }
-    throw
+    throw $installError
 } finally {
     if (Test-Path -LiteralPath $staging) { Remove-Component $staging }
+    if (($committed -or $rolledBack) -and (Test-Path -LiteralPath $backup)) {
+        Remove-Component $backup
+    }
 }
-if ($committed -and $oldMoved) { Remove-Component $backup }
+Assert-Component $directory
 # Leave a legacy installation in place until the Linux marker is switched.
 Write-Output $launcher

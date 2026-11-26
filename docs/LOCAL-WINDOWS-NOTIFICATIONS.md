@@ -193,8 +193,24 @@ checkoutu w podwyższonym Windows PowerShell 5.1:
 
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-local-notifications.ps1 -Mode PrepareDirectory
 
-Tryb ten tworzy tylko katalog z odpowiednim ACL. Nie uruchamiaj całej
-aktualizacji w podwyższonej sesji. Ponów aktualizację z normalnego Ubuntu.
+Tryb ten przygotowuje katalog nadrzędny (jeśli jeszcze nie istnieje)
+i prywatny katalog LocalNotifications. Nie uruchamiaj całej aktualizacji
+w podwyższonej sesji. Ponów aktualizację z normalnego Ubuntu.
+
+Aktualizator nie zmienia ACL istniejącego katalogu komponentu ani nie
+tworzy katalogów staging obok niego. Buduje nowe pliki w tymczasowym
+podkatalogu LocalNotifications, przenosi poprzednie dwa pliki do
+podkatalogu kopii, instaluje nowe i przy błędzie przywraca poprzednie.
+Po sukcesie usuwa własne katalogi tymczasowe. Katalog nadrzędny może
+być tylko do odczytu dla zwykłego użytkownika, o ile administrator
+wcześniej przygotował prywatny katalog komponentu.
+Wymiana dwóch plików nie jest atomowa jako para; zintegrowany updater
+zatrzymuje timer i czeka na zakończenie kolektora. Przy ręcznej
+instalacji również najpierw zatrzymaj i opróżnij kolektor zgodnie z
+poniższą procedurą. W razie przerwania lub niepełnego rollbacku zachowaj
+podkatalog kopii i sprawdź jego zawartość; instalator odmawia usunięcia
+nieznanych plików. Nadal nie wolno uruchamiać uprzywilejowanego kodu
+hosts pod katalogiem należącym do zwykłego użytkownika.
 Jeśli katalog już istnieje, ale ma niebezpieczne ACL, instalator celowo
 odmawia zmiany uprawnień w ciemno.
 

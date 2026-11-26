@@ -173,6 +173,49 @@ try {
     } finally {
         Move-Item -LiteralPath $savedBuilt -Destination $built
     }
+    # Deny writes at the parent itself, even to the runner's elevated
+    # account, but leave the existing private component writable.
+    # Actual NTFS access test; not a claim of medium-token UAC coverage.
+    $savedRootAcl = Get-Acl -LiteralPath $root
+    $restrictedRootAcl = Get-Acl -LiteralPath $root
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $deniedRights = [Security.AccessControl.FileSystemRights]::CreateDirectories -bor
+        [Security.AccessControl.FileSystemRights]::CreateFiles -bor
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [Security.AccessControl.FileSystemRights]::Delete
+    $deny = [Security.AccessControl.FileSystemAccessRule]::new(
+        $sid, $deniedRights, [Security.AccessControl.AccessControlType]::Deny)
+    $restrictedRootAcl.AddAccessRule($deny)
+    $denyProbe = Join-Path $root 'root-write-probe'
+    $componentAcl = (Get-Acl -LiteralPath $component).Sddl
+    try {
+        Set-Acl -LiteralPath $root -AclObject $restrictedRootAcl
+        Assert-Rejected { New-Item -ItemType Directory -Path $denyProbe -ErrorAction Stop } 'Root must reject new children'
+        & $packageInstaller -UseBuiltLauncher
+        Assert-True ((Get-Acl -LiteralPath $component).Sddl -eq $componentAcl) 'Update changed stable component ACL'
+        Assert-True ((Get-FileHash -LiteralPath $launcher).Hash -eq (Get-FileHash -LiteralPath $built).Hash) 'Read-only parent update failed'
+        $installedHash = (Get-FileHash -LiteralPath $launcher).Hash
+        $scriptHash = (Get-FileHash -LiteralPath $installedScript).Hash
+        # Fail after both staged files have been installed.
+        $packageScript = Join-Path $PackageRoot 'scripts\windows-local-notification.ps1'
+        $savedScript = [IO.File]::ReadAllBytes($packageScript)
+        try {
+            Set-Content -LiteralPath $packageScript -Value "throw 'fixture registration failure'" -Encoding Ascii
+            Assert-Rejected { & $packageInstaller -UseBuiltLauncher } 'Registration failure'
+            Assert-True ((Get-FileHash -LiteralPath $launcher).Hash -eq $installedHash) 'Rollback changed launcher'
+            Assert-True ((Get-FileHash -LiteralPath $installedScript).Hash -eq $scriptHash) 'Rollback did not restore WinRT script'
+            Assert-True (Test-Path -LiteralPath $registration) 'Rollback removed existing registration'
+        } finally {
+            [IO.File]::WriteAllBytes($packageScript, $savedScript)
+        }
+        $remaining = @(Get-ChildItem -LiteralPath $component -Force)
+        Assert-True ($remaining.Count -eq 2 -and @($remaining | Where-Object { $_.PSIsContainer }).Count -eq 0) 'Staging/backup leftovers'
+        Assert-True ((Get-Acl -LiteralPath $root).Sddl -eq $restrictedRootAcl.Sddl) 'Update changed protected root ACL'
+    } finally {
+        Set-Acl -LiteralPath $root -AclObject $savedRootAcl
+        if (Test-Path -LiteralPath $denyProbe) { Remove-Item -LiteralPath $denyProbe }
+    }
+    Write-Output 'Stable component update and rollback with denied parent writes: OK.'
     # Simulate the old profile layout, including unrelated widget data.
     [IO.Directory]::CreateDirectory($legacyRoot, (Get-Acl -LiteralPath $root)) | Out-Null
     New-Item -ItemType Directory -Path $legacy, $fixtureWidgets, $fixtureConfig | Out-Null
