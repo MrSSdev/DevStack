@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect DevStack notification events while Ubuntu is running
+
+[Timer]
+OnBootSec=10s
+OnUnitInactiveSec=8s
+AccuracySec=1s
+Unit=devstack-notifications.service
+
+[Install]
+WantedBy=timers.target

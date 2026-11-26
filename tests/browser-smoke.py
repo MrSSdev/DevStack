@@ -9,6 +9,7 @@ import os
 import pathlib
 import re
 import smtplib
+import subprocess
 import time
 import unittest
 import urllib.request
@@ -81,7 +82,14 @@ class BrowserAcceptance(unittest.TestCase):
         cls.pw.stop()
 
     def setUp(self):
-        self.context = self.browser.new_context(viewport={'width':853, 'height':950}, locale='pl-PL')
+        # Exercise the production network-only service worker in every
+        # scenario. Playwright 1.60's service_workers='block' installs an init
+        # script that reads navigator.serviceWorker in every frame. That getter
+        # throws in our intentionally opaque, script-disabled mail iframe.
+        # Do not inject that shim or weaken the iframe/CSP to accommodate it.
+        # The worker handles only same-origin root navigations, not API calls
+        # or images; the independent context network guard stays in force.
+        self.context = self.browser.new_context(viewport={'width':853, 'height':950}, locale='pl-PL', service_workers='allow')
         self.addCleanup(self.context.close)
         self.page = self.context.new_page()
         self.errors = []
@@ -305,7 +313,7 @@ class BrowserAcceptance(unittest.TestCase):
                             self.page.get_by_role('button',name='Tekst',exact=True).click();self.shot(prefix+'mail-text')
                             self.page.get_by_role('button',name='Źródło HTML',exact=True).click();self.shot(prefix+'mail-source')
                         if route=='settings':
-                            for label in ['Środowisko','Instalatory','Windows','Widżety','Bezpieczeństwo']:
+                            for label in ['Środowisko','Instalatory','Windows','Widżety','Powiadomienia','Bezpieczeństwo']:
                                 self.page.get_by_role('navigation',name='Kategorie ustawień').get_by_role('button',name=label,exact=True).click()
                                 if label=='Instalatory':
                                     expect(self.page.locator('section[aria-label="Instalatory"]').get_by_text('Odczytywanie…',exact=True)).to_be_hidden(timeout=60000)
@@ -318,6 +326,10 @@ class BrowserAcceptance(unittest.TestCase):
         send(HTML_SUBJECT, HTML)
         self.wait_total(43)
         self.goto('mail')
+        # Regression: verify mail rendering and the external image guard
+        # while the main document really is controlled by the PWA worker.
+        self.page.wait_for_function("navigator.serviceWorker.controller !== null")
+        self.assertEqual(self.page.evaluate('caches.keys()'),[])
         expect(self.page.get_by_text('1–40 / 43',exact=True)).to_be_visible()
         for theme in ['light','dark']:
             self.theme(theme)
@@ -630,6 +642,75 @@ class BrowserAcceptance(unittest.TestCase):
         expect(self.page.locator('main')).to_be_visible()
         expect(installer).to_have_count(0)
         self.page.unroute('**/api/state',job_response)
+
+    def test_08_pwa_and_notification_history(self):
+        manifest=self.context.request.get(BASE+'/manifest.webmanifest')
+        self.assertEqual(manifest.status,200)
+        info=manifest.json()
+        self.assertEqual(info['display'],'standalone')
+        self.assertEqual(info['scope'],'/')
+        self.assertEqual(info['id'],'/')
+        self.assertEqual(info['start_url'],'/#/dashboard')
+        for icon in info['icons']:
+            response=self.context.request.get(BASE+icon['src'])
+            self.assertEqual(response.status,200)
+            if icon['type']=='image/png':self.assertTrue(response.body().startswith(b'\x89PNG\r\n\x1a\n'))
+        self.goto('dashboard')
+        self.page.wait_for_function("navigator.serviceWorker.controller !== null")
+        self.assertTrue(self.page.evaluate("navigator.serviceWorker.getRegistration('/').then(r=>!!r?.active)"))
+        self.assertEqual(self.page.evaluate('caches.keys()'),[])
+        # Establish the empty-mailbox baseline and finish any prior worker
+        # pass before clearing the independent event history.
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
+        panel=self.page.get_by_role('region',name='Historia powiadomień')
+        expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
+        # The mailbox baseline is established even when Mailpit returns null
+        # instead of an empty messages array.
+        send('Notification fixture alpha')
+        self.wait_total(1)
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        item=panel.locator('[data-notification-id]').filter(has_text='Notification fixture alpha')
+        expect(item).to_have_count(1,timeout=20000)
+        expect(self.page.locator('[data-slot="toast"]').filter(has_text='Notification fixture alpha')).to_be_visible(timeout=10000)
+        second=self.context.new_page()
+        try:
+            second.goto(BASE+'/#/dashboard')
+            expect(second.locator('main')).to_be_visible()
+            second.get_by_role('button',name='Powiadomienia',exact=True).click()
+            other=second.get_by_role('region',name='Historia powiadomień')
+            expect(other.locator('[data-notification-id]').filter(has_text='Notification fixture alpha')).to_have_count(1)
+            expect(second.locator('[data-slot="toast"]').filter(has_text='Notification fixture alpha')).to_have_count(0)
+            item.get_by_role('button',name='Usuń powiadomienie: Nowa wiadomość e-mail').click()
+            expect(item).to_have_count(0)
+            expect(other.locator('[data-notification-id]').filter(has_text='Notification fixture alpha')).to_have_count(0,timeout=10000)
+            self.assertEqual(mailpit()['total'],1)
+            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+            expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
+            second.close()
+            send('Notification fixture beta')
+            self.wait_total(2)
+            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+            item=panel.locator('[data-notification-id]').filter(has_text='Notification fixture beta')
+            expect(item).to_have_count(1,timeout=20000)
+            item.get_by_role('button').filter(has_text='Notification fixture beta').click()
+            expect(self.page.get_by_role('heading',name='Notification fixture beta')).to_be_visible()
+            self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
+            expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
+            panel.get_by_role('button',name='Wyczyść wszystko',exact=True).click()
+            expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
+            self.page.reload()
+            expect(self.page.locator('main')).to_be_visible()
+            self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
+            expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
+            self.assertEqual(mailpit()['total'],2)
+        finally:
+            if not second.is_closed():second.close()
+        anonymous=self.browser.new_context()
+        try:
+            self.assertEqual(anonymous.request.post(BASE+'/api/notifications/poll',data={'client':'a'*32}).status,403)
+        finally:anonymous.close()
 
     def test_05_login_screen_and_form(self):
         anonymous=self.browser.new_context(viewport={'width':853,'height':950})

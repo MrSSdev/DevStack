@@ -20,7 +20,7 @@ if [[ -e /etc/devstack/server.json || -e /etc/nginx/sites-available/devstack-man
   echo 'Existing DevStack installation found. Installer refuses overwrite.' >&2
   exit 1
 fi
-if [[ ! -f "$SRC/backend/public/index.html" ]] || [[ ! -d "$SRC/backend/public/assets" ]]; then
+if [[ ! -f "$SRC/backend/public/index.html" ]] || [[ ! -d "$SRC/backend/public/assets" ]] || [[ ! -f "$SRC/backend/public/sw.js" ]] || [[ ! -f "$SRC/backend/public/manifest.webmanifest" ]]; then
   echo 'Frontend is not built. First run bash scripts/build-frontend.sh as normal user.' >&2
   exit 1
 fi
@@ -34,7 +34,7 @@ if ! command -v systemctl >/dev/null || [[ "$(ps -p 1 -o comm=)" != systemd ]]; 
 fi
 printf '[1/8] Installing official Ubuntu prerequisites...\n'
 apt-get update
-apt-get install -y nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-xml mariadb-server redis-server mkcert acl python3 ca-certificates
+apt-get install -y nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-xml php8.5-sqlite3 php8.5-mbstring mariadb-server redis-server mkcert acl python3 ca-certificates
 printf '[2/8] Creating unprivileged panel account and root-owned directories...\n'
 if ! id devstackweb >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin devstackweb
@@ -50,6 +50,12 @@ install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web /var/lib/
 cp -a "$SRC/backend/public/." /opt/devstack/public/
 cp -a "$SRC/backend/security.php" /opt/devstack/security.php
 cp -a "$SRC/backend/mail-preview.php" /opt/devstack/mail-preview.php
+for item in notifications.php push-helper.php; do
+  install -m 0644 -o root -g root "$SRC/backend/$item" "/opt/devstack/$item"
+done
+for item in notifications-worker.php notification-push.py devstack-notifications.service devstack-notifications.timer; do
+  install -m 0644 -o root -g root "$SRC/scripts/$item" "/opt/devstack/scripts/$item"
+done
 install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
 install -m 0644 -o root -g root "$SRC/daemon/project_frameworks.py" /opt/devstack/daemon/project_frameworks.py
 install -m 0644 -o root -g root "$SRC/daemon/managed_services.py" /opt/devstack/daemon/managed_services.py
@@ -171,6 +177,9 @@ systemctl enable --now nginx php8.5-fpm mariadb redis-server
 systemctl reload php8.5-fpm
 systemctl reload nginx
 systemctl enable --now devstackd
+install -m 0644 -o root -g root /opt/devstack/scripts/devstack-notifications.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now devstack-notifications.timer
 curl -fsSk --resolve devstack.test:443:127.0.0.1 https://devstack.test/ | grep -q '<div id="root"></div>'
 systemctl --no-pager is-active devstackd nginx php8.5-fpm mariadb redis-server
 printf '\nDevStack installed on WSL. Run windows/sync-hosts.ps1 as Windows Administrator.\n'

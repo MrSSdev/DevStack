@@ -1,0 +1,23 @@
+[Unit]
+Description=DevStack local notification event collection
+After=devstackd.service
+ConditionPathExists=/opt/devstack/scripts/notifications-worker.php
+
+[Service]
+Type=oneshot
+User=devstackweb
+Group=devstackweb
+ExecStart=/usr/bin/php /opt/devstack/scripts/notifications-worker.php
+TimeoutStartSec=45s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/devstack-web
+InaccessiblePaths=-/mnt/c -/var/lib/devstack -/etc/devstack/certs
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
