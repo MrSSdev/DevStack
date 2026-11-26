@@ -1,0 +1,37 @@
+name: Windows component layout
+
+on:
+  push:
+    branches:
+      - main
+      - test/windows-component-layout
+  pull_request:
+    paths:
+      - 'windows/windows-layout.ps1'
+      - 'windows/initialize-windows-layout.ps1'
+      - 'windows/test-windows-layout.ps1'
+      - '.github/workflows/windows-component-layout.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Parse PowerShell layout scripts
+        shell: powershell
+        run: |
+          foreach ($path in @('windows/windows-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/test-windows-layout.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | Format-List; throw "Cannot parse $path" }
+          }
+      - name: Verify fresh provisioning and fail-closed behavior on NTFS
+        shell: powershell
+        run: ./windows/test-windows-layout.ps1
