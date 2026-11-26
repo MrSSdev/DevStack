@@ -16,7 +16,7 @@ The bell shows the latest 200 events (up to 30 days). Each entry can be
 read or deleted individually; **Wyczyść wszystko** removes all entries.
 Deletion affects the journal, not source mail, project data or in-flight
 operations. A separate source cursor prevents deleted mail/job records
-from returning on refresh. Mail notification bursts can be grouped.
+from returning on refresh. Deleted job IDs retain a bounded-lifetime tombstone (90 days, or while the latest job remains current) so an older snapshot cannot resurrect a cleared result. Mail notification bursts can be grouped.
 
 Authenticated operation results are recorded at the API boundary. Running
 installer states and the final result use one stable job record; the

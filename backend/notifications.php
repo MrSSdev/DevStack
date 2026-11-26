@@ -28,7 +28,8 @@ final class DevStackNotices
             );
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS mail_seen (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);");
+            CREATE TABLE IF NOT EXISTS mail_seen (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS job_tombstones (id TEXT PRIMARY KEY, stamp INTEGER NOT NULL);");
         } finally {
             umask($old);
         }
@@ -97,7 +98,10 @@ final class DevStackNotices
     private function prune(): void
     {
         $this->execute('DELETE FROM clients WHERE expires<=?', [time()]);
+        $this->execute("INSERT OR IGNORE INTO job_tombstones SELECT id,? FROM notices WHERE id LIKE 'job-%' AND updated<? AND kind!='loading'",[time(),time()-30*86400]);
         $this->execute('DELETE FROM notices WHERE updated<? AND kind!=?', [time()-30*86400,'loading']);
+        $this->execute("INSERT OR IGNORE INTO job_tombstones SELECT id,? FROM (SELECT id FROM notices ORDER BY updated DESC,id DESC LIMIT -1 OFFSET " . self::LIMIT . ") WHERE id LIKE 'job-%'",[time()]);
+        $this->execute('DELETE FROM job_tombstones WHERE stamp<? AND id!=?', [time()-90*86400,'job-'.($this->meta('job')??'')]);
         $this->db->exec('DELETE FROM notices WHERE id IN (
             SELECT id FROM notices ORDER BY updated DESC,id DESC LIMIT -1 OFFSET ' . self::LIMIT . ')');
         // Delayed results are still in history; never replay a backlog as push.
@@ -146,6 +150,7 @@ final class DevStackNotices
             if ($ok && is_string($job) && preg_match('~^[a-f0-9]{32}$~D', $job)) {
                 return $this->atomic(function () use ($job,$slug,$owner) {
                     $id = 'job-' . $job;
+                    if ($this->execute('SELECT 1 FROM job_tombstones WHERE id=?',[$id])->fetchColumn()) return $id;
                     $this->insert($id,'installer',$slug!==''?'Instalacja projektu':'Instalator',
                         $slug,'/#/projects','loading',$owner,false,true,'accepted');
                     if ($owner!=='') $this->execute('UPDATE notices SET owner=? WHERE id=? AND kind=?',[$owner,$id,'loading']);
@@ -210,6 +215,7 @@ final class DevStackNotices
         $description=($slug!==''?$slug.' · ':'').self::clean($job['message']??'',300);
         $route=$slug!==''?'/#/project/'.$slug:'/#/settings';
         $kind=$terminal?($state==='succeeded'?'success':'error'):'loading';
+        if ($this->execute('SELECT 1 FROM job_tombstones WHERE id=?',[$id])->fetchColumn()) return $id;
         if ($last!==$key) {
             $this->setMeta('job',$key);
             // First activation must not announce the old, already completed job.
@@ -331,9 +337,16 @@ final class DevStackNotices
     public function mutate(string $action, mixed $id = null): void
     {
         $this->atomic(function () use ($action,$id) {
-            if ($action==='clear') $this->db->exec('DELETE FROM notices');
+            if ($action==='clear') {
+                $this->execute("INSERT OR IGNORE INTO job_tombstones SELECT id,? FROM notices WHERE id LIKE 'job-%'",[time()]);
+                $this->db->exec('DELETE FROM notices');
+            }
             elseif ($action==='read-all') $this->db->exec('UPDATE notices SET unread=0');
-            elseif ($action==='delete') $this->execute('DELETE FROM notices WHERE id=?',[self::validId($id)]);
+            elseif ($action==='delete') {
+                $id=self::validId($id);
+                if (str_starts_with($id,'job-')) $this->execute('INSERT OR IGNORE INTO job_tombstones SELECT id,? FROM notices WHERE id=?',[time(),$id]);
+                $this->execute('DELETE FROM notices WHERE id=?',[$id]);
+            }
             elseif ($action==='read') $this->execute('UPDATE notices SET unread=0 WHERE id=?',[self::validId($id)]);
             else throw new InvalidArgumentException('Nieznana operacja powiadomienia.');
         });

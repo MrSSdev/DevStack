@@ -643,18 +643,20 @@ class BrowserAcceptance(unittest.TestCase):
         for icon in info['icons']:
             response=self.context.request.get(BASE+icon['src'])
             self.assertEqual(response.status,200)
-            if icon['type']=='image/png':self.assertTrue(response.body().startswith(b'\\x89PNG\\r\\n\\x1a\\n'))
+            if icon['type']=='image/png':self.assertTrue(response.body().startswith(b'\x89PNG\r\n\x1a\n'))
         self.goto('dashboard')
         self.page.wait_for_function("navigator.serviceWorker.controller !== null")
         self.assertTrue(self.page.evaluate("navigator.serviceWorker.getRegistration('/').then(r=>!!r?.active)"))
         self.assertEqual(self.page.evaluate('caches.keys()'),[])
-        # Start from a clean notification journal, not a cleared mailbox.
+        # Establish the empty-mailbox baseline and finish any prior worker
+        # pass before clearing the independent event history.
+        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
         self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
         self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
         panel=self.page.get_by_role('region',name='Historia powiadomień')
         expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
-        # Ensure the worker has observed an empty mailbox before sending.
-        subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+        # The mailbox baseline is established even when Mailpit returns null
+        # instead of an empty messages array.
         send('Notification fixture alpha')
         self.wait_total(1)
         subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)

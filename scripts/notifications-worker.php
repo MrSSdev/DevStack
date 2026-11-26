@@ -17,8 +17,10 @@ try {
     $messages=[];
     for ($start=0;$start<200;$start+=40) {
         $page=devstack_mailpit_request('list',['start'=>(string)$start]);
-        $rows=is_array($page)&&is_array($page['messages']??null)?$page['messages']:null;
-        if ($rows===null) throw new RuntimeException('Invalid mailbox listing');
+        if (!is_array($page)||!array_key_exists('messages',$page)||($page['messages']!==null&&!is_array($page['messages']))) {
+            throw new RuntimeException('Invalid mailbox listing');
+        }
+        $rows=$page['messages']??[];
         $messages=array_merge($messages,$rows);
         if (count($rows)<40) break;
     }

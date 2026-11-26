@@ -28,6 +28,11 @@ check_notice(count($store->poll($a)['items'])===1&&$store->poll($a)['items'][0][
 $store->mutate('clear');
 $store->observeJob($state,$a);
 check_notice($store->poll($a)['items']===[],'Cleared job result cannot return');
+$other=['id'=>str_repeat('d',32),'slug'=>'second','state'=>'scaffolding','message'=>'Working'];
+$store->observeJob($other,$b);
+$store->observeJob($state,$a); // An older snapshot arrives after the new job.
+check_notice(count($store->poll($a)['items'])===1&&$store->poll($a)['items'][0]['id']==='job-'.$other['id'],'Deleted older job stays deleted after a newer job');
+$store->mutate('clear');
 $id=$store->operation('/api/services/control',['service'=>'redis','action'=>'restart'],['accepted'=>true],$a);
 $store->acknowledge($id,$a);
 check_notice($store->poll($b)['toast']===[],'Operation response acknowledged once');
