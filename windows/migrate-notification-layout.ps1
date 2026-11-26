@@ -39,7 +39,7 @@ function Invoke-ElevatedMigration([string]$Mode) {
     # elevated read/copy/launch of old or newly staged private payloads.
     $quoted = "'" + $engine.Replace("'","''") + "'"
     $command = '$ErrorActionPreference = "Stop"; try { & ' + $quoted +
-        " -Mode $Mode -ExpectedUserSid '$($identity.User.Value)' -TransactionId '$transaction'; exit 0 } catch { Write-Error -ErrorAction Continue $_; exit 1 }"
+        " -Mode $Mode -ExpectedUserSid '$($identity.User.Value)' -TransactionId '$transaction'; exit 0 } catch { Write-Error -ErrorAction Continue `$_; exit 1 }"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $process = Start-Process -FilePath $ps -Verb RunAs -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) -Wait -PassThru
     try { if ($process.ExitCode -ne 0) { throw "Elevated $Mode failed (exit $($process.ExitCode))." } }
