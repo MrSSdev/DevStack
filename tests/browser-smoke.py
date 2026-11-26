@@ -775,6 +775,9 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(manifest.status,200)
         info=manifest.json()
         self.assertEqual(info['display'],'standalone')
+        # The installed manifest requests reuse of an existing app window.
+        # Native Windows/Edge window reuse is verified on the device, not here.
+        self.assertEqual(info['launch_handler'],{'client_mode':'navigate-existing'})
         self.assertEqual(info['scope'],'/')
         self.assertEqual(info['id'],'/')
         self.assertEqual(info['start_url'],'/#/dashboard')

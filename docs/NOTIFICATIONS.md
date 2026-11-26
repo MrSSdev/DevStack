@@ -4,7 +4,7 @@
 
 Open the trusted HTTPS dashboard in Microsoft Edge, use the browser's
 app installation action and pin DevStack to Start or the taskbar.
-The manifest has a standalone display mode and self-hosted Blocks icons.
+The manifest has a standalone display mode and self-hosted Blocks icons. Its `launch_handler.client_mode` is `navigate-existing` so supported browsers can reuse an existing DevStack window for a protocol launch. Existing installations must receive the updated manifest; the actual window reuse depends on the browser and is verified separately on Windows.
 The app uses the normal session boundary and the existing theme.
 Its service worker is network-only: no offline cache of authenticated
 HTML, API responses, mail, credentials or project data. A failed root

@@ -69,6 +69,7 @@ test('fragment parser keeps the normal route and validates the complete journal 
 
 test('manifest protocol launches normalize to the existing route and exact journal marker',()=>{
   const manifest=JSON.parse(readFileSync(new URL('../public/manifest.webmanifest',import.meta.url),'utf8'))
+  assert.deepEqual(manifest.launch_handler,{client_mode:'navigate-existing'})
   assert.deepEqual(manifest.protocol_handlers,[{protocol:'web+devstack',url:'/#/protocol?uri=%s'}])
   const launch=uri=>manifest.protocol_handlers[0].url.replace('%s',encodeURIComponent(uri)).slice(1)
   assert.equal(protocolLaunchHash(launch('web+devstack://open/mail')),'#/mail')

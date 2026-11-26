@@ -58,7 +58,7 @@ Reopen **Win + W**.
 
 **Ubuntu:** select **Uruchom Ubuntu** to start the distribution. Select **Zatrzymaj Ubuntu** and confirm to stop it; save work first. Click a resource tile for details.
 
-**DevStack:** select a service tile for details. Choose **Uruchom ponownie** and confirm to restart that service. The status line reports progress and verification; a successful result clears after 30 seconds. A later healthy reading clears an earlier service warning. **Dodaj projekt** and **Projekty** open their exact DevStack routes in the registered PWA, or the default browser if no suitable handler exists.
+**DevStack:** select a service tile for details. Choose **Uruchom ponownie** and confirm to restart that service. The status line reports progress and verification; a successful result clears after 30 seconds. A later healthy reading clears an earlier service warning. **Dodaj projekt** and **Projekty** open their exact DevStack routes in the registered PWA, or the default browser if no suitable handler exists. The PWA manifest requests navigation in an existing app window on supported browsers, rather than opening a new window for each click.
 
 Both cards refresh when visible. Opening the panel preserves the current Ubuntu lifecycle state.
 
