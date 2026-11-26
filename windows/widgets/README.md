@@ -11,7 +11,7 @@ Windows 11 x64 with a compatible Web Widgets host and Windows App Runtime 2.7. S
 
 ## Download
 
-From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-0.5.2.0-migration** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
+From a successful [Windows Widgets build](https://github.com/MrSSdev/DevStack/actions/workflows/widgets.yml), download the **DevStack-Windows-Widgets-0.5.3.0-migration** artifact. Extract the complete archive to `%USERPROFILE%\Downloads\DevStack-Windows-Widgets-x64`.
 
 Keep the MSIX, CER, installers, frontend ZIP, and `telemetry/` and `services/` directories from the same build together.
 
@@ -58,7 +58,7 @@ Reopen **Win + W**.
 
 **Ubuntu:** select **Uruchom Ubuntu** to start the distribution. Select **Zatrzymaj Ubuntu** and confirm to stop it; save work first. Click a resource tile for details.
 
-**DevStack:** select a service tile for details. Choose **Uruchom ponownie** and confirm to restart that service. The status line reports progress and verification; a successful result clears after 30 seconds. A later healthy reading clears an earlier service warning. **Dodaj projekt** and **Projekty** open the dashboard in the default browser.
+**DevStack:** select a service tile for details. Choose **Uruchom ponownie** and confirm to restart that service. The status line reports progress and verification; a successful result clears after 30 seconds. A later healthy reading clears an earlier service warning. **Dodaj projekt** and **Projekty** open their exact DevStack routes in the registered PWA, or the default browser if no suitable handler exists.
 
 Both cards refresh when visible. Opening the panel preserves the current Ubuntu lifecycle state.
 

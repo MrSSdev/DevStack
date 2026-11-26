@@ -28,7 +28,7 @@ fi
 cd "$root"
 
 branch="$(git branch --show-current)"
-if [[ "$branch" != main && "$branch" != test/windows-local-notifications && "$branch" != test/windows-component-layout ]]; then
+if [[ "$branch" != main && "$branch" != test/windows-local-notifications && "$branch" != test/windows-component-layout && "$branch" != test/devstack-final-polish ]]; then
   echo 'Update supports main or an explicitly verified Windows integration test branch.' >&2
   exit 2
 fi

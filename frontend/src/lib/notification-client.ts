@@ -50,7 +50,7 @@ export function protocolLaunchHash(hash:string):string|undefined{
   if(!uri.startsWith(protocolScheme)||/[\x00-\x20\x7f]/.test(uri))return fallback
   const target='#/'+uri.slice(protocolScheme.length)
   const route=notificationRouteHash(target)
-  if(!/^#\/(?:dashboard|projects|settings|mail(?:\/[A-Za-z0-9]{22})?)$/.test(route))return fallback
+  if(!/^#\/(?:dashboard|new|projects|settings|mail(?:\/[A-Za-z0-9]{22})?)$/.test(route))return fallback
   const id=notificationClickId(target)
   if(route.startsWith('#/mail/')&&id&&id!=='mail-'+route.slice('#/mail/'.length))return fallback
   return target
