@@ -1,3 +1,16 @@
+## Version 0.5.2.0 — protected Windows component layout
+
+The current package uses C:\DevStack\Widgets for private configuration,
+cache and logs. For an existing installation use the matching verified bundle
+and its Migrate-DevStackWindows.ps1 entry point; see WINDOWS-COMPONENT-LAYOUT.md.
+For fresh installation, record the intended user SID in ordinary PowerShell,
+then run Install-Widgets.ps1 -ExpectedUserSid <SID> in elevated Windows
+PowerShell 5.1. Run any deliberately needed Linux integration separately
+in ordinary PowerShell. Existing credentials are preserved by the migration,
+not regenerated. The first-open reset is unchanged.
+
+The remainder of this file is historical documentation for older packages.
+
 ## Version 0.5.1.0 update — first-open reset
 
 This maintenance release changes the Windows installation sequence, not the widget UI or provider behavior. If the release requires service integration, use `Install-Widgets.ps1 -UpdateServiceIntegration` after updating DevStack in Ubuntu and while Ubuntu is already running. The script preserves the dashboard and WSL telemetry. For a package-only update, omit the switch. After deployment and any integration setup, follow the prompt: open Win+W, wait for the cards to begin loading or display content, close the panel, then press Enter. The installer resets the widget processes again and exits. Reopen Win+W and verify both cards. To finish manually deferred setup, run `Complete-WidgetUpdate.ps1` with the same process-scoped PowerShell execution policy. No scheduled task or background process is created. No need to reinstall a working 0.5.0.0 solely to exercise this maintenance change.

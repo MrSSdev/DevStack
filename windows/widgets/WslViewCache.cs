@@ -13,6 +13,7 @@ internal static class WslViewCache
         {
             try
             {
+                if (!WidgetPaths.Available) return null;
                 var path = Path.Combine(WidgetDiagnostics.DirectoryPath, "wsl-view-cache.json");
                 if (!File.Exists(path) || new FileInfo(path).Length > 8192) return null;
                 var data = JsonSerializer.Deserialize<Entry>(File.ReadAllText(path), Json);
@@ -31,7 +32,7 @@ internal static class WslViewCache
         {
             try
             {
-                Directory.CreateDirectory(WidgetDiagnostics.DirectoryPath);
+                if (!WidgetPaths.Available) return;
                 var path = Path.Combine(WidgetDiagnostics.DirectoryPath, "wsl-view-cache.json");
                 File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(new Entry(1, state.WslRunning, state.CheckedAt,
                     state.WslRunning == true ? resources : WslResources.Empty("offline")), Json));

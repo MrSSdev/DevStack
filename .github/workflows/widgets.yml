@@ -2,10 +2,10 @@ name: DevStack Windows Widgets
 
 on:
   push:
-    branches: [main, feature/windows-widgets, test/windows-local-notifications]
-    paths: ['windows/widgets/**', '.github/workflows/widgets.yml']
+    branches: [main, feature/windows-widgets, test/windows-local-notifications, test/windows-component-layout]
+    paths: ['windows/widgets/**', 'windows/windows-layout.ps1', 'windows/windows-layout-migration.ps1', 'windows/layout-directory-identity.cs', 'windows/notification-layout-copy.ps1', 'windows/migrate-notification-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/install-hosts-sync.ps1', 'windows/hosts-layout.ps1', 'windows/watch-hosts.ps1', 'windows/hosts-lib.ps1', '.github/workflows/widgets.yml']
   pull_request:
-    paths: ['windows/widgets/**', '.github/workflows/widgets.yml']
+    paths: ['windows/widgets/**', 'windows/windows-layout.ps1', 'windows/windows-layout-migration.ps1', 'windows/layout-directory-identity.cs', 'windows/notification-layout-copy.ps1', 'windows/migrate-notification-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/install-hosts-sync.ps1', 'windows/hosts-layout.ps1', 'windows/watch-hosts.ps1', 'windows/hosts-lib.ps1', '.github/workflows/widgets.yml']
   workflow_dispatch:
 
 permissions:

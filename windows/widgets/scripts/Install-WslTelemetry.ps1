@@ -4,8 +4,11 @@
 param([switch]$Remove)
 $ErrorActionPreference = 'Stop'
 $Distro = 'Ubuntu-26.04'
-$ConfigDir = Join-Path $env:LOCALAPPDATA 'DevStack\Widgets'
+. (Join-Path $PSScriptRoot 'Widget-Layout.ps1')
+$ConfigDir = Get-DevStackWidgetDirectory
 $ConfigPath = Join-Path $ConfigDir 'telemetry.json'
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+if ($null -ne (Get-DevStackLayoutItem $ConfigPath)) { Assert-DevStackWidgetPrivateItem $ConfigPath $false $sid }
 $running = (& wsl.exe --list --running --quiet | Out-String).Replace([string][char]0, '')
 if ($LASTEXITCODE -ne 0 -or ($running -split '\r?\n' | ForEach-Object { $_.Trim() }) -notcontains $Distro) {
     throw 'Ubuntu-26.04 must already be running. Start it deliberately, then run this setup again.'
@@ -105,24 +108,9 @@ if ($Remove) {
     Write-Host 'Read-only metrics removed. WSL controls remain available.'
     return
 }
-New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = [System.Security.AccessControl.DirectorySecurity]::new()
-$acl.SetAccessRuleProtection($true, $false)
-$inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
-$propagate = [System.Security.AccessControl.PropagationFlags]::None
-foreach ($principal in @($sid, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
-    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($principal, 'FullControl', $inherit, $propagate, 'Allow')
-    $acl.AddAccessRule($rule)
-}
-Set-Acl -LiteralPath $ConfigDir -AclObject $acl
 $config = @{ schema=1; distro=$Distro; port=43871; token=$token } | ConvertTo-Json -Compress
 [IO.File]::WriteAllText($ConfigPath, $config, [System.Text.UTF8Encoding]::new($false))
-$fileAcl = [System.Security.AccessControl.FileSecurity]::new()
-$fileAcl.SetAccessRuleProtection($true, $false)
-foreach ($principal in @($sid, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
-    $fileAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($principal, 'FullControl', 'Allow'))
-}
-Set-Acl -LiteralPath $ConfigPath -AclObject $fileAcl
+Set-Acl -LiteralPath $ConfigPath -AclObject (New-DevStackWidgetFileAcl $sid)
+Assert-DevStackWidgetPrivateItem $ConfigPath $false $sid
 Write-Host 'Read-only Ubuntu metrics installed. Reopen Win+W to read CPU, RAM, disk and uptime.'
 Write-Host 'No resident collector loop: systemd starts one short process per authenticated request.'

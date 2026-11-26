@@ -2,15 +2,19 @@ name: Widget telemetry installer
 
 on:
   push:
-    branches: [main, feature/windows-widgets, test/windows-local-notifications]
+    branches: [main, feature/windows-widgets, test/windows-local-notifications, test/windows-component-layout]
     paths:
       - 'windows/widgets/scripts/Install-WslTelemetry.ps1'
+      - 'windows/widgets/scripts/Widget-Layout.ps1'
+      - 'windows/windows-layout.ps1'
       - 'windows/widgets/tests/Test-TelemetryInstaller.ps1'
       - 'windows/widgets/telemetry/**'
       - '.github/workflows/widgets-installer.yml'
   pull_request:
     paths:
       - 'windows/widgets/scripts/Install-WslTelemetry.ps1'
+      - 'windows/widgets/scripts/Widget-Layout.ps1'
+      - 'windows/windows-layout.ps1'
       - 'windows/widgets/tests/Test-TelemetryInstaller.ps1'
       - 'windows/widgets/telemetry/**'
       - '.github/workflows/widgets-installer.yml'

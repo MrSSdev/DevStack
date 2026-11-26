@@ -142,3 +142,36 @@ while a task might still be executing them. Do not delete old releases
 until task state and rollback needs are checked. CI checks real task
 registration and action switch without running the task; actual S4U
 execution and hosts reconciliation still require ASUS acceptance.
+
+## Combined Windows migration bundle
+
+The widget package 0.5.2.0 contains the shared policy, root and notification
+migration, Hosts installation, widget data migration and matching MSIX.
+Migrate-DevStackWindows.ps1 is its single ordinary-user entry point. Verify
+the exact accepted commit and artifact from GitHub Actions. Extract the
+entire bundle to the local Windows disk, close Win+W, deliberately stop
+Ubuntu-26.04 and keep it stopped. Run the script in ordinary Windows
+PowerShell 5.1 with -ExpectedCommit <full SHA>. It requests UAC for root
+preparation/publication, Hosts and MSIX deployment only; the ordinary
+process copies private files and verifies their hashes. Do not execute an
+unreviewed bundle, or extract it to the user-owned DevStack component tree.
+
+The migration copies the five recognized widget state files when present,
+without changing the existing Linux tokens or reinstalling the collectors.
+A conflicting file, unknown content or unsafe directory causes refusal.
+It publishes the protected Hosts task, deploys the new MSIX and preserves
+the guided first-open reset. All new readers and installers use
+C:\DevStack\Widgets; the provider does not create the root. For a fresh
+installation, each elevated setup prepares its required component with the
+intended user SID. The notification installer prepares only its own private
+directory; the MSIX installer prepares Widgets; Hosts prepares Hosts.
+
+There is no atomic transaction spanning all three Windows components.
+After root publication, later failure retains the new protected root and
+old data for inspection or component-specific retry. Root-only rollback
+must not be used after Hosts/Widgets have been provisioned. Do not delete
+legacy ProgramData, AppData, migration journals, backups, or earlier MSIX
+artifacts before physical acceptance. Cleanup requires a separate explicit
+review of actual task paths, retained history and all legacy references.
+CI does not replace live WinRT, S4U execution, ordinary-token access,
+MSIX deployment or widget lifecycle acceptance on ASUS.

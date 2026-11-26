@@ -4,6 +4,9 @@ using System.Text.Json;
 using DevStack.Widgets;
 using Microsoft.Windows.Widgets.Providers;
 
+var fixture=Path.Combine(Path.GetTempPath(),"DevStack-widget-test-"+Guid.NewGuid().ToString("N"));
+WidgetPaths.DirectoryPath=fixture;
+Directory.CreateDirectory(fixture);
 var provider=new WidgetProvider();
 var context=new WidgetContext("test-wsl",WidgetCards.WslId);
 int checks=0;long sequence=0;
@@ -158,4 +161,5 @@ ServiceMessage("action","restart-confirm","mailpit",proof);
 await Wait(()=>DevStackData.Restarts==4&&NoticePhase()=="success","new service restart verified");
 Assert(DevStackData.Last=="mailpit","new service ID forwarded only after confirmation");
 provider.Deactivate(serviceContext.Id);WidgetProvider.Stop();
+Directory.Delete(fixture,true);
 Console.WriteLine($"PASS: {checks} combined WSL/services policy checks (mocked WinRT and OS actions).");

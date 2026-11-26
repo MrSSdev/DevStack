@@ -7,7 +7,7 @@ namespace DevStack.Widgets;
 internal static class WidgetDiagnostics
 {
     private static readonly object Gate = new();
-    internal static string DirectoryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DevStack", "Widgets");
+    internal static string DirectoryPath => WidgetPaths.DirectoryPath;
     internal static void Write(string code, string? id = null, Exception? error = null)
     {
         if (code.Length > 64 || code.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '-'))) return;
@@ -17,7 +17,7 @@ internal static class WidgetDiagnostics
         {
             try
             {
-                Directory.CreateDirectory(DirectoryPath);
+                if (!WidgetPaths.Available) return;
                 var path = Path.Combine(DirectoryPath, "wsl-bridge.log");
                 if (File.Exists(path) && new FileInfo(path).Length > 131072) File.Move(path, path + ".previous", true);
                 File.AppendAllText(path, DateTimeOffset.Now.ToString("O") + " " + code + " widget=" + tag + status + "\n");

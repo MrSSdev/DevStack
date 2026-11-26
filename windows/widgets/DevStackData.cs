@@ -25,7 +25,8 @@ internal static class DevStackData
     private static bool Token(string? text) => text?.Length==64 && text.All(c=>"0123456789abcdef".Contains(c));
     private static async Task<Settings?> Config(CancellationToken ct)
     {
-        var path=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DevStack","Widgets","services.json");
+        if (!WidgetPaths.Available) return null;
+        var path=Path.Combine(WidgetPaths.DirectoryPath,"services.json");
         if(!File.Exists(path)||new FileInfo(path).Length>4096)return null;
         var settings=JsonSerializer.Deserialize<Settings>(await File.ReadAllTextAsync(path,ct),Json);
         return settings is not null && settings.Schema==1 && settings.Distro==StateProbe.Distro && settings.ReadPort==43872 && settings.ControlPort==43873 && Token(settings.ReadToken)&&Token(settings.ControlToken)?settings:null;
