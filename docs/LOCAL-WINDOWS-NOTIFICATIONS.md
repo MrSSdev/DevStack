@@ -7,6 +7,28 @@ modułu, nowej usługi, zadania harmonogramu ani stale działającego procesu.
 Kliknięcie dymka otwiera lokalny adres HTTPS w domyślnej przeglądarce.
 Uwierzytelniony poll oznacza dokładnie wskazane powiadomienie jako przeczytane.
 
+## Próba protokołu PWA (przed zmianą adresu dymka)
+
+ASUS: transport lokalny działa offline, ale Edge otwiera nawet zwykły
+adres https://devstack.test/ w oknie przeglądarki mimo włączonej obsługi
+linków i skojarzeń HTTP/HTTPS MSEdgeHTM. Manifest deklaruje teraz
+web+devstack z mapowaniem do /#/protocol?uri=%s; frontend przed
+renderowaniem sprowadza ten fragment do sprawdzonej lokalnej trasy i
+opcjonalnego dokładnego identyfikatora powiadomienia. Odczyt nadal wymaga
+normalnej uwierzytelnionej sesji i poll z CSRF. CI testuje mapowanie,
+odrzucanie obcych adresów, ciepły i zimny start przez URL manifestu;
+nie udaje rejestracji protokołu przez Windows. Adres produkcyjnego
+dymka pozostaje HTTPS do czasu pozytywnej próby na ASUS-ie.
+
+Po aktualizacji manifestu i rejestracji protokołu przez Edge sprawdź
+Win+R -> web+devstack://open/mail. Może być potrzebna zgoda Edge/Windows
+lub ponowna instalacja samej PWA bez kasowania danych witryny. Nie
+zmieniamy automatycznego startu, nie dodajemy procesu w tle ani własnej
+globalnej rejestracji protokołu w rejestrze Windows. Na tym etapie
+nie deklarujemy obsługi kliknięcia dymka przez protokół.
+
+[Dokumentacja Microsoft](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/handle-protocols).
+
 ## Układ katalogów i bezpieczeństwo
 
     C:\DevStack\

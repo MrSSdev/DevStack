@@ -35,6 +35,29 @@ export function notificationClickId(hash=window.location.hash):string|undefined{
 export function notificationRouteHash(hash=window.location.hash):string{
   return notificationClickId(hash)?hash.slice(0,hash.indexOf('?notice=')):hash
 }
+// Edge maps registered web+devstack URIs to a percent-encoded manifest
+// fragment. Normalize before React reads the route or acknowledges a notice.
+// Only fixed local destinations are accepted; never navigate to a supplied URL.
+const protocolPrefix='#/protocol?uri='
+const protocolScheme='web+devstack://open/'
+export function protocolLaunchHash(hash:string):string|undefined{
+  if(!hash.startsWith(protocolPrefix))return undefined
+  const fallback='#/dashboard'
+  if(hash.length>512)return fallback
+  let uri:string
+  try{uri=decodeURIComponent(hash.slice(protocolPrefix.length))}catch{return fallback}
+  if(!uri.startsWith(protocolScheme)||/[\x00-\x20\x7f]/.test(uri))return fallback
+  const target='#/'+uri.slice(protocolScheme.length)
+  const route=notificationRouteHash(target)
+  if(!/^#\/(?:dashboard|projects|settings|mail(?:\/[A-Za-z0-9]{22})?)$/.test(route))return fallback
+  const id=notificationClickId(target)
+  if(route.startsWith('#/mail/')&&id&&id!=='mail-'+route.slice('#/mail/'.length))return fallback
+  return target
+}
+export function normalizeProtocolLaunch(){
+  const hash=protocolLaunchHash(window.location.hash)
+  if(hash!==undefined)window.history.replaceState(window.history.state,'',window.location.pathname+window.location.search+hash)
+}
 export function consumeNotificationClick(id:string){
   // Another click/navigation may have occurred while the request was in
   // flight. Never overwrite a newer route. Keep the marker until success.

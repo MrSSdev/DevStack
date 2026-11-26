@@ -9,7 +9,7 @@ import ts from 'typescript'
 // Node 20/22 build or when native type stripping is disabled).
 const clientSource=readFileSync(new URL('../src/lib/notification-client.ts',import.meta.url),'utf8')
 const compiled=ts.transpileModule(clientSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText
-const { notificationClickId, notificationRouteHash } =
+const { notificationClickId, notificationRouteHash, protocolLaunchHash } =
   await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'))
 
 const base='https://devstack.test'
@@ -68,6 +68,29 @@ test('fragment parser keeps the normal route and validates the complete journal 
   assert.equal(notificationClickId('#/unknown?notice='+id),undefined)
   assert.equal(notificationClickId(hash+'&other=1'),undefined)
   assert.equal(notificationClickId('#/mail/'+mailId),undefined)
+})
+
+test('manifest protocol launches normalize to the existing route and exact journal marker',()=>{
+  const manifest=JSON.parse(readFileSync(new URL('../public/manifest.webmanifest',import.meta.url),'utf8'))
+  assert.deepEqual(manifest.protocol_handlers,[{protocol:'web+devstack',url:'/#/protocol?uri=%s'}])
+  const launch=uri=>manifest.protocol_handlers[0].url.replace('%s',encodeURIComponent(uri)).slice(1)
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/mail')),'#/mail')
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/mail/'+mailId+'?notice='+id)),route.slice(1)+'?notice='+id)
+  assert.equal(protocolLaunchHash(launch('web+devstack://open/projects?notice=op-'+'a'.repeat(32))),'#/projects?notice=op-'+'a'.repeat(32))
+  assert.equal(protocolLaunchHash('#/mail'),undefined)
+  for(const uri of [
+    'https://evil.invalid/',
+    'web+devstack://evil.invalid/mail',
+    'web+devstack://open//evil.invalid/',
+    'web+devstack://open/../mail',
+    'web+devstack://open/mail?notice=invalid',
+    'web+devstack://open/mail/'+mailId+'?notice=mail-'+'N'.repeat(22),
+    'web+devstack://open/mail/'+mailId+'?notice='+id+'&extra=1',
+    'web+devstack://open/mail\n',
+    'web+devstack://open/mail?url=https://evil.invalid/',
+    'web+devstack://open/'+ 'a'.repeat(600)
+  ])assert.equal(protocolLaunchHash(launch(uri)),'#/dashboard',uri)
+  assert.equal(protocolLaunchHash('#/protocol?uri=%zz'),'#/dashboard')
 })
 
 test('worker leaves only the named client with the existing session and CSRF header',async()=>{

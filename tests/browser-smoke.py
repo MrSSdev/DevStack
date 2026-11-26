@@ -13,6 +13,7 @@ import subprocess
 import time
 import unittest
 import urllib.request
+import urllib.parse
 from email.message import EmailMessage
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, sync_playwright
@@ -676,6 +677,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(info['scope'],'/')
         self.assertEqual(info['id'],'/')
         self.assertEqual(info['start_url'],'/#/dashboard')
+        self.assertEqual(info['protocol_handlers'], [{'protocol':'web+devstack','url':'/#/protocol?uri=%s'}])
         for icon in info['icons']:
             response=self.context.request.get(BASE+icon['src'])
             self.assertEqual(response.status,200)
@@ -785,13 +787,46 @@ class BrowserAcceptance(unittest.TestCase):
             expect(panel.get_by_text('1 nowych',exact=True)).to_be_visible()
             expect(epsilon.locator('[aria-label="Nieprzeczytane"]')).to_have_count(1)
             expect(zeta.locator('[aria-label="Nieprzeczytane"]')).to_have_count(0)
+            # Simulate the manifest URL mapping, not Windows protocol
+            # registration itself. Exercise a hash change in a live page
+            # and the same authenticated acknowledgement path.
+            epsilon_id=epsilon.get_attribute('data-notification-id')
+            def protocol_url(event_id):
+                uri='web+devstack://open/mail/'+event_id[5:]+'?notice='+event_id
+                return BASE+info['protocol_handlers'][0]['url'].replace('%s',urllib.parse.quote(uri,safe=''))
+            panel.get_by_role('button',name='Zamknij historię').click()
+            self.page.goto(protocol_url(epsilon_id))
+            expect(self.page.get_by_role('heading',name='Notification fixture epsilon')).to_be_visible()
+            expect(self.page).to_have_url(BASE+'/#/mail/'+epsilon_id[5:])
+            self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
+            expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible()
+            send('Notification fixture eta')
+            self.wait_total(7)
+            subprocess.run(['sudo','systemctl','start','devstack-notifications.service'],check=True)
+            eta=panel.locator('[data-notification-id]').filter(has_text='Notification fixture eta')
+            expect(eta).to_have_count(1,timeout=20000)
+            eta_id=eta.get_attribute('data-notification-id')
+            protocol_cold=self.browser.new_context()
+            try:
+                launch=protocol_cold.new_page()
+                launch.goto(protocol_url(eta_id))
+                expect(launch.get_by_role('heading',name='Logowanie',exact=True)).to_be_visible()
+                expect(launch).to_have_url(BASE+'/#/mail/'+eta_id[5:]+'?notice='+eta_id)
+                expect(eta.locator('[aria-label="Nieprzeczytane"]')).to_have_count(1)
+                launch.get_by_label('Hasło administratora',exact=True).fill(os.environ['DEVSTACK_E2E_PASSWORD'])
+                launch.get_by_role('button',name='Zaloguj się',exact=True).click()
+                expect(launch.get_by_role('heading',name='Notification fixture eta')).to_be_visible()
+                expect(launch).to_have_url(BASE+'/#/mail/'+eta_id[5:])
+                expect(panel.get_by_text('0 nowych',exact=True)).to_be_visible(timeout=10000)
+            finally:
+                protocol_cold.close()
             panel.get_by_role('button',name='Wyczyść wszystko',exact=True).click()
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
             self.page.reload()
             expect(self.page.locator('main')).to_be_visible()
             self.page.get_by_role('button',name='Powiadomienia',exact=True).click()
             expect(panel.get_by_text('Brak powiadomień',exact=True)).to_be_visible()
-            self.assertEqual(mailpit()['total'],6)
+            self.assertEqual(mailpit()['total'],7)
         finally:
             if not second.is_closed():second.close()
         anonymous=self.browser.new_context()
