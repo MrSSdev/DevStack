@@ -103,9 +103,36 @@ try {
         devstack_json(200, ['ok' => true, 'result' => devstack_rpc('status', [])]);
     }
     // These routes run after the existing session and POST CSRF checks.
-    // Email bodies are returned as JSON, never active same-origin HTML.
+    // JSON and attachments retain the ordinary non-frameable policy. Only
+    // the dedicated preview response is frameable, with an opaque sandbox.
     if ($method === 'GET' && $path === '/api/mail/messages') {
         devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('list', $_GET)]);
+    }
+    if ($method === 'GET' && preg_match('~^/api/mail/message/([A-Za-z0-9]{22})/preview$~D', $path, $mailMatch)) {
+        require_once __DIR__ . '/../mail-preview.php';
+        $externalImages = ($_GET['images'] ?? null) === '1';
+        // Release the PHP session lock before reading optional inline parts.
+        session_write_close();
+        try {
+            $id = $mailMatch[1];
+            $message = devstack_mailpit_request('message', ['id' => $id]);
+            if (!is_array($message) || ($message['ID'] ?? null) !== $id || !is_string($message['HTML'] ?? null)) {
+                throw new RuntimeException('Brak podglądu HTML.');
+            }
+            $parts = array_merge(is_array($message['Inline'] ?? null) ? $message['Inline'] : [],
+                is_array($message['Attachments'] ?? null) ? $message['Attachments'] : []);
+            $preview = devstack_render_mail_preview($message['HTML'], $parts,
+                static fn(string $part): array|string => devstack_mailpit_request('attachment', ['id' => $id, 'part' => $part]),
+                $externalImages);
+        } catch (Throwable $e) {
+            http_response_code(422);
+            $preview = '<!doctype html><html><meta charset="utf-8"><p>Nie można wyświetlić HTML. Otwórz wiadomość w Mailpit.</p></html>';
+        }
+        header('Content-Type: text/html; charset=utf-8');
+        header('X-Frame-Options: SAMEORIGIN');
+        header('Content-Security-Policy: ' . devstack_mail_preview_policy($externalImages));
+        echo $preview;
+        exit;
     }
     if ($method === 'GET' && preg_match('~^/api/mail/message/([A-Za-z0-9]{22})$~D', $path, $mailMatch)) {
         devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('message', ['id' => $mailMatch[1]])]);

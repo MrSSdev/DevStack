@@ -56,6 +56,24 @@ no project code and returns only recognized package names and bounded versions.
 Missing, unreadable or malformed metadata does not block the dashboard. Labels
 are informational, not a security or integrity attestation.
 
+### Email preview isolation
+
+The ordinary dashboard keeps its restrictive CSP, with frame sources limited
+to the dedicated mail-message path prefix. All ordinary API/HTML responses
+remain non-frameable. An authenticated preview response alone is frameable
+by the dashboard and has CSP sandbox plus an iframe sandbox with no allow
+tokens (opaque origin, no scripts, same-origin access, forms or popups).
+The HTML5 renderer reconstructs passive elements and attributes, strips
+active links, refresh/base tags and nested frames, bounds input/nesting and
+inlines only bounded raster attachments. CSS is permitted only in the
+preview document. By default its CSP prevents external network resources,
+including CSS URLs. Enabling external images for the selected message allows
+HTTPS image requests in the browser, including CSS background images; it
+does not authorize PHP to fetch remote URLs. Such requests can disclose
+message opening to a sender or tracker. No referrer is sent. External
+stylesheets, fonts, scripts and active links remain blocked; ordinary
+attachment downloads retain their attachment disposition.
+
 ## Windows integration and widgets
 
 Review privileged installation scripts. Verify the public mkcert CA fingerprint before importing it into Windows. Keep the private CA key inside Ubuntu. Install the widget MSIX using its matching public code-signing certificate and installer from the same trusted build.
