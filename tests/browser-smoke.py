@@ -82,7 +82,14 @@ class BrowserAcceptance(unittest.TestCase):
         cls.pw.stop()
 
     def setUp(self):
-        self.context = self.browser.new_context(viewport={'width':853, 'height':950}, locale='pl-PL', service_workers='allow' if self._testMethodName=='test_08_pwa_and_notification_history' else 'block')
+        # Exercise the production network-only service worker in every
+        # scenario. Playwright 1.60's service_workers='block' installs an init
+        # script that reads navigator.serviceWorker in every frame. That getter
+        # throws in our intentionally opaque, script-disabled mail iframe.
+        # Do not inject that shim or weaken the iframe/CSP to accommodate it.
+        # The worker handles only same-origin root navigations, not API calls
+        # or images; the independent context network guard stays in force.
+        self.context = self.browser.new_context(viewport={'width':853, 'height':950}, locale='pl-PL', service_workers='allow')
         self.addCleanup(self.context.close)
         self.page = self.context.new_page()
         self.errors = []
@@ -319,6 +326,10 @@ class BrowserAcceptance(unittest.TestCase):
         send(HTML_SUBJECT, HTML)
         self.wait_total(43)
         self.goto('mail')
+        # Regression: verify mail rendering and the external image guard
+        # while the main document really is controlled by the PWA worker.
+        self.page.wait_for_function("navigator.serviceWorker.controller !== null")
+        self.assertEqual(self.page.evaluate('caches.keys()'),[])
         expect(self.page.get_by_text('1–40 / 43',exact=True)).to_be_visible()
         for theme in ['light','dark']:
             self.theme(theme)
