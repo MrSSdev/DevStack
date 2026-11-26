@@ -19,6 +19,24 @@ export const emptyNoticeState:NoticeState={items:[],toast:[],push_categories:['m
 export function isNoticeRoute(route:string):boolean{
   return /^\/#\/(?:dashboard|settings|projects|mail(?:\/[A-Za-z0-9]{22})?|project\/[a-z][a-z0-9-]{1,39})$/.test(route)
 }
+// Notification clicks use an opaque ID in the hash, never a secret or an
+// arbitrary URL. Accept only a known DevStack route and a complete event ID.
+export function notificationClickId(hash=window.location.hash):string|undefined{
+  const index=hash.indexOf('?notice=')
+  if(index<0||!isNoticeRoute('/'+hash.slice(0,index)))return undefined
+  const id=hash.slice(index+'?notice='.length)
+  return /^(?:(?:op|job|batch|service)-[a-f0-9]{32}|mail-[A-Za-z0-9]{22})$/.test(id)?id:undefined
+}
+export function notificationRouteHash(hash=window.location.hash):string{
+  return notificationClickId(hash)?hash.slice(0,hash.indexOf('?notice=')):hash
+}
+export function consumeNotificationClick(id:string){
+  // Another click/navigation may have occurred while the request was in
+  // flight. Never overwrite a newer route. Keep the marker until success.
+  if(notificationClickId()===id){
+    window.history.replaceState(window.history.state,'',window.location.pathname+window.location.search+notificationRouteHash())
+  }
+}
 export function acknowledgeOperation(id:unknown,csrf:string){
   if(typeof id!=='string'||!/^op-[a-f0-9]{32}$/.test(id))return
   // A failure to acknowledge history must not make the actual operation fail.

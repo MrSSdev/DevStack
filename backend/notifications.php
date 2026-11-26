@@ -314,10 +314,19 @@ final class DevStackNotices
         if ($client!=='') $this->execute("UPDATE notices SET delivery='toast' WHERE id=? AND owner=? AND direct=1 AND delivery='pending'",[$id,$client]);
     }
 
-    public function poll(string $client, bool $claim = true): array
+    public function poll(string $client, bool $claim = true, mixed $opened = null): array
     {
-        return $this->atomic(function () use ($client,$claim) {
+        return $this->atomic(function () use ($client,$claim,$opened) {
             $this->touch($client); $this->prune();
+            if ($opened!==null) {
+                // The clicked journal event alone is read before collecting
+                // toasts and returning the authoritative history snapshot.
+                // A stale click after deletion is a no-op, not an insert.
+                $id=self::validId($opened);
+                $this->execute("UPDATE notices SET unread=0,
+                    delivery=CASE WHEN delivery='pending' AND kind!='loading' THEN 'history' ELSE delivery END
+                    WHERE id=?",[$id]);
+            }
             $deliver=[];
             if ($client!==''&&$claim) {
                 $rows=$this->execute("SELECT * FROM notices WHERE delivery='pending' AND kind!='loading' AND id NOT LIKE 'job-%' ORDER BY created,id LIMIT 40")->fetchAll();

@@ -69,4 +69,22 @@ foreach (['https://127.0.0.1/x','https://evil.invalid','https://fcm.googleapis.c
     try {DevStackNotices::subscription(['endpoint'=>$url,'keys'=>$subscription['keys']]);check_notice(false,'Unsafe endpoint accepted');}
     catch(InvalidArgumentException) {}
 }
-echo "Notification journal, deletion, deduplication, presence and push policy: OK\n";
+// Clicking a system notification must update exactly one event in the same
+// authenticated poll, without replaying it as a toast or recreating a row.
+$clickStore=new DevStackNotices(':memory:');
+$clickStore->observeMail([]);
+$clickStamp=gmdate('c');
+$one='mail-'.str_repeat('U',22);$two='mail-'.str_repeat('V',22);
+$clickStore->observeMail([['ID'=>substr($one,5),'Created'=>$clickStamp,'Subject'=>'Clicked']]);
+$clickStore->observeMail([['ID'=>substr($two,5),'Created'=>$clickStamp,'Subject'=>'Unrelated']]);
+$clicked=$clickStore->poll($a,true,$one);
+$indexed=array_column($clicked['items'],null,'id');
+check_notice(!$indexed[$one]['unread']&&$indexed[$two]['unread'],'Click marks only its event read');
+check_notice(array_column($clicked['toast'],'id')===[$two],'Clicked pending event is not replayed as a toast');
+$again=array_column($clickStore->poll($b,false)['items'],null,'id');
+check_notice(!$again[$one]['unread']&&$again[$two]['unread'],'Click read state persists');
+$clickStore->mutate('delete',$one);
+check_notice(count($clickStore->poll($a,true,$one)['items'])===1,'Stale click does not restore deleted event');
+try {$clickStore->poll($a,true,'invalid');check_notice(false,'Invalid click ID accepted');}
+catch(InvalidArgumentException) {}
+echo "Notification journal, deletion, deduplication, presence, click read and push policy: OK\n";

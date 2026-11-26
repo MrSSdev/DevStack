@@ -116,7 +116,7 @@ try {
         $client=DevStackNotices::client($body['client']??null);
         if ($client==='') throw new InvalidArgumentException('Nieprawidłowy klient powiadomień.');
         $store=new DevStackNotices();
-        devstack_json(200,['ok'=>true,'result'=>$store->poll($client)]);
+        devstack_json(200,['ok'=>true,'result'=>$store->poll($client,true,$body['opened']??null)]);
     }
     if ($method === 'POST' && $path === '/api/notifications/leave') {
         (new DevStackNotices())->leave(DevStackNotices::client($body['client']??null));

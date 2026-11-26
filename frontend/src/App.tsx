@@ -19,7 +19,7 @@ import { frameworkWebroot, resolveInstallerFields, type InstallerField, type Ins
 import { resolveProjectIdentity, projectIdentityPayload, type ProjectIdentityDraft } from '@/lib/project-identity'
 import { MailInbox } from '@/components/mail-inbox'
 import { NotificationCenter, NotificationSettings, useNotificationCenter } from '@/components/notification-center'
-import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange } from '@/lib/notification-client'
+import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange, notificationRouteHash } from '@/lib/notification-client'
 import { PageHeader } from '@/components/page-header'
 import { ManagedServices, WidgetServiceSettings, type ManagedService } from '@/components/managed-services'
 
@@ -30,9 +30,9 @@ type SettingsTab=typeof settingsTabs[number]['id']
 // The native Windows Widgets link to /#/projects and /#/new. Keep this
 // routing entirely client-side: no new server endpoints or auth bypass.
 function viewFromHash(): View {
-  if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(window.location.hash))return 'mail'
-  if(/^#\/project\/[a-z][a-z0-9-]{1,39}$/.test(window.location.hash))return 'project'
-  switch (window.location.hash) {
+  if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(notificationRouteHash()))return 'mail'
+  if(/^#\/project\/[a-z][a-z0-9-]{1,39}$/.test(notificationRouteHash()))return 'project'
+  switch (notificationRouteHash()) {
     case '#/projects': return 'projects'
     case '#/new': return 'new'
     case '#/mail': return 'mail'
@@ -130,10 +130,10 @@ export function App() {
   const navigation=useRef<HTMLElement>(null)
   const menuButton=useRef<HTMLButtonElement>(null)
   const [view,setView]=useState<View>(viewFromHash)
-  const [mailRoute,setMailRoute]=useState(()=>window.location.hash.match(/^#\/mail\/([A-Za-z0-9]{22})$/)?.[1]??'')
+  const [mailRoute,setMailRoute]=useState(()=>notificationRouteHash().match(/^#\/mail\/([A-Za-z0-9]{22})$/)?.[1]??'')
   const [settingsTab,setSettingsTab]=useState<SettingsTab>('environment')
   const [server,setServer]=useState<State>({services:{},projects:[],preferences:{theme:'light'}})
-  const [selected,setSelected]=useState(()=>window.location.hash.match(/^#\/project\/([a-z][a-z0-9-]{1,39})$/)?.[1]??'')
+  const [selected,setSelected]=useState(()=>notificationRouteHash().match(/^#\/project\/([a-z][a-z0-9-]{1,39})$/)?.[1]??'')
   const [projectSearch,setProjectSearch]=useState('')
   const jobPresentation=useRef<{signature:string;state:string}|null>(null)
   const activeEngineToast=useRef<{jobId:string;toastId:string}|null>(null)
@@ -273,7 +273,7 @@ export function App() {
   },[navOpen,desktop])
   useEffect(()=>{
     // Support direct bookmarks from Windows Widgets, plus browser Back/Forward.
-    const syncRoute=()=>{setView(viewFromHash());setNavOpen(false);setDbSecret('');setMailRoute(window.location.hash.match(/^#\/mail\/([A-Za-z0-9]{22})$/)?.[1]??'');const slug=window.location.hash.match(/^#\/project\/([a-z][a-z0-9-]{1,39})$/)?.[1];if(slug)setSelected(slug)}
+    const syncRoute=()=>{setView(viewFromHash());setNavOpen(false);setDbSecret('');setMailRoute(notificationRouteHash().match(/^#\/mail\/([A-Za-z0-9]{22})$/)?.[1]??'');const slug=notificationRouteHash().match(/^#\/project\/([a-z][a-z0-9-]{1,39})$/)?.[1];if(slug)setSelected(slug)}
     window.addEventListener('hashchange',syncRoute)
     return ()=>window.removeEventListener('hashchange',syncRoute)
   },[])
