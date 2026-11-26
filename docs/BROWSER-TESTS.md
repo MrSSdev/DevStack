@@ -64,3 +64,16 @@ reproduction saw a trusted `pagehide` and a beacon accepted for queuing,
 followed by Chromium's `net::ERR_ABORTED` and no Nginx access-log entry.
 This also happened with Playwright routing disabled. The worker's
 request reached Nginx and PHP with the same session and received HTTP 200.
+
+The first native-stack run (`9bc5691`) passed the new collapsed/expanded
+stack and frame-by-frame overflow scenario (#12), as well as notification
+history, presence, exact read-on-close and actual service completion.
+Two older browser scenarios failed: layout preparation asserted an empty
+live queue after a late collector response arrived, and an installer
+project action was behind a refresh toast in the collapsed stack. The
+layout helper now dismisses actual expanded cards until a short quiet
+interval, with a bounded deadline; it retries controls only when a toast
+intercepts pointer events. The installer scenario explicitly hovers the
+frontmost card and checks the target is expanded and opaque before the
+real project click. No production changes, forced clicks, notification
+assertion removals or changes to the dedicated stack regression.

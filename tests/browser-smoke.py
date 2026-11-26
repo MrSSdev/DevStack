@@ -172,15 +172,35 @@ class BrowserAcceptance(unittest.TestCase):
         self.dismiss_visible_toasts()
 
     def dismiss_visible_toasts(self):
-        # Use the actual close buttons. Pending collector events can arrive
-        # after theme() returns; persistent error toasts do not auto-dismiss.
-        # Keep the dedicated notification lifecycle tests unchanged.
-        close = self.page.locator('[data-slot="toast"]:not([data-ending-style]) button[aria-label="Zamknij powiadomienie"]')
-        for _ in range(20):
+        # Layout preparation only: close real cards, including those behind
+        # the frontmost one. A collector response may arrive asynchronously.
+        # Do not break on an empty snapshot and then assert the entire live
+        # queue stays empty: that races a legitimate new notification.
+        active = self.page.locator('[data-slot="toast"]:not([data-ending-style])')
+        close = active.locator('button[aria-label="Zamknij powiadomienie"]')
+        deadline = time.monotonic() + 15
+        empty_since = None
+        while time.monotonic() < deadline:
             if not close.count():
-                break
-            close.first.click()
-        expect(close).to_have_count(0)
+                now = time.monotonic()
+                if empty_since is None:
+                    empty_since = now
+                if now - empty_since >= .25:
+                    self.page.mouse.move(1,1)
+                    return
+                self.page.wait_for_timeout(100)
+                continue
+            empty_since = None
+            try:
+                active.first.hover(timeout=3000)
+                if close.count():
+                    close.first.click(timeout=5000)
+            except PlaywrightTimeoutError:
+                # An expiring card can disappear during the hover/click.
+                # An existing blocked control is still a test failure.
+                if close.count():
+                    raise
+        self.fail('Closable toast stack did not become quiet before layout check')
 
     def click_layout_control(self, control):
         # Only for the layout walk, after the notification assertion. A real
@@ -192,7 +212,11 @@ class BrowserAcceptance(unittest.TestCase):
                 control.click(timeout=5000)
                 return
             except PlaywrightTimeoutError as exc:
-                if attempt == 2 or 'toast-host' not in str(exc):
+                message = str(exc)
+                toast_intercepted = 'intercepts pointer events' in message and (
+                    'toast-host' in message or 'data-slot="toast"' in message
+                    or 'data-slot="toast-content"' in message)
+                if attempt == 2 or not toast_intercepted:
                     raise
 
     def shot(self, name):
@@ -635,6 +659,11 @@ class BrowserAcceptance(unittest.TestCase):
         job.update(id='d'*32,state='succeeded',message='Drugi wynik testowy gotowy.')
         self.page.get_by_role('button',name='Odśwież dane usług i projektów',exact=True).click()
         expect(installer.get_by_text('Drugi wynik testowy gotowy.',exact=False)).to_be_visible()
+        # Refresh has its own independent success notice. The installer can
+        # be behind it in the collapsed stack; expand as a real user would.
+        self.page.locator('[data-slot="toast"]:not([data-ending-style])').first.hover()
+        expect(installer).to_have_attribute('data-expanded','')
+        expect(installer.locator('[data-slot="toast-content"]')).to_have_css('opacity','1')
         installer.get_by_role('button',name='Przejdź do projektu').click()
         expect(self.page.get_by_role('heading',name='Browser fixture',exact=True)).to_be_visible()
         self.page.reload()
