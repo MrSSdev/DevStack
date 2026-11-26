@@ -1510,7 +1510,12 @@ def recover_engine_job() -> None:
                           message='Operacja przerwana przez restart DevStack. Nie zostala automatycznie ponowiona.')
 
 
-OPS = {'status': status, 'create': create, 'reveal': reveal,
+def notification_snapshot(_: dict[str, Any]) -> dict[str, Any]:
+    # Read-only, inexpensive: never scan project trees or reveal credentials.
+    return {'engine_job': public_engine_job(), 'services': managed_services.public_rows()}
+
+
+OPS = {'notification_snapshot': notification_snapshot, 'status': status, 'create': create, 'reveal': reveal,
        'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,

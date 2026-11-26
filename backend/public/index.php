@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../security.php';
+require_once __DIR__ . '/../notifications.php';
+require_once __DIR__ . '/../push-helper.php';
 
 devstack_boot();
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
@@ -69,6 +71,7 @@ if ($method === 'POST') {
         if (!devstack_password_required()) {
             devstack_json(403, ['ok' => false, 'error' => 'W trybie bez hasła wylogowanie nie ma zastosowania.']);
         }
+        try { $notices=new DevStackNotices(); $notices->leave(DevStackNotices::client($_SERVER['HTTP_X_DEVSTACK_CLIENT']??null)); $notices->unsubscribe(); } catch (Throwable) {}
         $_SESSION = [];
         session_regenerate_id(true);
         $_SESSION['csrf'] = bin2hex(random_bytes(32));
@@ -100,7 +103,54 @@ try {
         exit;
     }
     if ($method === 'GET' && $path === '/api/state') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('status', [])]);
+        $state=devstack_rpc('status', []);
+        try {
+            $notices=new DevStackNotices();
+            $client=DevStackNotices::client($_SERVER['HTTP_X_DEVSTACK_CLIENT']??null);
+            $notices->touch($client);
+            $state['engine_notice']=$notices->observeJob(is_array($state['engine_job']??null)?$state['engine_job']:null,$client);
+        } catch (Throwable) { error_log('DevStack notification journal unavailable.'); }
+        devstack_json(200, ['ok' => true, 'result' => $state]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/poll') {
+        $client=DevStackNotices::client($body['client']??null);
+        if ($client==='') throw new InvalidArgumentException('Nieprawidłowy klient powiadomień.');
+        $store=new DevStackNotices();
+        devstack_json(200,['ok'=>true,'result'=>$store->poll($client)]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/leave') {
+        (new DevStackNotices())->leave(DevStackNotices::client($body['client']??null));
+        devstack_json(200,['ok'=>true,'result'=>[]]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/ack') {
+        (new DevStackNotices())->acknowledge(is_string($body['id']??null)?$body['id']:'',DevStackNotices::client($body['client']??null));
+        devstack_json(200,['ok'=>true,'result'=>[]]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/manage') {
+        $action=$body['action']??null;
+        if (!is_string($action)) throw new InvalidArgumentException('Nieznana operacja.');
+        (new DevStackNotices())->mutate($action,$body['id']??null);
+        devstack_json(200,['ok'=>true,'result'=>[]]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/categories') {
+        (new DevStackNotices())->setCategories($body['categories']??null);
+        devstack_json(200,['ok'=>true,'result'=>[]]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/push-key') {
+        session_write_close();
+        $key=devstack_push_helper('public');
+        if (($key['ok']??false)!==true||!is_string($key['key']??null)) {
+            throw new RuntimeException('Web Push wymaga pakietu python3-pywebpush w Ubuntu.');
+        }
+        devstack_json(200,['ok'=>true,'result'=>['key'=>$key['key']]]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/subscribe') {
+        (new DevStackNotices())->subscribe($body['subscription']??null);
+        devstack_json(200,['ok'=>true,'result'=>[]]);
+    }
+    if ($method === 'POST' && $path === '/api/notifications/unsubscribe') {
+        (new DevStackNotices())->unsubscribe();
+        devstack_json(200,['ok'=>true,'result'=>[]]);
     }
     // These routes run after the existing session and POST CSRF checks.
     // JSON and attachments retain the ordinary non-frameable policy. Only
@@ -147,26 +197,26 @@ try {
     }
     if ($method === 'POST' && $path === '/api/mail/delete') {
         if (count($body) !== 1) throw new InvalidArgumentException('Wybierz jedną wiadomość do usunięcia.');
-        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('delete', $body)]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_mailpit_request('delete', $body))]);
     }
     if ($method === 'POST' && $path === '/api/mail/delete-many') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('delete-many', $body)]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_mailpit_request('delete-many', $body))]);
     }
     if ($method === 'POST' && $path === '/api/mail/clear') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('clear', $body)]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_mailpit_request('clear', $body))]);
     }
     if ($method === 'POST' && $path === '/api/services/control') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('service_control', $body)]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('service_control', $body))]);
     }
     if ($method === 'POST' && $path === '/api/widget/services') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('set_widget_services', $body)]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('set_widget_services', $body))]);
     }
     if ($method === 'POST' && $path === '/api/preferences') {
         $theme = $body['theme'] ?? null;
         if (!is_string($theme) || !in_array($theme, ['light', 'dark'], true) || count($body) !== 1) {
             devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowa wartość motywu.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('set_preferences', ['theme' => $theme])]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('set_preferences', ['theme' => $theme]))]);
     }
     $engineRoute = preg_match('~^/api/engines/([a-z][a-z0-9-]{1,39})$~D', $path, $engineMatch) === 1;
     if ($method === 'GET' && $engineRoute) {
@@ -183,9 +233,9 @@ try {
             !in_array($body['action'], ['check', 'install-tool', 'update-tool'], true)) {
             devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowa operacja instalatora.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_action', [
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('engine_tool_action', [
             'engine' => $engineMatch[1], 'action' => $body['action'],
-        ])]);
+        ]))]);
     }
     if ($method === 'POST' && $path === '/api/projects') {
         $engine = $body['engine'] ?? 'none';
@@ -195,7 +245,7 @@ try {
         if ($engine !== 'none' && !devstack_engine_access_allowed()) {
             devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('create', [
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('create', [
             'slug' => $body['slug'] ?? null,
             'name' => $body['name'] ?? null,
             'domain' => $body['domain'] ?? null,
@@ -207,13 +257,13 @@ try {
             'starter_kit' => $body['starter_kit'] ?? 'none',
             'installer_options' => is_array($body['installer_options'] ?? []) && empty($body['installer_options'])
                 ? (object) [] : ($body['installer_options'] ?? (object) []),
-        ])]);
+        ]))]);
     }
     if ($method === 'POST' && $path === '/api/projects/test-db') {
         if (count($body) !== 1 || !is_string($body['slug'] ?? null)) {
             devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowe dane testu MariaDB.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('test_project_database', ['slug' => $body['slug']])]);
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('test_project_database', ['slug' => $body['slug']]))]);
     }
     if ($method === 'POST' && $path === '/api/projects/delete') {
         if (count($body) !== 3 ||
@@ -222,11 +272,11 @@ try {
             !is_bool($body['delete_database'] ?? null)) {
             devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowe dane usuwania projektu.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('delete_project', [
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('delete_project', [
             'slug' => $body['slug'],
             'confirmation' => $body['confirmation'],
             'delete_database' => $body['delete_database'],
-        ])]);
+        ]))]);
     }
     if ($method === 'POST' && $path === '/api/reveal') {
         $pw = $body['password'] ?? null;
@@ -247,30 +297,33 @@ try {
             }
             devstack_login_limit(reset: true);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_full_config', [
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('update_full_config', [
             'slug' => $body['slug'] ?? null,
             'full_config' => $body['full_config'] ?? null,
-        ])]);
+        ]))]);
     }
     if ($method === 'POST' && $path === '/api/config') {
         if (array_key_exists('rules', $body)) {
             if (count($body) !== 2 || !array_key_exists('slug', $body)) {
                 throw new InvalidArgumentException('Nieprawidłowe pola konfiguracji Nginx.');
             }
-            devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
+            devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('update_config', [
                 'slug' => $body['slug'],
                 'rules' => $body['rules'],
-            ])]);
+            ]))]);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('update_config', [
             'slug' => $body['slug'] ?? null,
             'overrides' => $body['overrides'] ?? null,
             'extra_locations' => $body['extra_locations'] ?? '',
-        ])]);
+        ]))]);
     }
 } catch (InvalidArgumentException $e) {
     devstack_json(422, ['ok' => false, 'error' => $e->getMessage()]);
 } catch (Throwable $e) {
+    if ($method==='POST' && !str_starts_with($path,'/api/notifications/') && !str_starts_with($path,'/api/engines/') && !($path==='/api/projects' && ($body['engine']??'none')!=='none')) {
+        devstack_notice_operation($path,$body??[],[],false);
+    }
     error_log('DevStack error: ' . $e->getMessage());
     devstack_json(422, ['ok' => false, 'error' => $e->getMessage()]);
 }

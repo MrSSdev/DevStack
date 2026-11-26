@@ -24,13 +24,16 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: dom
+          extensions: dom, pdo_sqlite, mbstring
           coverage: none
       - name: Syntax checks
         run: |
           php -l backend/public/index.php
           php -l backend/security.php
           php -l backend/mail-preview.php
+          php -l backend/notifications.php
+          php -l backend/push-helper.php
+          php -l scripts/notifications-worker.php
           php -l scripts/set-password.php
           php -l scripts/configure-auth.php
           bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh scripts/backup-project-db.sh scripts/verify-project-db-backup.sh scripts/update.sh scripts/apply-update.sh scripts/install-mailpit.sh
@@ -40,6 +43,7 @@ jobs:
           python3 -m unittest discover -s tests -v
           php tests/php-security.php
           php tests/php-mail-preview.php
+          php tests/php-notifications.php
       - name: Backup scripts reject invalid inputs
         run: |
           if bash scripts/backup-project-db.sh 'unsafe/slug'; then
