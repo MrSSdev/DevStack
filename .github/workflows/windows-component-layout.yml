@@ -16,6 +16,11 @@ on:
       - 'windows/migrate-notification-layout.ps1'
       - 'windows/layout-directory-identity.cs'
       - 'windows/test-windows-layout-migration.ps1'
+      - 'windows/hosts-layout.ps1'
+      - 'windows/test-hosts-layout.ps1'
+      - 'windows/install-hosts-sync.ps1'
+      - 'windows/watch-hosts.ps1'
+      - 'windows/setup-windows.ps1'
       - '.github/workflows/windows-component-layout.yml'
 
 permissions:
@@ -32,7 +37,7 @@ jobs:
       - name: Parse PowerShell layout scripts
         shell: powershell
         run: |
-          foreach ($path in @('windows/windows-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/test-windows-layout.ps1', 'windows/windows-layout-migration.ps1', 'windows/test-windows-layout-migration.ps1', 'windows/notification-layout-copy.ps1', 'windows/stage-windows-notifications.ps1', 'windows/migrate-notification-layout.ps1')) {
+          foreach ($path in @('windows/windows-layout.ps1', 'windows/initialize-windows-layout.ps1', 'windows/test-windows-layout.ps1', 'windows/windows-layout-migration.ps1', 'windows/test-windows-layout-migration.ps1', 'windows/notification-layout-copy.ps1', 'windows/stage-windows-notifications.ps1', 'windows/migrate-notification-layout.ps1', 'windows/hosts-layout.ps1', 'windows/test-hosts-layout.ps1', 'windows/install-hosts-sync.ps1', 'windows/watch-hosts.ps1', 'windows/setup-windows.ps1')) {
             $tokens = $null
             $errors = $null
             [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
@@ -45,3 +50,7 @@ jobs:
       - name: Verify root publication and recoverable rollback on NTFS
         shell: powershell
         run: ./windows/test-windows-layout-migration.ps1
+
+      - name: Verify protected Hosts releases and scheduled task action switch
+        shell: powershell
+        run: ./windows/test-hosts-layout.ps1

@@ -121,3 +121,24 @@ package/release coordination and controlled retirement of the old tree
 still need implementation and acceptance. Do not run the partial branch on
 ASUS yet. The copy helper is tested with fixture files, not a real medium
 token; production staging rejects elevation.
+
+## Hosts integration checkpoint
+
+New privileged scripts are published from the reviewed bundle, not from
+legacy ProgramData, into a protected release directory under
+C:\DevStack\Hosts. Both scripts are hashed, written with protected
+Administrators/SYSTEM file ACLs and published as a pair; identical inputs
+reuse a verified generation. Existing task upgrades change only the
+action, retain the previous definition and release and verify the S4U,
+Highest, no-trigger contract. On failure they attempt action rollback.
+Fresh setup still requires an already-running, installed Ubuntu. An
+existing known task can be migrated from a verified local Windows bundle
+with Ubuntu stopped; it is not deliberately awakened. Its old task files
+and historical backups are retained until device acceptance and cleanup.
+The runtime hosts backup is now in C:\DevStack\Hosts.
+
+The release subdirectory is intentional: it avoids replacing two scripts
+while a task might still be executing them. Do not delete old releases
+until task state and rollback needs are checked. CI checks real task
+registration and action switch without running the task; actual S4U
+execution and hosts reconciliation still require ASUS acceptance.

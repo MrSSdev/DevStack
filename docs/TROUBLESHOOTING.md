@@ -26,7 +26,7 @@ For dashboard access, start Ubuntu, check services and open https://devstack.tes
 Run in elevated Windows PowerShell:
 
 ```powershell
-& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:ProgramData\DevStack\watch-hosts.ps1" -Once
+Start-ScheduledTask -TaskName 'DevStack Hosts Event Sync'
 Get-ScheduledTaskInfo -TaskName 'DevStack Hosts Event Sync'
 ```
 

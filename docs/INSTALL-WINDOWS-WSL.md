@@ -47,13 +47,13 @@ sudo php-fpm8.5 -t
 
 ## 3. Windows integration
 
-In Windows PowerShell as Administrator, using the account that owns the WSL distribution:
+First record the intended account SID in ordinary Windows PowerShell using `[Security.Principal.WindowsIdentity]::GetCurrent().User.Value`. Then use elevated Windows PowerShell 5.1 under that same account (replace the SID placeholder below):
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 $setup = '\\wsl.localhost\Ubuntu-26.04\home\<ubuntu-user>\projects\devstack-source\windows\setup-windows.ps1'
 Get-Content -LiteralPath $setup
-& $setup
+& $setup -ExpectedUserSid 'S-1-5-21-...'
 ```
 
 Replace `<ubuntu-user>` with your Ubuntu username. Review the public CA fingerprint and confirm trust. See [Windows CA](WINDOWS-CA.md).
@@ -79,9 +79,9 @@ After updating the installed Linux application, run the following in elevated Wi
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 $installer = '\\wsl.localhost\Ubuntu-26.04\home\<ubuntu-user>\projects\devstack-source\windows\install-hosts-sync.ps1'
 Get-Content -LiteralPath $installer
-& $installer
+& $installer -ExpectedUserSid 'S-1-5-21-...'
 ```
 
-Replace the username as above. The script updates the scheduled task and keeps a copy of its previous definition in `C:\ProgramData\DevStack\task-before-on-demand.xml`. Existing certificate trust is preserved.
+Replace the username as above. The script publishes immutable protected script releases under `C:\DevStack\Hosts` and changes only the existing task action. Previous task definitions and code are retained for rollback. Existing certificate trust is preserved. An existing user-owned root must first complete the separate notification/root migration; do not copy privileged scripts into it.
 
 See [troubleshooting](TROUBLESHOOTING.md) for service and synchronization checks.
