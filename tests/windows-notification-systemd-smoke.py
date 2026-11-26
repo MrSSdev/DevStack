@@ -55,9 +55,16 @@ if data['kind'] == 'success':
     sys.exit(24)
 """
 
+
 def ctl(*args):
     return subprocess.run(['/usr/bin/systemctl', *args], check=True,
                           capture_output=True, text=True, timeout=30)
+
+
+def transport_helper(*args, check=True):
+    script = Path(__file__).resolve().parents[1] / 'scripts/enable-windows-local-notifications.sh'
+    return subprocess.run(['/usr/bin/bash', str(script), *args], check=check,
+                          capture_output=True, text=True, timeout=10)
 
 def compare_workdir_dependencies():
     """Contrast systemd's implicit mount requirements with post-UID chdir.
@@ -137,6 +144,8 @@ marker_created = False
 try:
     ctl('stop', 'devstack-notifications.timer', 'devstack-notifications.service')
     ctl('is-active', 'devstackd.service')
+    assert transport_helper('--status').stdout.strip() == 'disabled'
+    assert not marker.exists() and not marker.is_symlink(), 'Status unexpectedly opted in.'
     mount.mkdir(mode=0o755)
     mount_created = True
     launcher.parent.mkdir(parents=True, mode=0o755)
@@ -151,7 +160,40 @@ try:
     with marker.open('x') as f:
         marker_created = True
         f.write(str(launcher) + '\n')
+
     marker.chmod(0o644)
+    # The actual privileged helper must distinguish absent, enabled and
+    # unsafe markers, and must never reset the original opt-in cutoff.
+    os.utime(marker, (1_700_000_000, 1_700_000_000))
+    before = marker.stat().st_mtime_ns
+    assert transport_helper('--status').stdout.strip() == 'enabled'
+    assert marker.read_text() == str(launcher) + '\n'
+    assert marker.stat().st_mtime_ns == before
+    # Existing consent also survives a missing Windows binary.
+    launcher.rename(launcher.with_suffix('.fixture'))
+    try:
+        assert transport_helper('--status').stdout.strip() == 'enabled'
+    finally:
+        launcher.with_suffix('.fixture').rename(launcher)
+    marker.chmod(0o666)
+    assert transport_helper('--status', check=False).returncode != 0
+    assert transport_helper(check=False).returncode != 0
+    marker.chmod(0o644)
+    marker.unlink()
+    marker.symlink_to(launcher)
+    assert transport_helper('--status', check=False).returncode != 0
+    assert transport_helper(check=False).returncode != 0
+    marker.unlink()
+    marker.write_text('/mnt/c/Users/Fixture/AppData/Local/DevStack/LocalNotifications/DevStack.Notifications.exe\n')
+    marker.chmod(0o644)
+    os.utime(marker, (1_700_000_000, 1_700_000_000))
+    assert transport_helper('--status').stdout.strip() == 'enabled'
+    transport_helper()
+    assert marker.read_text() == str(launcher) + '\n'
+    assert marker.stat().st_mtime_ns == before
+    transport_helper()
+    assert marker.stat().st_mtime_ns == before
+    print('PASS: read-only opt-in detection, missing launcher, unsafe markers, migration and idempotent enable.')
     compare_workdir_dependencies()
     expected = []
     # Repeated fast exits exercise the race that was missed by the mocked

@@ -28,8 +28,8 @@ fi
 cd "$root"
 
 branch="$(git branch --show-current)"
-if [[ "$branch" != main && ( "$branch" != test/windows-local-notifications || "$windows_local" -ne 1 ) ]]; then
-  echo 'Update supports main, or the verified test branch with --windows-local-notifications.' >&2
+if [[ "$branch" != main && "$branch" != test/windows-local-notifications ]]; then
+  echo 'Update supports main or the verified local-notification test branch.' >&2
   exit 2
 fi
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -53,6 +53,29 @@ else
   # Test exactly the checked-out, reviewed SHA. No implicit fetch or merge
   # after the user has selected and verified the experimental commit.
   git log -1 --oneline
+fi
+
+# The protected marker is the existing opt-in, even if Windows files
+# are temporarily missing. Never infer consent from a directory or PWA.
+# A sudo/read/validation failure is fatal, not interpreted as "disabled".
+if ! local_notification_status="$(sudo bash scripts/enable-windows-local-notifications.sh --status)"; then
+  echo 'Could not verify the existing Windows notification transport; no deployment attempted.' >&2
+  exit 1
+fi
+case "$local_notification_status" in
+  enabled)
+    windows_local=1
+    echo '[Windows] Existing local notifications will be updated.'
+    ;;
+  disabled) ;;
+  *)
+    echo 'Unexpected local notification status; no deployment attempted.' >&2
+    exit 1
+    ;;
+esac
+if [[ "$branch" == test/windows-local-notifications && "$windows_local" -ne 1 ]]; then
+  echo 'The verified test branch requires an existing opt-in or --windows-local-notifications.' >&2
+  exit 2
 fi
 
 echo '[2/5] Running Python and PHP unit tests and security scan...'

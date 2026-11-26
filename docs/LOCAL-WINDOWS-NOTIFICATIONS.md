@@ -155,8 +155,13 @@ w backend/public są ignorowane przez Git; źródła są w frontend/public.
 
     bash scripts/update.sh --windows-local-notifications
 
-Flaga jest jawnym opt-in. Bez niej standardowa aktualizacja main nie
-instaluje ani nie włącza tego transportu. Zintegrowana aktualizacja:
+Flaga jest potrzebna tylko przy pierwszym włączeniu. Następne zwykłe
+aktualizacje (bash scripts/update.sh) odczytują chroniony znacznik przez
+sudo i aktualizują już włączony launcher, również gdy jego pliki wymagają
+naprawy. Bez znacznika i bez flagi nie instalują ani nie włączają tego
+transportu. Błąd odczytu, brak uprawnień lub niebezpieczny znacznik
+przerywa aktualizację przed wdrożeniem. Gałąź testowa nadal wymaga
+istniejącego opt-in albo jawnej flagi. Zintegrowana aktualizacja:
 
 1. Uruchamia dotychczasowe testy i buduje frontend bez roota.
 2. Zatrzymuje timer powiadomień na czas wymiany launchera i pozwala
