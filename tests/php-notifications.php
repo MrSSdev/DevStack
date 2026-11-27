@@ -40,6 +40,28 @@ check_notice($store->poll($a)['items'][0]['kind']==='info','Accepted service act
 $store->mutate('read-all');
 check_notice(!$store->poll($a)['items'][0]['unread'],'Read all');
 $store->mutate('clear');
+// The WSL CA button is an ordinary settings operation. Keep its exact ID,
+// fixed public history text and existing foreground acknowledgement rules.
+$caStore=new DevStackNotices(':memory:');
+$caStore->setCategories(DevStackNotices::CATEGORIES);
+$caStore->poll($a);
+$caId=$caStore->operation('/api/ca/wsl',[],['message'=>'untrusted diagnostic','sha256'=>str_repeat('A',64)],$a);
+check_notice(is_string($caId)&&preg_match('~^op-[a-f0-9]{32}$~D',$caId)===1,'WSL CA success has an operation ID');
+$caStore->acknowledge($caId,$a);
+$caItems=$caStore->poll($b);
+check_notice(count($caItems['items'])===1&&$caItems['toast']===[],'WSL CA does not duplicate its direct toast');
+$caRow=$caItems['items'][0];
+check_notice($caRow['id']===$caId&&$caRow['category']==='settings'&&$caRow['kind']==='success'&&$caRow['route']==='/#/settings'&&$caRow['unread']===true,'WSL CA success belongs to settings history');
+check_notice(!str_contains(json_encode($caRow),'untrusted diagnostic')&&!str_contains(json_encode($caRow),str_repeat('A',64)),'WSL CA history excludes RPC diagnostics and fingerprint');
+$caStore->mutate('read',$caId);
+check_notice(!$caStore->poll($a)['items'][0]['unread'],'WSL CA read acknowledgement preserves history');
+$caError=$caStore->operation('/api/ca/wsl',[],[],$a,false);
+check_notice(is_string($caError)&&$caError!==$caId,'WSL CA failure also has an operation ID');
+$caErrorRow=array_values(array_filter($caStore->poll($a)['items'],static fn($r)=>$r['id']===$caError))[0];
+check_notice($caErrorRow['kind']==='error'&&$caErrorRow['category']==='settings'&&$caErrorRow['description']==='Operacja nie powiodła się.','WSL CA failure stores a generic settings notice');
+check_notice($caStore->operation('/api/ca/wsl',['path'=>'invalid'],[],$a,false)===null,'Invalid WSL CA payload does not create history');
+$caStore->leave($a);$caStore->leave($b);
+check_notice($caStore->claimPush(time()-60)===null,'WSL CA settings results do not send Windows notifications');
 $since=time()-60;
 $store->setCategories(['mail']);
 $store->observeMail([['ID'=>str_repeat('Z',22),'Created'=>$stamp,'Subject'=>'Never include in push']]);

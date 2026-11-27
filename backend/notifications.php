@@ -224,6 +224,11 @@ final class DevStackNotices
             $category='settings'; $route='/#/dashboard'; $push=false;
             $description=$service . ' — ' . ($enabled?'włączenie':'wyłączenie');
             $title=$ok?'Zapisano autostart usługi':'Zapis autostartu usługi';
+        } elseif ($path === '/api/ca/wsl') {
+            if ($body !== []) return null;
+            $category='settings'; $route='/#/settings'; $push=false;
+            $title=$ok?'Certyfikat CA w WSL':'Kopiowanie certyfikatu CA do WSL';
+            $description=$ok?'Potwierdzono zaufanie do lokalnego CA DevStack.':'';
         } elseif (in_array($path, ['/api/preferences','/api/widget/services'], true)) {
             $category='settings'; $route='/#/settings'; $description='';
             $title=$ok?'Zapisano ustawienia':'Zapis ustawień'; $push=false;

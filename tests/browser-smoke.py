@@ -439,6 +439,28 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(result.json()['result']['sha256'], fingerprint)
         expect(self.page.get_by_text(re.compile('Certyfikat CA DevStack jest (juz )?zaufany w WSL\\.'))).to_be_visible()
         self.assertEqual(self.context.request.get(BASE + '/api/ca').body(), before)
+        # Reuse the same real button scenario for the persistent operation.
+        # The response must allocate one journal ID; the visible toast is
+        # linked to that exact ID rather than creating a second event.
+        event_id = result.json()['result']['notification_id']
+        self.assertRegex(event_id, r'^op-[a-f0-9]{32}$')
+        ca_toast = self.page.locator('[data-slot="toast"]').filter(
+            has_text=re.compile(r'Certyfikat CA DevStack jest (juz )?zaufany w WSL\.'))
+        expect(ca_toast).to_have_count(1)
+        bell = self.page.get_by_role('button', name='Powiadomienia', exact=True)
+        bell.click()
+        history = self.page.get_by_role('region', name='Historia powiadomień')
+        event = history.locator('[data-notification-id="' + event_id + '"]')
+        expect(event).to_have_count(1)
+        expect(event.get_by_text('Certyfikat CA w WSL', exact=True)).to_be_visible()
+        expect(event.locator('[aria-label="Nieprzeczytane"]')).to_have_count(1)
+        history.get_by_role('button', name='Zamknij historię').click()
+        # Dismiss the actual operation toast, not an arbitrary journal row.
+        ca_toast.get_by_role('button', name='Zamknij powiadomienie').click()
+        bell.click()
+        expect(event.locator('[aria-label="Nieprzeczytane"]')).to_have_count(0, timeout=10000)
+        expect(event).to_have_count(1)
+        expect(history.locator('[data-notification-id]').filter(has_text='Certyfikat CA w WSL')).to_have_count(1)
 
     def test_02_mail_rendering_download_search_pagination_and_deletion(self):
         for i in range(42):send(f'Pagination fixture {i:02}')

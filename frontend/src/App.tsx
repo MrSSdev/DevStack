@@ -537,7 +537,7 @@ export function App() {
     setCopyingWslCa(true)
     const pending=beginNotice('Certyfikat CA w WSL','Dodawanie zaufania do lokalnego CA…')
     try{
-      const answer=await request<{message:string}>('POST','/api/ca/wsl',csrf,{})
+      const answer=await request<{message:string}>('POST','/api/ca/wsl',csrf,{},pending)
       notify(answer.message,pending)
     }catch(e){fail(e,pending)}finally{setCopyingWslCa(false)}
   }
