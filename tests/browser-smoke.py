@@ -447,7 +447,11 @@ class BrowserAcceptance(unittest.TestCase):
         ca_toast = self.page.locator('[data-slot="toast"]').filter(
             has_text=re.compile(r'Certyfikat CA DevStack jest (juz )?zaufany w WSL\.'))
         expect(ca_toast).to_have_count(1)
-        bell = self.page.get_by_role('button', name='Powiadomienia', exact=True)
+        # Settings also has a category button called "Powiadomienia".
+        # Scope the accessible button to the actual global header, not an
+        # arbitrary first match or the settings category navigation.
+        bell = self.page.locator('header').get_by_role('button', name='Powiadomienia', exact=True)
+        expect(bell).to_have_count(1)
         bell.click()
         history = self.page.get_by_role('region', name='Historia powiadomień')
         event = history.locator('[data-notification-id="' + event_id + '"]')
