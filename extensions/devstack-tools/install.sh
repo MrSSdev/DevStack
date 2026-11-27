@@ -23,6 +23,18 @@ for tool in node npm sudo python3 flock sha256sum; do
 done
 node_bin="$(readlink -f -- "$(command -v node)")"
 node -e 'if (+process.versions.node.split(".")[0] < 22) { console.error("Node.js 22+ is required"); process.exit(1); }'
+# With DevStack installed, trust its existing public CA by default. Never
+# generate another CA, run a browser as root, or bypass TLS validation.
+if [[ -f /opt/devstack/daemon/devstackd.py ]]; then
+  [[ -f /opt/devstack/daemon/wsl_ca.py ]] || {
+    echo 'Update DevStack core first to enable its WSL CA helper.' >&2
+    exit 1
+  }
+  if [[ ! -x /usr/bin/certutil ]]; then
+    sudo apt-get install -y libnss3-tools
+  fi
+  sudo -- /usr/bin/python3 -I /opt/devstack/daemon/devstackd.py --trust-wsl-ca
+fi
 # Hash the actual distribution files, not the DevStack commit or project tree.
 files=(package.json install.sh publish.sh update.sh uninstall.sh smoke.cjs bin/playwright bin/playwright-cli)
 for file in "${files[@]}"; do

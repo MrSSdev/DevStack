@@ -43,7 +43,7 @@ if ! command -v systemctl >/dev/null || [[ "$(ps -p 1 -o comm=)" != systemd ]]; 
 fi
 printf '[1/8] Installing official Ubuntu prerequisites...\n'
 apt-get update
-packages=(nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-xml php8.5-sqlite3 php8.5-mbstring mkcert acl python3 ca-certificates)
+packages=(nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-xml php8.5-sqlite3 php8.5-mbstring mkcert acl python3 ca-certificates libnss3-tools)
 if [[ "$project_services" -eq 1 ]]; then
   packages+=(mariadb-server redis-server)
 fi
@@ -70,6 +70,7 @@ for item in notifications-worker.php devstack-notifications.service devstack-not
   install -m 0644 -o root -g root "$SRC/scripts/$item" "/opt/devstack/scripts/$item"
 done
 install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
+install -m 0644 -o root -g root "$SRC/daemon/wsl_ca.py" /opt/devstack/daemon/wsl_ca.py
 install -m 0644 -o root -g root "$SRC/daemon/project_frameworks.py" /opt/devstack/daemon/project_frameworks.py
 install -m 0644 -o root -g root "$SRC/daemon/managed_services.py" /opt/devstack/daemon/managed_services.py
 install -m 0644 -o root -g root "$SRC/daemon/service-catalog.json" /opt/devstack/daemon/service-catalog.json

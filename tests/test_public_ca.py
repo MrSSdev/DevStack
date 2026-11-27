@@ -47,5 +47,25 @@ class PublicCaTests(unittest.TestCase):
                     d.public_ca_certificate({})
 
 
+    def test_wsl_import_is_fixed_to_developer_and_public_pem(self):
+        public = {'pem': 'public certificate fixture', 'sha256': 'A' * 64}
+        with patch.object(d, 'public_ca_certificate', return_value=public) as ca, \
+                patch.object(d, 'engine_identity', return_value=('developer', '/home/developer')), \
+                patch.object(d.pathlib.Path, 'is_file', return_value=True), \
+                patch.object(d, 'run', return_value='trusted') as run:
+            with self.assertRaises(d.InputError):
+                d.install_wsl_ca({'path': '/var/lib/devstack/ca/rootCA-key.pem'})
+            run.assert_not_called()
+            self.assertEqual(d.install_wsl_ca({}), {'message': 'trusted', 'sha256': 'A' * 64})
+            ca.assert_called_once_with({})
+            argv = run.call_args.args[0]
+            self.assertIn('--uid=developer', argv)
+            self.assertIn('--setenv=HOME=/home/developer', argv)
+            self.assertIn('--property=NoNewPrivileges=yes', argv)
+            self.assertEqual(argv[-3:], ['/usr/bin/python3', '-I', '/opt/devstack/daemon/wsl_ca.py'])
+            self.assertEqual(run.call_args.kwargs['input_text'], public['pem'])
+            self.assertNotIn(public['pem'], argv)
+
+
 if __name__ == '__main__':
     unittest.main()

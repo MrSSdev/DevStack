@@ -516,6 +516,29 @@ def public_ca_certificate(data: dict[str, Any]) -> dict[str, str]:
 
 
 
+def install_wsl_ca(data: dict[str, Any]) -> dict[str, str]:
+    """Trust only the existing root CA as the configured developer."""
+    if data:
+        raise InputError('Ta operacja nie przyjmuje parametrow.')
+    if not pathlib.Path('/usr/bin/certutil').is_file():
+        raise RuntimeError('Brak narzedzia NSS. W Ubuntu wykonaj: sudo apt-get install -y libnss3-tools, a potem ponow operacje.')
+    user, home = engine_identity()
+    ca = public_ca_certificate({})
+    message = run([
+        '/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
+        '--unit=devstack-ca-' + secrets.token_hex(8), '--uid=' + user,
+        '--working-directory=' + home, '--setenv=HOME=' + home,
+        '--setenv=PATH=/usr/bin:/bin',
+        '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
+        '--property=PrivateDevices=yes', '--property=PrivateNetwork=yes',
+        '--property=ProtectSystem=strict', '--property=ReadWritePaths=' + home,
+        '--property=InaccessiblePaths=-/mnt/c -/etc/devstack -/var/lib/devstack -/var/lib/devstack-web -/run/devstack',
+        '--property=RuntimeMaxSec=20s', '--property=UMask=0077',
+        '/usr/bin/python3', '-I', '/opt/devstack/daemon/wsl_ca.py',
+    ], input_text=ca['pem'])
+    return {'message': message, 'sha256': ca['sha256']}
+
+
 def mkdir_as_developer(path: pathlib.Path, dev_user: str) -> None:
     """Ask systemd (PID 1) to create a folder as the validated developer.
 
@@ -1689,7 +1712,7 @@ OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notificatio
        'set_preferences': set_ui_preferences, 'get_preferences': preferences,
        'service_control': service_control, 'set_service_autostart': set_service_autostart,
        'set_widget_services': set_widget_services,
-       'public_ca_certificate': public_ca_certificate}
+       'public_ca_certificate': public_ca_certificate, 'install_wsl_ca': install_wsl_ca}
 
 
 def handle(raw: bytes) -> bytes:
@@ -1762,4 +1785,14 @@ def serve() -> None:
 if __name__ == '__main__':
     if os.geteuid() != 0:
         sys.exit('Run only as root from the dedicated systemd unit.')
-    serve()
+    if sys.argv[1:] == ['--trust-wsl-ca']:
+        if os.environ.get('SUDO_USER') != config()['dev_user']:
+            sys.exit('Run as the configured developer via sudo.')
+        try:
+            print(install_wsl_ca({})['message'])
+        except (RuntimeError, InputError, OSError) as exc:
+            sys.exit(str(exc))
+    elif len(sys.argv) == 1:
+        serve()
+    else:
+        sys.exit('Unknown helper arguments.')

@@ -19,7 +19,9 @@ For extension-only updates after reviewing and pulling the new source:
 bash extensions/devstack-tools/update.sh
 ~~~
 
-No core update, frontend build or service restart. An identical build is a no-op; pass --with-deps if new libraries are needed, or --force for repair. Close active Playwright tests and CLI sessions before updating; an active launcher or detected browser/CLI process blocks replacement. The previous installation remains active if the candidate fails. Only one release is retained after successful replacement (temporarily more disk space is needed during staging).
+When DevStack is installed, installation and update automatically trust its existing public CA in the configured developer's Chromium NSS database. This uses the shared core helper, installing libnss3-tools if missing; an older core without the helper must be updated once first. Standalone installation without DevStack skips CA setup. The helper is also available in DevStack Settings → Security → Skopiuj do WSL, or via `sudo python3 -I /opt/devstack/daemon/devstackd.py --trust-wsl-ca`. No Windows certificate store, system-wide Linux trust store or CA private key is modified.
+
+No routine core update, frontend build or service restart. An identical build is a no-op; pass --with-deps if new libraries are needed, or --force for repair. Close active Playwright tests and CLI sessions before updating; an active launcher or detected browser/CLI process blocks replacement. The previous installation remains active if the candidate fails. Only one release is retained after successful replacement (temporarily more disk space is needed during staging).
 
 ## Layout
 

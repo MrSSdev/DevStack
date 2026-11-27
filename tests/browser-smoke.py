@@ -404,6 +404,29 @@ class BrowserAcceptance(unittest.TestCase):
         self.goto('dashboard');self.page.reload()
         expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
 
+    def test_01b_wsl_ca_button_installs_only_public_ca(self):
+        # The existing browser fixture already trusts the CA under another
+        # nickname. Exercise the real authenticated button and fixed helper,
+        # without touching the Windows download or duplicating the CA.
+        self.goto('settings')
+        self.page.get_by_role('navigation', name='Kategorie ustawień').get_by_role('button', name='Bezpieczeństwo', exact=True).click()
+        expect(self.page.get_by_role('button', name='Pobierz publiczny certyfikat CA (.cer)')).to_be_visible()
+        before = self.context.request.get(BASE + '/api/ca').body()
+        fingerprint = self.context.request.get(BASE + '/api/ca/info').json()['result']['sha256']
+        rejected = self.post('/api/ca/wsl', {'path': '/var/lib/devstack/ca/rootCA-key.pem'})
+        self.assertEqual(rejected.status, 422)
+        no_csrf = self.context.request.post(BASE + '/api/ca/wsl', data={})
+        self.assertEqual(no_csrf.status, 403)
+        button = self.page.get_by_role('button', name='Skopiuj do WSL', exact=True)
+        expect(button).to_be_enabled()
+        with self.page.expect_response(lambda r: r.url.endswith('/api/ca/wsl') and r.request.method == 'POST') as pending:
+            button.click()
+        result = pending.value
+        self.assertEqual(result.status, 200, result.text())
+        self.assertEqual(result.json()['result']['sha256'], fingerprint)
+        expect(self.page.get_by_text(re.compile('Certyfikat CA DevStack jest (juz )?zaufany w WSL\\.'))).to_be_visible()
+        self.assertEqual(self.context.request.get(BASE + '/api/ca').body(), before)
+
     def test_02_mail_rendering_download_search_pagination_and_deletion(self):
         for i in range(42):send(f'Pagination fixture {i:02}')
         send(HTML_SUBJECT, HTML)
