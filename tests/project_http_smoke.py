@@ -188,6 +188,7 @@ else:
         assert payload['request_method'] == 'POST' and payload['request_body'] == '{"fixture":true}'
         assert payload['https'] == 'on' and payload['remote_addr'] == '127.0.0.1'
         assert payload['other_hidden'] and payload['network_blocked']
+        assert payload['security_policy'] is True
         print('PASS: HTTPS, PHP routing, static assets and published storage', name, flush=True)
         print('PASS: Host/sibling/private symlinks, hidden and PHP source denied', name, flush=True)
 
