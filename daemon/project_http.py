@@ -58,7 +58,7 @@ class ProjectHttp:
         return project, public, published, fpm
 
     def launch_argv(self) -> list[str]:
-        return fixture_launch_argv(self.runtime.project, 'http')
+        return fixture_launch_argv(self.runtime.project, 'http', self.runtime.mapped_data)
 
     def argv(self, mounts: PinnedProject) -> list[str]:
         if mounts.path != self.runtime.project:
