@@ -5,12 +5,16 @@ on:
     branches: [main]
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
+      - 'tests/bubblewrap_backport_compat.py'
+      - 'tests/test_bubblewrap_backport_compat.py'
       - '.github/workflows/bubblewrap-backport.yml'
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
+      - 'tests/bubblewrap_backport_compat.py'
+      - 'tests/test_bubblewrap_backport_compat.py'
       - '.github/workflows/bubblewrap-backport.yml'
 
 permissions:
@@ -25,6 +29,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Check script syntax and packaging transformation
+        run: |
+          bash -n tests/bubblewrap-backport-ci.sh
+          python3 -m py_compile tests/bubblewrap_backport_compat.py tests/test_bubblewrap_backport_compat.py
+          python3 -m unittest discover -s tests -p test_bubblewrap_backport_compat.py -v
       - name: Build, test and roll back the temporary package
         run: bash tests/bubblewrap-backport-ci.sh
       - uses: actions/upload-artifact@v4

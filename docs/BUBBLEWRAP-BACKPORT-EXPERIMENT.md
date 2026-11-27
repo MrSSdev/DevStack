@@ -23,6 +23,10 @@ explicitly restores the dependency substitution variables required by the
 older helper. It checks the expected single-binary source layout, records
 the actual packaging diff in the artifact, verifies generated libc6
 dependencies and still runs dpkg-checkbuilddeps and the full test suite.
+The metadata adapter is a standalone Python module with unit tests for
+missing/existing dependency fields, multiline dependencies, duplicate
+substvars and rejection of unexpected control files. CI checks the shell
+and Python syntax and exercises this adapter before package downloads.
 No Bubblewrap C source, namespace flags, system security settings or
 test exclusions are changed. See the [Debian compat checklist](https://manpages.debian.org/unstable/debhelper/debhelper-compat-upgrade-checklist.7.en.html)
 and [Debian packaging reference](https://manpages.debian.org/unstable/debhelper/debhelper.7.en.html).
