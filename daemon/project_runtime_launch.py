@@ -10,9 +10,11 @@ import sys
 
 
 def main():
-    if len(sys.argv) != 3 or not sys.flags.isolated or os.geteuid() == 0:
+    if (len(sys.argv) not in (3, 4) or sys.argv[3:] not in ([], ['idmapped'])
+            or not sys.flags.isolated or os.geteuid() == 0):
         raise ValueError('Expected fixed non-root fixture launcher')
-    kind, raw = sys.argv[1:]
+    kind, raw = sys.argv[1:3]
+    mapped_data = sys.argv[3:] == ['idmapped']
     project = Path(raw)
     if (kind not in ('php', 'http') or project.parent.parent != Path('/var/lib')
             or not re.fullmatch(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}', project.parent.name)
@@ -38,16 +40,17 @@ def main():
     sys.path.insert(0, str(launcher))
     from project_runtime import RuntimePlan
     from project_http import ProjectHttp
-    from project_mounts import PinnedProject, exec_pinned
+    from project_mounts import PinnedProject, MappedProject, exec_pinned
     from project_runtime_identity import verify_binding
 
-    verify_binding(base, slot, current=True)
+    identity = verify_binding(base, slot, current=True)
 
     config = base / ('config-' + slot)
-    runtime = RuntimePlan(project, config / 'fpm.conf', base / ('sockets-' + slot))
+    runtime = RuntimePlan(project, config / 'fpm.conf', base / ('sockets-' + slot), mapped_data)
     plan = (runtime if kind == 'php' else
             ProjectHttp(runtime, config / 'nginx.conf', base / ('http-' + slot)))
-    with PinnedProject(project) as mounts:
+    selection = MappedProject(project, identity) if mapped_data else PinnedProject(project)
+    with selection as mounts:
         args = plan.argv(mounts)
         exec_pinned(args, mounts)
 
