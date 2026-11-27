@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from project_runtime import RuntimePlan, checked_path
+from project_runtime import RuntimePlan, checked_path, fixture_launch_argv
+from project_mounts import PinnedProject
 
 NGINX = '/usr/sbin/nginx'
 HTTP_SOCKET = '/run/project-http/http.sock'
@@ -56,8 +57,13 @@ class ProjectHttp:
         fpm = fixture_path(self.runtime.sockets, directory=True)
         return project, public, published, fpm
 
-    def argv(self) -> list[str]:
-        _, public, storage, fpm = self.sources()
+    def launch_argv(self) -> list[str]:
+        return fixture_launch_argv(self.runtime.project, 'http')
+
+    def argv(self, mounts: PinnedProject) -> list[str]:
+        if mounts.path != self.runtime.project:
+            raise ValueError('Project mount authorization mismatch')
+        fpm = fixture_path(self.runtime.sockets, directory=True)
         config = fixture_path(self.config, directory=False)
         sockets = fixture_path(self.sockets, directory=True)
         if self.sockets == self.runtime.sockets:
@@ -75,12 +81,11 @@ class ProjectHttp:
             '--dir', '/home', '--dir', '/mnt', '--dir', '/run',
             '--ro-bind', '/etc/nginx/mime.types', '/etc/nginx/mime.types',
             '--ro-bind', config, '/run/project-http-config/nginx.conf',
-            '--ro-bind', public, public,
             '--ro-bind', fpm, '/run/project-fpm',
             '--bind', sockets, '/run/project-http',
         ]
-        if storage:
-            args += ['--ro-bind', storage, storage]
+        args += mounts.bind('public')
+        args += mounts.bind('storage/app/public', optional=True)
         return args + [
             '--chdir', '/tmp', '--clearenv',
             '--setenv', 'PATH', '/usr/bin:/bin', '--setenv', 'HOME', '/tmp',

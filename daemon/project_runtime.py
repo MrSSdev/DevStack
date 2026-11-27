@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
+from project_mounts import PinnedProject
+
 FPM = '/usr/sbin/php-fpm8.5'
 PHP_CONFIG = Path('/etc/php/8.5')
 SOCKET = '/run/project-fpm/php.sock'
@@ -33,8 +35,13 @@ class RuntimePlan:
     config: Path
     sockets: Path
 
-    def argv(self) -> list[str]:
-        project = checked_path(self.project, directory=True)
+    def launch_argv(self) -> list[str]:
+        return fixture_launch_argv(self.project, 'php')
+
+    def argv(self, mounts: PinnedProject) -> list[str]:
+        if mounts.path != self.project:
+            raise ValueError('Project mount authorization mismatch')
+        project = str(self.project)
         config = checked_path(self.config, directory=False)
         sockets = checked_path(self.sockets, directory=True)
         # Keep the host absolute project path for framework-generated paths.
@@ -60,13 +67,10 @@ class RuntimePlan:
             '--proc', '/proc', '--dev', '/dev',
             '--tmpfs', '/tmp', '--dir', '/home', '--dir', '/mnt',
             '--dir', '/run', '--dir', '/etc',
-            '--ro-bind', project, project,
         ]
+        args += mounts.bind('')
         for relative in WRITABLE:
-            target = self.project / relative
-            if target.is_symlink() or target.exists():
-                source = checked_path(target, directory=True)
-                args += ['--bind', source, source]
+            args += mounts.bind(relative, writable=True, optional=True)
         for relative in ('fpm/php.ini', 'fpm/conf.d', 'mods-available'):
             source = str(PHP_CONFIG / relative)
             args += ['--ro-bind', source, source]
@@ -82,6 +86,17 @@ class RuntimePlan:
             '-c', str(PHP_CONFIG / 'fpm/php.ini'),
         ]
         return args
+
+
+def fixture_launch_argv(project: Path, component: str) -> list[str]:
+    if (component not in ('php', 'http')
+            or project.parent.parent != Path('/var/lib')
+            or not re.fullmatch(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}', project.parent.name)
+            or project.name not in ('project-a', 'project-b')):
+        raise ValueError('Expected a protected disposable fixture')
+    return ['/usr/bin/python3', '-I',
+            str(project.parent / 'launcher/project_runtime_launch.py'),
+            component, str(project)]
 
 
 def fpm_config() -> str:
