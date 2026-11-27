@@ -84,6 +84,8 @@ class ProjectHttp:
             '--ro-bind', fpm, '/run/project-fpm',
             '--bind', sockets, '/run/project-http',
         ]
+        if Path('/usr/lib/wsl').is_dir():
+            args += ['--tmpfs', '/usr/lib/wsl']
         args += mounts.bind('public')
         args += mounts.bind('storage/app/public', optional=True)
         return args + [
