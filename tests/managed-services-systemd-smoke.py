@@ -19,7 +19,7 @@ suffix = uuid.uuid4().hex[:10]
 unit = 'devstack-ci-service-'+suffix+'.service'
 missing = 'devstack-ci-missing-'+suffix+'.service'
 m.ACTION_UNIT = 'devstack-ci-control-'+suffix
-unit_path = Path('/run/systemd/system')/unit
+unit_path = Path('/etc/systemd/system')/unit
 
 def ctl(*args):
     return subprocess.run(['/usr/bin/systemctl', *args], capture_output=True, text=True, check=True, timeout=15).stdout.strip()
@@ -33,7 +33,7 @@ def await_state(expected):
     raise AssertionError('Expected state '+expected+', got '+state)
 
 try:
-    unit_path.write_text('[Unit]\nDescription=Disposable DevStack control fixture\n[Service]\nType=simple\nExecStart=/usr/bin/sleep infinity\n')
+    unit_path.write_text('[Unit]\nDescription=Disposable DevStack control fixture\n[Service]\nType=simple\nExecStart=/usr/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n')
     ctl('daemon-reload')
     with tempfile.TemporaryDirectory() as tmp:
         m.CATALOG=Path(tmp)/'catalog.json';m.SELECTION=Path(tmp)/'selection.json'
@@ -60,6 +60,11 @@ try:
         m.CATALOG.write_text(json.dumps([row('fixture','Fixture',unit),row('missing','Missing',missing)]))
         assert [r['id'] for r in m.public_rows()]==['fixture']
         assert m.public_rows()[0]['state']=='inactive'
+        assert m.public_rows()[0]['autostart'] is False
+        assert m.set_autostart('fixture',True)['autostart'] is True
+        assert ctl('is-enabled',unit)=='enabled'
+        assert m.public_rows()[0]['state']=='inactive'
+        assert m.set_autostart('fixture',False)['autostart'] is False
         assert m.save_selection([],m.public_rows())==[]
         assert not m.public_rows()[0]['widget_selected']
         accepted=m.schedule('fixture','start')
@@ -73,6 +78,11 @@ try:
         await_state('active')
         await_receipt(accepted['receipt'],'success')
         before=ctl('show','--property=MainPID','--value',unit)
+        for enabled in (True,False):
+            assert m.set_autostart('fixture',enabled)['autostart'] is enabled
+            assert m.public_rows()[0]['autostart'] is enabled
+            assert m.public_rows()[0]['state']=='active'
+            assert ctl('show','--property=MainPID','--value',unit)==before
         accepted=m.schedule('fixture','restart')
         await_state('active')
         assert ctl('show','--property=MainPID','--value',unit)!=before
@@ -87,7 +97,7 @@ try:
         accepted=m.schedule('fixture','start')
         await_state('failed')
         await_receipt(accepted['receipt'],'error')
-        unit_path.write_text('[Unit]\nDescription=Disposable DevStack control fixture\n[Service]\nType=simple\nExecStart=/usr/bin/sleep infinity\n')
+        unit_path.write_text('[Unit]\nDescription=Disposable DevStack control fixture\n[Service]\nType=simple\nExecStart=/usr/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n')
         ctl('daemon-reload')
         ctl('reset-failed',unit)
         accepted=m.schedule('fixture','start')
@@ -96,5 +106,6 @@ try:
         print('PASS: installed and absent units, persistent empty selection, delayed start/restart/stop, actual success and failed receipts, and busy guard.')
 finally:
     subprocess.run(['/usr/bin/systemctl','stop',m.ACTION_UNIT+'.timer',m.ACTION_UNIT+'.service',unit],capture_output=True,timeout=20)
+    subprocess.run(['/usr/bin/systemctl','disable',unit],capture_output=True,timeout=15)
     unit_path.unlink(missing_ok=True)
     subprocess.run(['/usr/bin/systemctl','daemon-reload'],capture_output=True,timeout=15)

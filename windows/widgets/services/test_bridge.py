@@ -50,6 +50,26 @@ class Tests(unittest.TestCase):
             self.assertEqual(bridge.restart('php','c'*32,d)[0],503)
             self.assertEqual(bridge.restart('php','c'*32,d)[0],409)
             self.assertEqual(cmd.call_count,1)
+    def test_v1_missing_optional_units_are_not_a_failed_read(self):
+        units={u:{'Id':u,'LoadState':'loaded','ActiveState':'active'} for u in bridge.UNITS.values()}
+        for name in ('mariadb','redis'):
+            units[bridge.UNITS[name]].update(LoadState='not-found',ActiveState='inactive')
+        def output(rows):
+            return '\n\n'.join('\n'.join(k+'='+v for k,v in row.items()) for row in rows.values())
+        with tempfile.TemporaryDirectory() as d, patch.object(bridge.subprocess,'run') as run, patch.object(bridge.time,'sleep'):
+            (Path(d)/'projects').write_text('{}')
+            run.return_value=Mock(returncode=1,stdout=output(units))
+            data=bridge.snapshot(d)
+            indexed={row['id']:row for row in data['services']}
+            self.assertEqual(data['projectCount'],0)
+            self.assertIs(indexed['nginx']['active'],True)
+            self.assertIsNone(indexed['mariadb']['active'])
+            self.assertIsNone(indexed['redis']['active'])
+            incomplete={k:v for k,v in units.items() if k!='nginx.service'}
+            run.return_value=Mock(returncode=1,stdout=output(incomplete))
+            with self.assertRaises(ValueError): bridge.system_info()
+            run.return_value=Mock(returncode=1,stdout='')
+            with self.assertRaises(ValueError): bridge.system_info()
     def test_snapshot_count_no_names(self):
         units={unit:{'Id':unit,'LoadState':'loaded','ActiveState':'active','MemoryCurrent':'1000','CPUUsageNSec':'500'} for unit in bridge.UNITS.values()}
         with tempfile.TemporaryDirectory() as d,patch.object(bridge,'system_info',return_value=units),patch.object(bridge.time,'sleep'):

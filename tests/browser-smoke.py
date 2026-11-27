@@ -1267,6 +1267,107 @@ class BrowserAcceptance(unittest.TestCase):
         expect(ack).to_have_count(1)
 
 
+    def test_11b_service_autostart_in_panel_only(self):
+        self.goto('dashboard')
+        def read_service():
+            rows=self.context.request.get(BASE+'/api/state').json()['result']['managed_services']
+            return next(row for row in rows if row['id']=='mailpit')
+        original=read_service()['autostart']
+        self.assertIsInstance(original,bool)
+        def pid():
+            return subprocess.check_output(['systemctl','show','--property=MainPID','--value','devstack-mailpit.service'],text=True).strip()
+        before=pid()
+        self.assertNotEqual(before,'0')
+        row=self.page.locator('main button[data-service-id="mailpit"]')
+        dialog=self.page.locator('dialog:modal')
+        try:
+            row.click()
+            switch=dialog.get_by_role('switch',name='Autostart')
+            expect(switch).to_have_attribute('aria-checked',str(original).lower())
+            switch.click()
+            expect(switch).to_have_attribute('aria-checked',str(not original).lower(),timeout=15000)
+            self.assertIs(read_service()['autostart'],not original)
+            self.assertEqual(pid(),before)
+            close=dialog.get_by_role('button',name='Zamknij',exact=True)
+            expect(close).to_be_enabled(timeout=15000)
+            close.click()
+            expect(row.get_by_text('Autostart',exact=True)).to_have_count(0 if original else 1)
+            self.page.reload()
+            expect(row).to_be_visible()
+            expect(row.get_by_text('Autostart',exact=True)).to_have_count(0 if original else 1)
+            self.page.locator('main button[data-service-id="nginx"]').click()
+            expect(dialog.get_by_role('switch',name='Autostart')).to_be_disabled()
+            self.assertEqual(self.post('/api/services/autostart',{'service':'nginx','enabled':False}).status,422)
+        finally:
+            restored=self.post('/api/services/autostart',{'service':'mailpit','enabled':original})
+            self.assertEqual(restored.status,200,restored.text())
+            self.assertEqual(pid(),before)
+
+
+    def test_11c_native_dialog_move_during_toast_exit(self):
+        # Reproduce the real race: moving the live host while Base UI is
+        # waiting for a closing toast's CSS transitions to finish must not
+        # strand an invisible ending item in the store. Test BOTH directions.
+        self.goto('dashboard')
+        self.wait_notification_cycle()
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        self.dismiss_visible_toasts()
+        all_toasts=self.page.locator('[data-slot="toast"]')
+        expect(all_toasts).to_have_count(0)
+        for opening, subject, count in (
+                (True,'Portal move while opening',1),
+                (False,'Portal move while closing',2)):
+            send(subject)
+            self.wait_total(count)
+            notice=all_toasts.filter(has_text=subject)
+            expect(notice).to_be_visible(timeout=20000)
+            notice.hover()
+            # The two actual UI button activations must happen within the
+            # same running exit animation, not after its normal completion.
+            # Use animation frames to synchronize the race deterministically;
+            # no CSS, toast state or application responses are overridden.
+            result=self.page.evaluate("""async ({opening,subject})=>{
+                const host=document.querySelector('[data-slot="toast-host"]');
+                const toast=[...host.querySelectorAll('[data-slot="toast"]')].find(e=>e.textContent.includes(subject));
+                const target=opening
+                    ? document.querySelector('main button[data-service-id="mariadb"]')
+                    : document.querySelector('dialog:modal button[aria-label="Zamknij"]');
+                const close=toast?.querySelector('[data-slot="toast-close"]');
+                if(!target||!close)throw new Error('Missing real toast or service control');
+                const frame=()=>new Promise(requestAnimationFrame);
+                close.click();
+                for(let i=0;i<60;i++){
+                    await frame();
+                    if(toast.hasAttribute('data-ending-style')&&toast.getAnimations().some(a=>a.playState==='running'))break;
+                }
+                // Allow Base UI's own animation-completion observer to attach.
+                await frame();
+                const animations=toast.getAnimations().filter(a=>a.playState==='running');
+                if(!toast.hasAttribute('data-ending-style')||!animations.length)throw new Error('No running exit animation to exercise');
+                const finished=Promise.allSettled(animations.map(a=>a.finished));
+                target.click();
+                // The browser or React may synchronously resolve styles during
+                // dialog focus restoration, before MutationObserver delivery.
+                // Exercise that ordering explicitly; a late move must fail.
+                toast.getBoundingClientRect();
+                toast.getAnimations();
+                await frame();
+                const parent=opening?document.querySelector('dialog:modal'):document.body;
+                const moved=!!parent&&host.parentElement===parent&&toast.isConnected&&host.contains(toast);
+                const outcomes=await finished;
+                return {moved,animations:animations.length,cancelled:outcomes.filter(a=>a.status==='rejected').length};
+            }""",{'opening':opening,'subject':subject})
+            self.assertGreater(result['animations'],0,result)
+            self.assertTrue(result['moved'],result)
+            self.assertEqual(result['cancelled'],0,{'opening':opening,**result})
+            # Count the actual DOM item, INCLUDING data-ending-style. Merely
+            # hiding or filtering out the stuck toast is not a successful exit.
+            expect(notice).to_have_count(0,timeout=5000)
+            expect(self.page.locator('dialog:modal')).to_have_count(1 if opening else 0)
+        expect(self.page.locator('body > [data-slot="toast-host"]')).to_have_count(1)
+        expect(all_toasts).to_have_count(0)
+
+
     def test_12_native_toast_stack_and_no_animation_overflow(self):
         # Real mail notices, a native modal, and the real toast manager.
         self.goto('dashboard')
@@ -1292,7 +1393,14 @@ class BrowserAcceptance(unittest.TestCase):
         self.wait_total(2)
         second=cards.filter(has_text='Stack fixture second')
         expect(second).to_be_visible(timeout=20000)
-        self.page.mouse.move(1,1)
+        # A new frontmost toast moves the hovered card during its animation.
+        # Re-enter the settled frontmost card, then leave the actual viewport
+        # for a known non-toast element within the native modal. Do not rely
+        # on backdrop hit testing or an old pointer position after insertion.
+        second.hover()
+        expect(second).to_have_attribute('data-expanded','')
+        self.assertFalse(host.evaluate('e=>e.contains(document.activeElement)'), 'Hover must not move keyboard focus into the toast stack')
+        dialog.get_by_role('heading',name='MariaDB',exact=True).hover()
         expect(first).not_to_have_attribute('data-expanded','')
         expect(second).not_to_have_attribute('data-expanded','')
         expect(first.locator('[data-slot="toast-content"]')).to_have_css('opacity','0')
@@ -1339,6 +1447,7 @@ class BrowserAcceptance(unittest.TestCase):
         }""")
         second.get_by_role('button',name='Zamknij powiadomienie',exact=True).click()
         expect(second).to_have_count(0)
+        expect(host.locator('[data-slot="toast"]').filter(has_text='Stack fixture second')).to_have_count(0)
         self.assertEqual(self.page.evaluate('window.__toastOverflow'),0)
         expect(first).to_be_visible()
         # Closing the modal moves the same live portal back to the document.

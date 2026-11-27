@@ -379,6 +379,7 @@ class ValidationTests(unittest.TestCase):
                 kwargs['dir']=tmp
                 return original_tempdir(*args,**kwargs)
             with patch.object(d,'read_json',side_effect=fake_read), \
+                 patch.object(d,'require_mariadb_available'), \
                  patch.object(d.tempfile,'TemporaryDirectory',side_effect=temp_factory), \
                  patch.object(d,'run',side_effect=fake_run):
                 result=d.test_project_database({'slug':slug})
@@ -489,6 +490,64 @@ class ValidationTests(unittest.TestCase):
         self.assertRegex(user, r'^[a-z0-9]{1,64}$')
         self.assertNotIn('_', name)
         self.assertNotEqual(name, d.db_identifiers('test-project2')[0])
+
+    def test_empty_project_registry_is_created_without_overwriting_existing_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'projects.json'
+            with patch.object(d, 'STATE_FILE', path):
+                d.ensure_project_registry()
+                self.assertEqual(json.loads(path.read_text()), {})
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                d.write_json_atomic(path, {'demo': {'domain': 'demo.test'}})
+                before = path.read_bytes()
+                d.ensure_project_registry()
+                self.assertEqual(path.read_bytes(), before)
+                path.unlink()
+                other = Path(tmp) / 'other.json'
+                other.write_text('{}')
+                path.symlink_to(other)
+                with self.assertRaises(RuntimeError):
+                    d.ensure_project_registry()
+                self.assertEqual(other.read_text(), '{}')
+
+    def test_mariadb_guard_never_starts_the_service(self):
+        from types import SimpleNamespace
+        import subprocess
+        with patch.object(d.os, 'access', return_value=False), patch.object(d.subprocess, 'run') as run:
+            with self.assertRaisesRegex(d.InputError, 'MariaDB'):
+                d.require_mariadb_available()
+            run.assert_not_called()
+        with patch.object(d.os, 'access', return_value=True), patch.object(d.subprocess, 'run') as run:
+            for outcome in (SimpleNamespace(returncode=3), SimpleNamespace(returncode=4)):
+                run.return_value = outcome
+                with self.assertRaisesRegex(d.InputError, 'MariaDB'):
+                    d.require_mariadb_available()
+                self.assertEqual(run.call_args.args[0],
+                                 ['/usr/bin/systemctl', 'is-active', '--quiet', 'mariadb.service'])
+            run.return_value = SimpleNamespace(returncode=0)
+            d.require_mariadb_available()
+            run.side_effect = subprocess.TimeoutExpired('systemctl', 5)
+            with self.assertRaises(d.InputError):
+                d.require_mariadb_available()
+
+    def test_stopped_mariadb_rejects_create_before_touching_project_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            with patch.object(d, 'config', return_value={'projects_dir': str(folder), 'dev_user': 'ubuntu'}), \
+                 patch.object(d, 'STATE_FILE', folder/'projects.json'), \
+                 patch.object(d, 'SECRET_FILE', folder/'credentials.json'), \
+                 patch.object(d, 'site_path', return_value=folder/'site.conf'), \
+                 patch.object(d, 'site_link_path', return_value=folder/'enabled.conf'), \
+                 patch.object(d, 'pool_path', return_value=folder/'pool.conf'), \
+                 patch.object(d, 'require_mariadb_available', side_effect=d.InputError('MariaDB unavailable')), \
+                 patch.object(d, 'ensure_project_paths') as paths, \
+                 patch.object(d, 'create_db') as database:
+                with self.assertRaisesRegex(d.InputError, 'MariaDB'):
+                    d.create_environment({'slug':'demo','name':'Demo','domain':'demo.test',
+                                          'webroot':'public','database':True,'https':False})
+                paths.assert_not_called()
+                database.assert_not_called()
+                self.assertEqual(list(folder.iterdir()), [])
 
     def test_secret_not_in_mariadb_error(self):
         import subprocess
