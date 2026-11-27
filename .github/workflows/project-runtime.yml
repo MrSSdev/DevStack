@@ -1,0 +1,31 @@
+name: DevStack isolated PHP runtime prototype
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'daemon/project_runtime.py'
+      - 'tests/project-runtime-systemd-smoke.py'
+      - '.github/workflows/project-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: Two real isolated PHP-FPM instances and SQLite
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install runtime dependencies on disposable runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap acl libfcgi-bin php8.5-fpm php8.5-sqlite3
+      - name: Check and exercise prototype
+        run: |
+          python3 -m py_compile daemon/project_runtime.py tests/project-runtime-systemd-smoke.py
+          sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 python3 -I tests/project-runtime-systemd-smoke.py

@@ -104,6 +104,47 @@ cannot be enforced, do not claim that assigning a project is a complete
 sandbox. Preserve the existing Windows/WSL integration for the trusted
 developer.
 
+## Isolated PHP runtime prototype (E1.3, not activated)
+
+The first runtime implementation is `daemon/project_runtime.py`, tested by
+`tests/project-runtime-systemd-smoke.py` in a dedicated CI workflow. It is
+not called by the installed daemon and is not an installation or migration
+command. The prototype only accepts protected fixture paths under /var/lib;
+the fixture test runs on a disposable hosted runner, never a workstation.
+
+Use an independent non-root FPM master/worker identity per project and
+a separate Bubblewrap mount, user, PID, IPC and network namespace.
+Preserve the project absolute path inside the mount namespace; mount the
+source read-only, with explicit writable mounts for storage,
+bootstrap/cache and database when present. Only the installed PHP
+configuration needed for the interpreter is mounted, not the shared
+FPM pool directory. Each instance has its own FastCGI socket directory;
+Nginx's identity receives an explicit socket ACL, not membership in a
+project runtime group. Writable directories use a dedicated
+project group with setgid/default group permissions; only the trusted
+developer is a member of multiple project groups. Verify runtime-created
+files are editable from a fresh developer session. Group changes may
+require re-login; no such change is applied to an installed workstation.
+The fixture uses a newly created unprivileged developer account with actual
+NSS memberships verified in its subprocess, not the hosted runner's login.
+A preflight exercises shared group writes before either FPM instance starts. No project receives the manager identity.
+Test both separate account DAC and the mount/network boundary using
+two real FPM processes, FastCGI requests, SQLite writes, developer access
+and independent stop. The initial prototype denies all host networking,
+so it does not yet support MariaDB, Redis, Mailpit or external HTTP.
+
+Before production integration, design race-safe source opening and mount
+publication (the prototype path checks are not a security boundary);
+protect against user-controlled directory replacement, symlink/hardlink
+escapes, inherited FDs and WSL-specific IPC/interop. Review the shared
+Nginx worker's static-file and symlink handling separately: private FPM
+mounts do not isolate Nginx. Preserve Laravel build/cache/storage and
+SQLite access for the developer and test real HTTP, CLI and framework
+installation. Add explicit migrations, rollback, cleanup, service
+registry and selective networking where required. No silent fallback
+to the shared developer pool and no automatic migration of existing
+projects. Native Windows agent policy remains a separate gate.
+
 ## Configuration management and adapters
 
 DevStack is a management plane, not a mandatory AI chat client or runtime.
