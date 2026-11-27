@@ -215,6 +215,16 @@ def main():
     listener.listen()
     port = listener.getsockname()[1]
     try:
+        # Stage a fixed, root-owned launcher readable by the fixture account,
+        # independent of the hosted runner's home-directory permissions.
+        launcher = base / 'launcher'
+        launcher.mkdir(mode=0o755)
+        source = Path(__file__).resolve().parents[1] / 'daemon'
+        for name in ('project_runtime_launch.py', 'project_runtime.py',
+                     'project_http.py', 'project_mounts.py'):
+            destination = launcher / name
+            destination.write_bytes((source / name).read_bytes())
+            destination.chmod(0o644)
         # Host connectivity is established before testing the namespace denial.
         with socket.create_connection(('127.0.0.1', port), timeout=1):
             conn, _ = listener.accept()

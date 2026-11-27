@@ -9,18 +9,16 @@ import re
 import stat
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from project_runtime import RuntimePlan, fixture_launch_argv
-from project_http import ProjectHttp
-from project_mounts import PinnedProject, exec_pinned
-
 
 def main():
     if len(sys.argv) != 3 or not sys.flags.isolated or os.geteuid() == 0:
         raise ValueError('Expected fixed non-root fixture launcher')
     kind, raw = sys.argv[1:]
     project = Path(raw)
-    fixture_launch_argv(project, kind)
+    if (kind not in ('php', 'http') or project.parent.parent != Path('/var/lib')
+            or not re.fullmatch(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}', project.parent.name)
+            or project.name not in ('project-a', 'project-b')):
+        raise ValueError('Expected protected disposable fixture')
     slot = project.name[-1]
     account = pwd.getpwuid(os.geteuid())
     if (not re.fullmatch(r'dsrt-' + slot + r'-[a-f0-9]{10}', account.pw_name)
@@ -33,6 +31,22 @@ def main():
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
             or info.st_mode & 0o022):
         raise ValueError('Unprotected fixture base')
+    launcher = base / 'launcher'
+    if Path(__file__).absolute() != launcher / 'project_runtime_launch.py':
+        raise ValueError('Expected staged fixture launcher')
+    info = launcher.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise ValueError('Unprotected launcher directory')
+    for name in ('project_runtime_launch.py', 'project_runtime.py',
+                 'project_http.py', 'project_mounts.py'):
+        info = (launcher / name).lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('Unprotected launcher file')
+    sys.path.insert(0, str(launcher))
+    from project_runtime import RuntimePlan
+    from project_http import ProjectHttp
+    from project_mounts import PinnedProject, exec_pinned
+
     config = base / ('config-' + slot)
     runtime = RuntimePlan(project, config / 'fpm.conf', base / ('sockets-' + slot))
     plan = (runtime if kind == 'php' else

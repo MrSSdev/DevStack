@@ -95,7 +95,7 @@ def fixture_launch_argv(project: Path, component: str) -> list[str]:
             or project.name not in ('project-a', 'project-b')):
         raise ValueError('Expected a protected disposable fixture')
     return ['/usr/bin/python3', '-I',
-            str(Path(__file__).with_name('project_runtime_launch.py').absolute()),
+            str(project.parent / 'launcher/project_runtime_launch.py'),
             component, str(project)]
 
 

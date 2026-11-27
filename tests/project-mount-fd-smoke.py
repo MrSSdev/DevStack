@@ -40,6 +40,7 @@ def main():
                 '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin',
                 '--', '/usr/bin/python3', '-I', '-c', '''
 import os
+import stat
 from pathlib import Path
 assert Path('/work/marker').read_text() == 'own'
 Path('/work/result').write_text('ok')
@@ -48,8 +49,10 @@ for name in os.listdir('/proc/self/fd'):
         continue
     try:
         target = os.readlink('/proc/self/fd/' + name)
-    except FileNotFoundError:
+        mode = os.fstat(int(name)).st_mode
+    except (FileNotFoundError, OSError):
         continue
+    assert not stat.S_ISDIR(mode), 'directory descriptor leaked'
     assert 'devstack-mount-fd-' not in target, 'source descriptor leaked'
 '''], pass_fds=tuple(mounts.fds), check=True, timeout=20)
         assert (project / 'old-storage/result').read_text() == 'ok'
