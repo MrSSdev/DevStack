@@ -80,6 +80,14 @@ class RegisteredPilotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             path = Path(work)
             path.chmod(0o711)
+            # Unit tests run without privileges: simulate the namespace stat
+            # results rather than trying to inspect PID 1 on the runner.
+            real_stat = os.stat
+            namespace_stat = real_stat('/proc/self/ns/mnt')
+            def simulated_stat(target, *args, **kwargs):
+                if target in ('/proc/self/ns/mnt', '/proc/1/ns/mnt'):
+                    return namespace_stat
+                return real_stat(target, *args, **kwargs)
             with patch.object(pilot, 'require_backend'), \
                  patch.object(pilot, 'registered', return_value=(spec,key,account)), \
                  patch.object(pilot, 'journal', return_value=path), \
@@ -87,7 +95,7 @@ class RegisteredPilotTests(unittest.TestCase):
                  patch.object(pilot, 'runtime_dir', return_value=path), \
                  patch.object(pilot, 'protected_parents'), \
                  patch.object(pilot, 'protected_control'), \
-                 patch.object(pilot.os.path, 'samestat', return_value=True), \
+                 patch.object(pilot.os, 'stat', side_effect=simulated_stat), \
                  patch.object(pilot, 'mount_command') as mount:
                 with self.assertRaisesRegex(ValueError, 'PrivateMounts'):
                     pilot.launch(key, 'php')
