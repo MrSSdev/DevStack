@@ -607,3 +607,62 @@ UID/GID retirement/non-reuse, transactional activation and real tool/agent
 acceptance remain required. Do not delete and reuse a production UID/GID
 while files, ACLs, grants or processes might retain it. Do not automatically
 create accounts for legacy projects or enable real isolation on upgrade.
+
+
+## Owner-applied access preparation and normal developer credentials (E1.3h)
+
+Avoid adding the trusted developer to a growing list of runtime groups:
+existing IDE/terminal sessions should not need a new login every time a
+project is created. The selected candidate uses named POSIX ACLs with
+default inheritance, dedicated runtime accounts and read-only source
+mounts. Source directories/files receive runtime read/traverse permission;
+approved application data directories receive runtime write permission and
+a default named developer entry for new runtime-owned files. The developer
+retains ordinary ownership and edits files directly, without running the
+IDE as the runtime user. Agent edit permissions remain a separate scoped
+execution profile, not PHP-FPM's data-write permissions.
+
+In the disposable fixture, preparation runs as the non-root owner over
+descriptor-relative metadata with a bounded read-only scan before changing
+permissions. Existing ACLs, non-private modes, foreign owners/groups,
+hardlinks, mount crossings, special nodes and excessive trees are refused.
+Symlinks are retained but never followed for ACL operations. Explicit ACL
+plans are applied through pinned descriptors using the system libacl;
+permissions on a replaced pathname's target are not modified. Revalidate
+the snapshot during application and publish root traversal last. All
+fixtures are new and quiescent; no root traversal of arbitrary project
+trees and no group membership changes. This is not transactional enrollment
+of an existing live project. If application fails, do not start a runtime
+on the partially prepared fixture.
+
+The existing actual PHP/HTTPS/SQLite lifecycle test now exercises
+developer-created source and build files, inherited read-only permissions,
+runtime-created nested data, actual writes to pre-provisioned SQLite,
+new database creation and the neighboring project denial, using a
+developer with no runtime group memberships. Test the behavior both on
+the distro fixture backend and the LTS backport. The helper is not
+installed or exposed as RPC.
+
+**Creation-mode limitation.** POSIX ACL inheritance respects the mode
+requested by the application. In a separate Linux experiment, a
+runtime-owned SQLite database created with SQLite's usual mode 0644
+had a read-only effective developer ACL (mode 0640). Its developer
+transaction failed with a readonly-database error. The runtime smoke
+records that result explicitly if reproduced, without artificially
+chmod'ing the new database. Explicit private mode 0600 must not be
+bypassed. Ordinary Laravel installer-created SQLite remains a separate
+positive write test. Full developer access for approved runtime-created
+data requires a production policy and further evaluation (e.g. idmapped
+writable mounts where supported, or a narrow owner-side sharing operation
+for explicitly authorized data). Do not blanket widen permissions or
+require recurring manual chmod for normal development. This limitation
+remains a blocker for claiming full developer compatibility.
+
+Production still needs a protected publication/enrollment transaction,
+coordination with existing public ACLs and arbitrary legacy ownership,
+rollback/recovery, bounded handling of larger real dependency trees, and
+tests for actual installer/build/editor behavior (including restrictive
+creation modes or atomic replacement that can mask inherited ACLs).
+A metadata scan alone cannot prevent new hardlinks/renames/mounts by a
+concurrent trusted owner. Do not use this private-fixture preparation
+routine as a bulk repair or silently replace a user's existing ACLs.

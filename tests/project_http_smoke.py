@@ -30,30 +30,30 @@ def launch(unit, user, args):
         '--property=RuntimeMaxSec=180s', *args)
 
 
-def prepare_public(root, user, developer, name, other, outside):
-    public = root / 'public'
-    build = public / 'build/assets'
-    build.mkdir(parents=True)
-    (build / 'app.js').write_text('const project = "' + name + '";')
-    (public / '.env').write_text('PRIVATE_ENV_' + name)
-    (public / 'private.php').write_text('<?php echo "PRIVATE_PHP_' + name + '";')
-    (build / 'host.txt').symlink_to(outside)
-    (build / 'other.txt').symlink_to(other / 'public/build/assets/app.js')
-    (build / 'private.txt').symlink_to(root / 'marker.txt')
-    (build / 'system.txt').symlink_to('/usr/bin/bash')
-    published = root / 'storage/app/public'
-    published.mkdir(parents=True)
-    (published / 'upload.txt').write_text('upload-' + name)
-    (published / 'outside.txt').symlink_to(outside)
-    (public / 'storage').symlink_to(published, target_is_directory=True)
-    # Only known, root-created fixtures. Never recursively walk an agent's tree.
-    for path in [*public.rglob('*'), root / 'storage/app', published, *published.iterdir()]:
-        os.chown(path, developer.pw_uid, developer.pw_gid, follow_symlinks=False)
-        if not path.is_symlink():
-            path.chmod(0o700 if path.is_dir() else 0o600)
-    run('setfacl', '-P', '-R', '-m', 'u:' + user + ':rX', str(public))
-    run('setfacl', '-P', '-R', '-m', 'u:' + user + ':rX', str(root / 'storage/app'))
-
+def prepare_public(root, developer, name, other, outside, as_user):
+    # Simulate the normal editor adding source/build files and Laravel's
+    # published storage. All new entries inherit the prepared named ACLs.
+    as_user(developer.pw_name, '/usr/bin/python3', '-I', '-c', '''
+from pathlib import Path
+import sys
+root, name, other, outside = sys.argv[1:]
+root, other = Path(root), Path(other)
+public = root / 'public'
+build = public / 'build/assets'
+build.mkdir(parents=True)
+(build / 'app.js').write_text('const project = "' + name + '";')
+(public / '.env').write_text('PRIVATE_ENV_' + name)
+(public / 'private.php').write_text('<?php echo "PRIVATE_PHP_' + name + '";')
+(build / 'host.txt').symlink_to(outside)
+(build / 'other.txt').symlink_to(other / 'public/build/assets/app.js')
+(build / 'private.txt').symlink_to(root / 'marker.txt')
+(build / 'system.txt').symlink_to('/usr/bin/bash')
+published = root / 'storage/app/public'
+published.mkdir(parents=True)
+(published / 'upload.txt').write_text('upload-' + name)
+(published / 'outside.txt').symlink_to(outside)
+(public / 'storage').symlink_to(published, target_is_directory=True)
+''', str(root), name, str(other), str(outside))
 
 def exercise_http(base, token, plans, users, developer, identities, attempted,
                   as_user, stop, verify, host_net):
@@ -68,8 +68,8 @@ def exercise_http(base, token, plans, users, developer, identities, attempted,
     for index, name in enumerate(('a', 'b')):
         runtime = plans[index]
         user = users[index]
-        prepare_public(runtime.project, user, developer, name,
-                       plans[1 - index].project, outside)
+        prepare_public(runtime.project, developer, name,
+                       plans[1 - index].project, outside, as_user)
         # Shared ingress cannot read project source or public assets directly.
         as_user('www-data', '/usr/bin/python3', '-c', '''
 import sys
