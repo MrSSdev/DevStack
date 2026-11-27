@@ -202,6 +202,54 @@ tree, production socket publication, account/ACL provisioning, selective
 networking, project authorization or Windows isolation. Those are gates
 before production integration, not features inferred from fixture tests.
 
+## Registered-project readiness and production gate (E1.3d)
+
+The installed administrator diagnostic is read-only:
+
+~~~bash
+sudo /usr/bin/python3 -I /opt/devstack/daemon/project_isolation_preflight.py --project <registered-slug>
+~~~
+
+It reads the fixed root-owned server configuration and project registry,
+validates the canonical registration, then runs a bounded metadata worker
+as the configured developer. It inspects only the expected mount-source
+directories and front controller with descriptor-relative, no-follow
+opens and mount identity checks. It reports unsafe/missing paths,
+registered MariaDB/mail and custom Nginx settings, and Bubblewrap package
+metadata. It does not read application content, .env, credentials or
+databases. No recursive permission changes, sandbox launch, project service
+startup, registry update or Windows action occurs. A successful diagnostic
+may report blocked; it is not permission to migrate. Unknown Redis or
+other dependencies are not inferred from application configuration.
+
+Production activation remains blocked pending a reviewed patched backend
+and the actual integration. As reviewed on 2026-11-27, Ubuntu's
+[CVE-2026-87766](https://ubuntu.com/security/CVE-2026-87766) record lists
+Ubuntu 26.04 LTS as vulnerable; [USN-8779-2](https://ubuntu.com/security/notices/USN-8779-2)
+describes the reversion of an earlier incomplete symlink fix. The issue
+concerns setup before sandbox execution; a positive functional fixture
+test does not establish that launching against attacker-controlled trees
+is safe. Check the exact distribution package, signed origin, vendor
+advisory and relevant patches rather than interpreting the upstream
+version alone. No setuid fallback, arbitrary PPA, downgrade or runtime
+override is offered. Reevaluate the approved backend (patched Bubblewrap
+or a tested equivalent) before enabling real agents.
+
+The installed diagnostic requires root-owned, non-group/world-writable
+ancestors of its control files and installed code. GitHub-hosted CI may
+provide a world-writable /opt; the disposable installation test prepares
+that ancestor explicitly. No installer or preflight changes permissions
+of a workstation's /opt automatically. An unsafe ancestor must be reviewed
+by the administrator before relying on the installed code.
+
+Metadata inspection is deliberately not mount authorization. A later
+launcher must retain verified source descriptors or use a protected
+mount lifecycle, enforce project identity at launch, handle directory
+replacement and hardlinks throughout the tree, and protect all endpoints
+and rollback. The diagnostic remains blocked for every project until
+those production gates are implemented and reviewed; a future version
+number alone cannot enable it.
+
 ## Configuration management and adapters
 
 DevStack is a management plane, not a mandatory AI chat client or runtime.
@@ -239,6 +287,179 @@ an HTTP failure with a stopped process. No passive detection may start WSL
 or the model, expose a server on the LAN, change GPU settings or weaken the
 firewall. Native adapters may use documented local status mechanisms.
 Any model connection available to an untrusted tool must be narrowly scoped.
+
+## Tool compatibility contract (required before production activation)
+
+Do not apply the PHP-FPM fixture policy unchanged to developer tools.
+Application execution, agent file/CLI operations, browser automation and
+model inference have different needs. Enforce independent, project-scoped
+capabilities for each, using a common project identity and revocable
+assignment. The backend must remain replaceable; security and compatibility
+tests, not the choice of Bubblewrap, define acceptance.
+
+| Profile | Required workflow | Boundary |
+| --- | --- | --- |
+| Application | PHP-FPM, Laravel/Livewire, database and storage | Read-only sources where compatible, explicitly writable runtime data; only authorized services |
+| Developer tools | Git, PHP CLI/Artisan, Composer, npm, Vite builds and tests | Assigned source read/write, per-project caches, temporary directories and approved package access; no root or unrestricted WSL interop |
+| Browser | Playwright Test and agent CLI, Chromium, screenshots, traces, downloads, Vite HMR | Isolated browser identity/session and allowed project origins; no personal profiles, sibling/admin endpoints or unrestricted debugging sockets |
+| Native agent | Official ChatGPT desktop / Codex or supported local agent | Native permissions and approvals, controlled project access and brokered Linux tools; verify Windows/UNC/WSL and child-process denials |
+| Model provider | Native Windows llama.cpp or another supported inference provider | Scoped inference connection, independent lifecycle, no project file access granted by model selection |
+
+### Reviewed backend selection
+
+The target LTS distribution's current package 0.11.1-1ubuntu0.3 is
+the USN-8779-2 regression-revert release, not a fix for CVE-2026-87766.
+Keep the distribution executable unchanged. Evaluate the official
+upstream signed release 0.13.1 (2026-10-14, above the 0.12.0 fix)
+as a separately managed, non-setuid, root-protected backend for DevStack.
+This is a candidate, not an installed or approved backend. Verify
+release provenance, archive integrity, reproducible build inputs,
+advisories and runtime behavior; never execute a download as root.
+Use a dedicated versioned path with explicit selection and rollback,
+not a system-wide PATH replacement, alternative, or change to /usr/bin.
+Run the existing namespace, real FPM/HTTPS and lifecycle tests on the
+selected build and the target WSL kernel; retain the production gate
+until safe mount lifecycle and tool acceptance are complete. Do not
+reuse a vulnerable backend as a silent fallback.
+
+References: [Ubuntu regression notice](https://ubuntu.com/security/notices/USN-8779-2),
+[upstream advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx),
+[upstream releases](https://github.com/containers/bubblewrap/releases).
+
+### Official ChatGPT and Codex
+
+Preserve the official applications and account sign-in. For projects in
+WSL2, the preferred official desktop Codex mode is the WSL agent
+environment (distinct from the integrated terminal setting). The GUI
+remains on Windows; the Codex agent and commands use Linux. A locally
+hosted model and its separate native Windows agent remain independent.
+Codex selects the first bwrap on its own PATH, according to its
+[Linux sandbox documentation](https://learn.chatgpt.com/docs/sandboxing).
+If a reviewed separate backend is used, verify that the supported
+app/CLI launch configuration selects it before sandbox startup, not
+just that an interactive terminal resolves it. Avoid nesting the
+DevStack PHP sandbox around Codex; test Codex's own permissions and
+seccomp and protect the application runtime separately. Do not rewrite
+the user's global PATH or assume the CLI and desktop app share the same
+config/auth directory. See [WSL](https://learn.chatgpt.com/docs/windows/wsl)
+and the [Windows app settings](https://learn.chatgpt.com/docs/windows/windows-app). Use documented
+native settings, CLI and supported tool interfaces rather than wrapping
+the whole app in a Linux sandbox or reverse-engineering credentials.
+The Windows Codex sandbox supports native execution, workspace permissions
+and approval policies. The config adapter must discover installed capabilities,
+respect configuration precedence and distinguish legacy sandbox_mode /
+sandbox_workspace_write from newer permission profiles; do not combine
+incompatible settings. Auto-approval applies only to allowed operations;
+out-of-scope actions remain denied or require explicit user approval.
+Do not interpret native workspace-write as a verified deny-read policy.
+
+A narrow project-bound tool broker can be exposed through supported MCP
+interfaces (e.g. local stdio or authenticated Streamable HTTP where supported).
+Authorize every operation independently at the broker; MCP tool labels,
+model instructions or configuration text cannot grant access. Do not expose
+the privileged daemon socket, arbitrary administrative operations or a general
+WSL shell. Protect credentials and configuration from agent writes, and
+test project switching, simultaneous sessions, revocation and native
+bypass routes including wsl.exe and WSL UNC paths. Never assume a native
+agent cannot bypass the broker simply because a Linux worker is isolated.
+
+ChatGPT Chat, local Work, desktop Codex, built-in browser and cloud
+execution are distinct surfaces with different capabilities. The desktop
+app's own browser and local-folder permission prompts remain independent
+of a Playwright integration. Verify each supported surface on the installed
+version; expose unsupported controls explicitly. Cloud sessions do not
+automatically have local filesystem or local .test connectivity, and
+local processing does not imply that context never leaves the device.
+No public exposure of local apps or inference endpoints, unofficial
+session-token extraction, or separate API subscription requirement is
+introduced by this architecture. Any cloud/API integration is separately
+opt-in, with its own supported authentication and cost/data policy.
+
+References: [Windows sandbox](https://learn.chatgpt.com/docs/windows/windows-sandbox),
+[configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference),
+[approvals and security](https://learn.chatgpt.com/docs/agent-approvals-security),
+[MCP](https://learn.chatgpt.com/docs/extend/mcp),
+[ChatGPT Work and Codex](https://help.openai.com/en/articles/20001275-chatgpt-work-and-codex),
+[built-in browser](https://help.openai.com/en/articles/20001277-using-the-built-in-browser-in-the-chatgpt-desktop-app).
+
+### Playwright and local development network
+
+Reuse the optional DevStack Tools installation when available; mount
+the validated active release and Chromium binaries read-only. Preserve
+the pinned runner/browser pair, central Test/CommonJS support and CLI.
+Allow a dedicated writable home, temporary files, runtime IPC and
+project-scoped reports/screenshots/traces, with per-project and per-session
+browser state and cleanup. No copy of the user's normal browser profile,
+unrestricted CDP endpoint or CA private key. Use the existing public CA
+in a dedicated browser trust store and retain HTTPS verification.
+See [DevStack Tools](../extensions/devstack-tools/README.md) and
+[Playwright BrowserType](https://playwright.dev/docs/api/class-browsertype).
+
+A browser's own sandbox can need user namespaces/process facilities that
+the existing PHP fixture deliberately blocks (including --disable-userns).
+Test an appropriate separate browser profile or independently isolated
+browser worker with a reviewed security boundary. Do not blindly add
+--no-sandbox, relax the host globally or inherit the PHP policy.
+Browser contexts and request interception are not sufficient network or OS
+isolation for untrusted scripts. Test actual Chromium launch, child process
+cleanup, filesystem and network denials.
+
+The current network-denied PHP fixture is not the final developer network.
+Provide narrowly scoped project HTTP(S) routing, WebSocket upgrade/HMR,
+localhost and DNS resolution for the assigned project without access to
+the admin panel, neighboring projects, host services, metadata endpoints
+or unintended external destinations. Enforce the destination boundary
+outside untrusted browser/test code, including redirects, alternate host
+names, raw connections and applicable WebSockets. Any browser server
+transport must be authenticated, local and tied to the grant/session.
+If using Playwright's browser-server protocol, test compatible client/server
+versions; do not substitute a user's existing browser debugging session.
+Provide project-specific MariaDB/Redis/mail resources only when enabled;
+do not start optional services merely to observe them. Dependency
+downloads, git remotes and wider internet access are separate explicit
+capabilities. Support actual development and E2E tests without disabling
+TLS validation, changing global hosts or granting blanket network access.
+
+### Native llama.cpp
+
+Keep model files, native server, accelerator configuration, launch method
+and resource availability in Windows; no required move to WSL, CPU/GPU
+quota or new VM. Discover the configured local endpoint/version and
+available model identifiers through documented APIs and distinguish
+unreachable, loading and ready using bounded health probes. Where supported,
+test streaming inference, cancellation and tool-call handling against the
+installed model; validate all tool arguments and enforce grants at the
+executor. A model's tool-call output does not authorize an action.
+Use the configured loopback endpoint or an authenticated narrowly scoped
+transport where cross-boundary access is necessary; never automatically
+listen on all interfaces or open the firewall. Keep the existing launcher
+and offline state independent of DevStack startup. Model/API credentials
+do not flow into project PHP, Playwright or tool subprocesses by default.
+See [llama.cpp server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+
+### Compatibility acceptance matrix
+
+These are required positive AND negative tests, not currently implemented
+features. Before migrating any real project, run a representative
+two-project workflow on the selected production backend: actual Laravel
+with Livewire/Flux and SQLite, PHP CLI/Artisan, Composer/npm, Vite build
+and live HMR, central Playwright Test and CLI against validated HTTPS,
+session isolation, screenshots/traces and revocation. Test allowed
+project-specific optional services and denial of the sibling project,
+admin endpoints, host credentials and uncontrolled egress. Reuse the
+existing D2/D2a application regression where possible, but run it within
+the new execution boundary; the old trusted-runtime PASS is not sufficient.
+
+Before enabling local AI, test actual native llama.cpp inference and
+one assigned agent doing a complete edit/build/test/browser cycle,
+including loading/unavailable state, model switch and cancellation.
+Before enabling an official app adapter, test that installed app's
+documented project configuration, permissions/approval behavior, tool
+connection and cross-project denial, including Windows-native paths
+and direct WSL access. Require negative results for unsupported/bypassing
+operations; do not grant full access to obtain a positive demo. Record
+versioned evidence from CI where possible and the actual Windows/WSL
+workstation where native features cannot be reproduced on CI.
 
 ## E1 acceptance before broader AI integration
 
