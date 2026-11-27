@@ -53,6 +53,42 @@ mechanism must not be bypassable by the native agent or its child processes.
   isolation based on concrete threat and test results. No sandbox
   implementation or runtime identity has been selected yet.
 
+## Runtime capability checks
+
+Do not infer namespace support from installed executables or assume that a
+Linux security module is enforcing policy. Before choosing Bubblewrap or
+systemd isolation, test the required namespace and mount operations on the
+target WSL kernel with an ordinary unprivileged user and disposable fixtures.
+A minimal Bubblewrap probe should expose only one writable fixture and the
+necessary read-only runtime, use separate user, PID and network namespaces,
+clear inherited environment variables, and verify that an unmounted sibling,
+an absolute symlink to it, host home, Windows mounts and control sockets
+cannot be reached. A failure to create a required namespace is a failed
+probe, not permission to retry without it or relax host-wide security.
+The probe does not establish a production sandbox: inherited descriptors,
+IPC, subprocess lifecycle, kernel attack surface, WSL interoperability
+and selectively brokered networking remain separate acceptance concerns.
+
+Do not reuse the interactive developer identity as the project PHP runtime
+or as an unrestricted tool executor. Evaluate distinct non-administrative
+project identities and compatible filesystem access for the trusted
+developer, Nginx, Laravel storage, caches, SQLite and build/test tools.
+Separate identities alone do not restrict local services, interop or
+untrusted application subprocesses. Plan migration and rollback before
+changing ownership, ACLs or pools; verify both HTTP and CLI execution paths.
+If only one managed project exists, use a second disposable fixture for
+cross-project negative tests rather than a real repository.
+
+Windows applications can reach the Linux filesystem via WSL UNC paths
+with the distribution's default-user permissions. See
+[Microsoft WSL file permissions](https://learn.microsoft.com/en-us/windows/wsl/file-permissions).
+A Linux execution sandbox does not restrict a native Windows agent's
+direct filesystem, process or network access. Evaluate and verify native
+tool-specific or Windows-enforced restrictions independently; if they
+cannot be enforced, do not claim that assigning a project is a complete
+sandbox. Preserve the existing Windows/WSL integration for the trusted
+developer.
+
 ## Configuration management and adapters
 
 DevStack is a management plane, not a mandatory AI chat client or runtime.
