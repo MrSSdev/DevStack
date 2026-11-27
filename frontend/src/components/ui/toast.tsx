@@ -57,7 +57,19 @@ function useToastHost() {
     const sync=()=>{
       const dialogs=document.querySelectorAll<HTMLDialogElement>('dialog:modal')
       const parent=dialogs.item(dialogs.length-1)??document.body
-      if(host.parentElement!==parent)parent.appendChild(host)
+      if(host.parentElement===parent)return
+      // appendChild disconnects and reconnects descendants, cancelling their
+      // CSS transitions. Base UI 1.6 waits on Animation.finished to remove
+      // ending toasts; a cancellation with no replacement animation can
+      // leave an invisible ending item that prevents the stack collapsing.
+      // Use the state-preserving DOM move for connected hosts in modern Edge
+      // and Chromium. Initial attachment (or legacy browsers) uses appendChild.
+      const destination=parent as HTMLElement & {moveBefore?:(node:Node,child:Node|null)=>void}
+      if(host.isConnected&&typeof destination.moveBefore==='function'){
+        destination.moveBefore(host,null)
+      }else{
+        parent.appendChild(host)
+      }
     }
     sync()
     const observer=new MutationObserver(sync)

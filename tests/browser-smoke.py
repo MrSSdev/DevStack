@@ -1304,6 +1304,65 @@ class BrowserAcceptance(unittest.TestCase):
             self.assertEqual(pid(),before)
 
 
+    def test_11c_native_dialog_move_during_toast_exit(self):
+        # Reproduce the real race: moving the live host while Base UI is
+        # waiting for a closing toast's CSS transitions to finish must not
+        # strand an invisible ending item in the store. Test BOTH directions.
+        self.goto('dashboard')
+        self.wait_notification_cycle()
+        self.assertEqual(self.post('/api/notifications/manage',{'action':'clear'}).status,200)
+        self.dismiss_visible_toasts()
+        all_toasts=self.page.locator('[data-slot="toast"]')
+        expect(all_toasts).to_have_count(0)
+        for opening, subject, count in (
+                (True,'Portal move while opening',1),
+                (False,'Portal move while closing',2)):
+            send(subject)
+            self.wait_total(count)
+            notice=all_toasts.filter(has_text=subject)
+            expect(notice).to_be_visible(timeout=20000)
+            notice.hover()
+            # The two actual UI button activations must happen within the
+            # same running exit animation, not after its normal completion.
+            # Use animation frames to synchronize the race deterministically;
+            # no CSS, toast state or application responses are overridden.
+            result=self.page.evaluate("""async ({opening,subject})=>{
+                const host=document.querySelector('[data-slot="toast-host"]');
+                const toast=[...host.querySelectorAll('[data-slot="toast"]')].find(e=>e.textContent.includes(subject));
+                const target=opening
+                    ? document.querySelector('main button[data-service-id="mariadb"]')
+                    : document.querySelector('dialog:modal button[aria-label="Zamknij"]');
+                const close=toast?.querySelector('[data-slot="toast-close"]');
+                if(!target||!close)throw new Error('Missing real toast or service control');
+                const frame=()=>new Promise(requestAnimationFrame);
+                close.click();
+                for(let i=0;i<60;i++){
+                    await frame();
+                    if(toast.hasAttribute('data-ending-style')&&toast.getAnimations().some(a=>a.playState==='running'))break;
+                }
+                // Allow Base UI's own animation-completion observer to attach.
+                await frame();
+                const animations=toast.getAnimations().filter(a=>a.playState==='running');
+                if(!toast.hasAttribute('data-ending-style')||!animations.length)throw new Error('No running exit animation to exercise');
+                const finished=Promise.allSettled(animations.map(a=>a.finished));
+                target.click();
+                await frame();
+                const parent=opening?document.querySelector('dialog:modal'):document.body;
+                const moved=!!parent&&host.parentElement===parent&&toast.isConnected&&host.contains(toast);
+                const outcomes=await finished;
+                return {moved,animations:animations.length,cancelled:outcomes.filter(a=>a.status==='rejected').length};
+            }""",{'opening':opening,'subject':subject})
+            self.assertGreater(result['animations'],0,result)
+            self.assertTrue(result['moved'],result)
+            # Count the actual DOM item, INCLUDING data-ending-style. Merely
+            # hiding or filtering out the stuck toast is not a successful exit.
+            expect(notice).to_have_count(0,timeout=5000)
+            self.assertEqual(result['cancelled'],0,result)
+            expect(self.page.locator('dialog:modal')).to_have_count(1 if opening else 0)
+        expect(self.page.locator('body > [data-slot="toast-host"]')).to_have_count(1)
+        expect(all_toasts).to_have_count(0)
+
+
     def test_12_native_toast_stack_and_no_animation_overflow(self):
         # Real mail notices, a native modal, and the real toast manager.
         self.goto('dashboard')
@@ -1383,6 +1442,7 @@ class BrowserAcceptance(unittest.TestCase):
         }""")
         second.get_by_role('button',name='Zamknij powiadomienie',exact=True).click()
         expect(second).to_have_count(0)
+        expect(host.locator('[data-slot="toast"]').filter(has_text='Stack fixture second')).to_have_count(0)
         self.assertEqual(self.page.evaluate('window.__toastOverflow'),0)
         expect(first).to_be_visible()
         # Closing the modal moves the same live portal back to the document.
