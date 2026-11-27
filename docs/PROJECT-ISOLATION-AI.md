@@ -666,3 +666,45 @@ creation modes or atomic replacement that can mask inherited ACLs).
 A metadata scan alone cannot prevent new hardlinks/renames/mounts by a
 concurrent trusted owner. Do not use this private-fixture preparation
 routine as a bulk repair or silently replace a user's existing ACLs.
+
+
+## ID-mapped writable data feasibility (E1.3i)
+
+The ACL creation-mode limitation is confirmed on both tested Bubblewrap
+builds. Prefer testing ID-mapped mounts before implementing permission
+repair. Map exactly the trusted developer's on-disk UID/GID to the
+project runtime's apparent UID/GID, only for explicitly shared project
+data. PHP then creates files that remain owned by the developer on disk,
+including an ordinary SQLite database, without adding runtime groups,
+loosening umasks or changing application code. The owner-only mode of a
+shared file (0600) is preserved: it belongs to the developer on disk and
+to the runtime in its mapped view. This is an intentional shared-owner
+policy for those directories, not a promise of privacy from the trusted
+developer. Runtime-private endpoints, secrets outside shared data and
+session state must remain outside mapped shared mounts. PHP source
+remains read-only; agent edit sessions and authorization stay separate.
+
+The new disposable test reuses the established project/runtime identities.
+It creates two new data trees, maps them through protected sibling
+mountpoints in a separate private mount namespace, verifies exact UID/GID,
+unchanged inode/host ownership and nosuid,nodev,noexec, and launches PHP
+CLI/PDO SQLite through the existing Bubblewrap descriptor-bind pattern.
+It checks both directions of real data writes, restrictive modes, read-only
+source and sibling denial, then unmounts and verifies persistent data.
+No fallback if the mapping is unsupported, no production mount helper or
+changes to the existing FPM/HTTP ACL test. The backport workflow repeats
+this experiment. References: [Linux kernel ID mapping documentation](https://docs.kernel.org/filesystems/idmappings.html),
+[mount_setattr(2)](https://man7.org/linux/man-pages/man2/mount_setattr.2.html),
+[util-linux mount manual](https://github.com/util-linux/util-linux/blob/master/sys-utils/mount.8.adoc).
+
+Success in hosted CI is not evidence that the actual WSL filesystem and
+kernel support the same operation. Next verify on a disposable directory
+on the target Linux filesystem; do not map Windows DrvFs or existing
+projects. If supported, integrate a narrowly scoped, root-controlled
+publication of mapped data with the real PHP/HTTP pair and Laravel
+installer/build workflow. The production design must prevent arbitrary
+source selection, unsafe nested mounts/hardlinks, replacement races and
+UID reuse, preserve existing data/ACLs and recover cleanly after stop,
+restart, failed activation and WSL restart. Never pass CAP_SYS_ADMIN to
+an application or agent. Keep activation blocked until the actual
+compatibility and security requirements are satisfied.

@@ -291,6 +291,14 @@ def main():
             assert identity.pw_uid != developer.pw_uid
             groups = os.getgrouplist(user, identity.pw_gid)
             assert groups == [identity.pw_gid], (user, groups)
+        # Separate, privileged feasibility test: mount only newly created
+        # disposable data, in a private child mount namespace. No changes to
+        # the established ACL/FPM prototype or its expected limitation.
+        subprocess.run(['/usr/bin/unshare', '--mount', '--propagation', 'private',
+            '/usr/bin/python3', '-I',
+            str(Path(__file__).with_name('project-idmap-smoke.py').absolute()),
+            str(base), developer_name, str(os.stat('/proc/self/ns/mnt').st_ino)],
+            check=True, text=True, timeout=120)
         plans = [
             fixture(base, 'a', users[0], developer, base / 'project-b', port),
             fixture(base, 'b', users[1], developer, base / 'project-a', port),
