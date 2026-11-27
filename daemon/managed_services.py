@@ -52,8 +52,10 @@ def catalog():
     return rows
 
 
-def units_snapshot(rows, metrics=False):
+def units_snapshot(rows, metrics=False, *, autostart=False):
     props = 'Id,LoadState,ActiveState'
+    if autostart:
+        props += ',UnitFileState'
     if metrics:
         props += ',MemoryCurrent,CPUUsageNSec'
     result = subprocess.run([SYSTEMCTL, 'show', '--no-pager', '--property='+props, *[r['unit'] for r in rows]],
@@ -116,14 +118,60 @@ def save_selection(value, rows):
     return ordered
 
 
+def autostart_status(row, unit):
+    """Panel dependencies start with DevStack; optional units use persistent enablement."""
+    if unit.get('LoadState') != 'loaded':
+        return None, False
+    if row['panel_dependency']:
+        return True, False
+    state = unit.get('UnitFileState')
+    if state in ('enabled', 'disabled'):
+        return state == 'enabled', True
+    # Do not equate masked, static, runtime-only, or unknown units with disabled.
+    return None, False
+
+
 def public_rows():
     rows = catalog()
-    values = units_snapshot(rows)
+    values = units_snapshot(rows, autostart=True)
     installed = installed_rows(rows, values)
     selected = selection(rows)
-    return [{**r, 'state': values[r['unit']].get('ActiveState', 'unknown')[:30],
-             'load_state': values[r['unit']].get('LoadState', 'unknown')[:30],
-             'widget_selected': r['id'] in selected} for r in installed]
+    result = []
+    for row in installed:
+        unit = values[row['unit']]
+        enabled, editable = autostart_status(row, unit)
+        result.append({**row, 'state': unit.get('ActiveState', 'unknown')[:30],
+                       'load_state': unit.get('LoadState', 'unknown')[:30],
+                       'widget_selected': row['id'] in selected,
+                       'autostart': enabled, 'autostart_editable': editable})
+    return result
+
+
+def set_autostart(service, enabled):
+    """Change persistent systemd enablement, never current process state."""
+    if not isinstance(service, str) or type(enabled) is not bool:
+        raise ValueError('Nieprawidlowe ustawienie autostartu.')
+    target = next((r for r in catalog() if r['id'] == service), None)
+    if target is None or target['panel_dependency']:
+        raise ValueError('Autostart tej uslugi nie moze byc zmieniany.')
+    if action_pending():
+        raise RuntimeError('Trwa juz operacja uslugi. Odswiez stan.')
+    current, editable = autostart_status(target, units_snapshot([target], autostart=True)[target['unit']])
+    if not editable:
+        raise ValueError('Autostart tej uslugi jest niedostepny.')
+    if current != enabled:
+        action = 'enable' if enabled else 'disable'
+        try:
+            result = subprocess.run([SYSTEMCTL, '--no-ask-password', action, '--', target['unit']],
+                                    capture_output=True, timeout=12, env=ENV, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            raise RuntimeError('Nie udalo sie potwierdzic ustawienia autostartu. Odswiez stan.') from None
+        if result.returncode:
+            raise RuntimeError('Nie udalo sie zapisac autostartu. Odswiez stan.')
+        actual, _ = autostart_status(target, units_snapshot([target], autostart=True)[target['unit']])
+        if actual is not enabled:
+            raise RuntimeError('Nie udalo sie potwierdzic ustawienia autostartu. Odswiez stan.')
+    return {'service': service, 'autostart': enabled}
 
 
 def action_pending():

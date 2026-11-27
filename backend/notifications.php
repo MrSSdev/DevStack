@@ -217,6 +217,13 @@ final class DevStackNotices
             $description = $service . ' — ' . ['start'=>'uruchomienie','stop'=>'zatrzymanie','restart'=>'restart'][$action];
             $title = $ok ? 'Polecenie usługi przyjęte' : 'Sterowanie usługą';
             if ($ok) $kind='info'; // Queue acknowledgement, not a verified systemd result.
+        } elseif ($path === '/api/services/autostart') {
+            $service = $body['service'] ?? null;
+            $enabled = $body['enabled'] ?? null;
+            if (!is_string($service) || !preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$service) || !is_bool($enabled)) return null;
+            $category='settings'; $route='/#/dashboard'; $push=false;
+            $description=$service . ' — ' . ($enabled?'włączenie':'wyłączenie');
+            $title=$ok?'Zapisano autostart usługi':'Zapis autostartu usługi';
         } elseif (in_array($path, ['/api/preferences','/api/widget/services'], true)) {
             $category='settings'; $route='/#/settings'; $description='';
             $title=$ok?'Zapisano ustawienia':'Zapis ustawień'; $push=false;

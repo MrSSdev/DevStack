@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, ChevronRight, Code2, Database, Globe2, HardDrive, Mail, Play, RefreshCw, Square, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { beginNotice, notify, fail, inform } from '@/components/ui/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
-export type ManagedService={id:string;unit:string;name:string;description:string;state:string;load_state:string;widget_selected:boolean;panel_dependency:boolean}
+export type ManagedService={id:string;unit:string;name:string;description:string;state:string;load_state:string;widget_selected:boolean;panel_dependency:boolean;autostart:boolean|null;autostart_editable:boolean}
 type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown,operationToastId?:string)=>Promise<T>
 type Props={services:ManagedService[];csrf:string;request:Request;refresh:()=>Promise<void>}
 type Action='start'|'stop'|'restart'
@@ -14,7 +15,7 @@ const labels:Record<string,string>={active:'Działa',inactive:'Zatrzymana',faile
 const actionLabels:Record<Action,string>={start:'Uruchom',stop:'Zatrzymaj',restart:'Uruchom ponownie'}
 function Status({state}:{state:string}){return <Badge className={state==='active'?'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300':undefined}>{labels[state]??state}</Badge>}
 
-export function ManagedServices({services,csrf,request,refresh,blocked}:Props&{blocked:boolean}){
+export function ManagedServices({services,csrf,request,refresh,blocked,onAutostartSaved}:Props&{blocked:boolean;onAutostartSaved:(id:string,enabled:boolean)=>void}){
   const [selected,setSelected]=useState('')
   const [confirm,setConfirm]=useState<Action|null>(null)
   const [busy,setBusy]=useState(false)
@@ -36,14 +37,28 @@ export function ManagedServices({services,csrf,request,refresh,blocked}:Props&{b
     }catch(e){fail((e instanceof Error?e.message:'Brak potwierdzenia.')+' Sprawdź stan przed ponowieniem.',pending)}
     finally{setBusy(false)}
   }
+  async function saveAutostart(enabled:boolean){
+    if(!current||busy||blocked||confirm||!current.autostart_editable||current.load_state!=='loaded')return
+    const id=current.id
+    setBusy(true)
+    const pending=beginNotice('Zapisywanie autostartu…',current.name)
+    try{
+      const result=await request<{service:string;autostart:boolean}>('POST','/api/services/autostart',csrf,{service:id,enabled},pending)
+      if(result.service!==id||result.autostart!==enabled)throw new Error('Nie udało się potwierdzić ustawienia autostartu.')
+      onAutostartSaved(id,result.autostart)
+      notify(enabled?'Włączono autostart usługi.':'Wyłączono autostart usługi.',pending)
+    }catch(e){fail(e,pending,'Nie udało się zapisać autostartu.')}
+    finally{await refresh();setBusy(false)}
+  }
   const unavailable=blocked||busy||current?.load_state!=='loaded'||['activating','deactivating','reloading'].includes(current?.state??'')
   return <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>Stan usług</CardTitle></div><Badge>systemd</Badge></div></CardHeader><CardContent className="space-y-3">
     {blocked&&<p className="text-xs text-muted-foreground">Trwa operacja instalatora lub usługi. Sterowanie chwilowo niedostępne.</p>}
     {!services.length&&<p className="text-sm text-muted-foreground">Brak odczytu usług. Odśwież dane.</p>}
-    <div className="divide-y">{services.map(s=>{const Icon=icons[s.id as keyof typeof icons]??Activity;return <button type="button" key={s.id} onClick={()=>{setSelected(s.id);setConfirm(null)}} className="flex w-full items-center gap-2 rounded-md py-2 text-left hover:bg-secondary/50"><span className="flex size-8 shrink-0 items-center justify-center rounded-xl border bg-secondary"><Icon className="size-4"/></span><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{s.name}</span><span className="block text-xs text-muted-foreground">{s.description}</span></span><Status state={s.state}/><ChevronRight className="size-4 shrink-0 text-muted-foreground"/></button>})}</div>
+    <div className="divide-y">{services.map(s=>{const Icon=icons[s.id as keyof typeof icons]??Activity;return <button type="button" key={s.id} data-service-id={s.id} onClick={()=>{setSelected(s.id);setConfirm(null)}} className="flex w-full items-center gap-2 rounded-md py-2 text-left hover:bg-secondary/50"><span className="flex size-8 shrink-0 items-center justify-center rounded-xl border bg-secondary"><Icon className="size-4"/></span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-1.5 text-sm font-medium"><span>{s.name}</span>{s.autostart===true&&<Badge title={s.panel_dependency?'Uruchamiana z DevStack':'Uruchamiana przy starcie Ubuntu'}>Autostart</Badge>}</span><span className="block text-xs text-muted-foreground">{s.description}</span></span><Status state={s.state}/><ChevronRight className="size-4 shrink-0 text-muted-foreground"/></button>})}</div>
     <dialog ref={dialog} onCancel={e=>{e.preventDefault();close()}} onClose={()=>{setSelected('');setConfirm(null)}} className="fixed inset-0 m-auto w-[min(94vw,28rem)] rounded-xl border bg-background p-4 text-foreground shadow-xl backdrop:bg-black/50">
       {current&&<div className="space-y-4"><div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">{current.name}</h2><p className="text-sm text-muted-foreground">{current.description}</p></div><Button variant="ghost" size="icon" aria-label="Zamknij" disabled={busy} onClick={close}><X/></Button></div><div className="flex items-center justify-between gap-2"><code className="break-all text-xs">{current.unit}</code><Status state={current.state}/></div>
         {current.panel_dependency&&<p className="rounded-md border p-3 text-xs leading-relaxed text-muted-foreground">Zatrzymanie tej usługi wyłączy również panel DevStack. Przywróć ją w widżecie Windows przez restart (jeśli jest tam widoczna) albo w Ubuntu: <code>sudo systemctl start {current.unit}</code>. Restart może chwilowo przerwać dostęp.</p>}
+        <div className="flex items-center justify-between gap-3 rounded-md border p-3"><div className="min-w-0"><p className="text-sm font-medium">Autostart</p><p className="text-xs text-muted-foreground">{current.panel_dependency?'Wymagana przez DevStack — uruchamiana z panelem.':current.autostart_editable?'Uruchamiaj przy starcie Ubuntu (WSL). Nie zmienia bieżącego stanu.':'Ustawienie niedostępne dla tej usługi.'}</p></div>{current.autostart===null?<Badge>Niedostępny</Badge>:<Switch aria-label="Autostart" checked={current.autostart===true} disabled={unavailable||!current.autostart_editable||!!confirm} onCheckedChange={enabled=>{void saveAutostart(enabled)}}/>}</div>
         {confirm?<div className="space-y-3 border-t pt-3"><p className="text-sm">{actionLabels[confirm]}: {current.name}? {confirm!=='start'?'Bieżące połączenia mogą zostać przerwane.':''}</p><div className="flex gap-2"><Button variant={confirm==='stop'?'destructive':'default'} disabled={unavailable} onClick={()=>{void execute()}}>{busy?'Zlecanie…':'Potwierdź'}</Button><Button variant="outline" disabled={busy} onClick={()=>setConfirm(null)}>Anuluj</Button></div></div>:<div className="grid gap-2"><Button variant="outline" disabled={unavailable||current.state==='active'} onClick={()=>setConfirm('start')}><Play/>Uruchom</Button><Button variant="outline" disabled={unavailable} onClick={()=>setConfirm('restart')}><RefreshCw/>Uruchom ponownie</Button><Button variant="outline" disabled={unavailable||current.state==='inactive'} onClick={()=>setConfirm('stop')}><Square/>Zatrzymaj</Button></div>}
       </div>}
     </dialog>

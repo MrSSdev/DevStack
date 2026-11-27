@@ -210,6 +210,9 @@ try {
     if ($method === 'POST' && $path === '/api/services/control') {
         devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('service_control', $body))]);
     }
+    if ($method === 'POST' && $path === '/api/services/autostart') {
+        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('set_service_autostart', $body))]);
+    }
     if ($method === 'POST' && $path === '/api/widget/services') {
         devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('set_widget_services', $body))]);
     }

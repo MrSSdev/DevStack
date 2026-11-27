@@ -457,6 +457,14 @@ def service_control(data: dict[str, Any]) -> dict[str, Any]:
     return managed_services.schedule(data['service'], data['action'])
 
 
+def set_service_autostart(data: dict[str, Any]) -> dict[str, Any]:
+    if set(data) != {'service', 'enabled'} or type(data['enabled']) is not bool:
+        raise InputError('Nieprawidlowe ustawienie autostartu.')
+    if engine_busy():
+        raise InputError('Najpierw poczekaj na zakonczenie instalacji frameworka.')
+    return managed_services.set_autostart(data['service'], data['enabled'])
+
+
 def set_widget_services(data: dict[str, Any]) -> dict[str, Any]:
     if set(data) != {'services'}:
         raise InputError('Nieprawidlowe ustawienia widzetu.')
@@ -1673,7 +1681,8 @@ OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notificatio
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,
        'set_preferences': set_ui_preferences, 'get_preferences': preferences,
-       'service_control': service_control, 'set_widget_services': set_widget_services,
+       'service_control': service_control, 'set_service_autostart': set_service_autostart,
+       'set_widget_services': set_widget_services,
        'public_ca_certificate': public_ca_certificate}
 
 

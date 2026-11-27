@@ -1267,6 +1267,42 @@ class BrowserAcceptance(unittest.TestCase):
         expect(ack).to_have_count(1)
 
 
+    def test_11b_service_autostart_in_panel_only(self):
+        self.goto('dashboard')
+        def read_service():
+            rows=self.context.request.get(BASE+'/api/state').json()['result']['managed_services']
+            return next(row for row in rows if row['id']=='mailpit')
+        original=read_service()['autostart']
+        self.assertIsInstance(original,bool)
+        def pid():
+            return subprocess.check_output(['systemctl','show','--property=MainPID','--value','devstack-mailpit.service'],text=True).strip()
+        before=pid()
+        self.assertNotEqual(before,'0')
+        row=self.page.locator('main button[data-service-id="mailpit"]')
+        dialog=self.page.locator('dialog:modal')
+        try:
+            row.click()
+            switch=dialog.get_by_role('switch',name='Autostart')
+            expect(switch).to_have_attribute('aria-checked',str(original).lower())
+            switch.click()
+            expect(switch).to_have_attribute('aria-checked',str(not original).lower(),timeout=15000)
+            self.assertIs(read_service()['autostart'],not original)
+            self.assertEqual(pid(),before)
+            expect(dialog.get_by_role('button',name='Zamknij')).to_be_enabled(timeout=15000)
+            dialog.get_by_role('button',name='Zamknij').click()
+            expect(row.get_by_text('Autostart',exact=True)).to_have_count(0 if original else 1)
+            self.page.reload()
+            expect(row).to_be_visible()
+            expect(row.get_by_text('Autostart',exact=True)).to_have_count(0 if original else 1)
+            self.page.locator('main button[data-service-id="nginx"]').click()
+            expect(dialog.get_by_role('switch',name='Autostart')).to_be_disabled()
+            self.assertEqual(self.post('/api/services/autostart',{'service':'nginx','enabled':False}).status,422)
+        finally:
+            restored=self.post('/api/services/autostart',{'service':'mailpit','enabled':original})
+            self.assertEqual(restored.status,200,restored.text())
+            self.assertEqual(pid(),before)
+
+
     def test_12_native_toast_stack_and_no_animation_overflow(self):
         # Real mail notices, a native modal, and the real toast manager.
         self.goto('dashboard')

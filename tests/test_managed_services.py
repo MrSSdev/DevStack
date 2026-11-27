@@ -27,6 +27,50 @@ class ManagedServiceTests(unittest.TestCase):
             self.assertEqual(next(r['state'] for r in rows if r['id']=='redis'),'inactive')
             self.assertEqual([r['id'] for r in rows if r['widget_selected']],['php'])
 
+    def test_autostart_status_is_independent_of_activity(self):
+        self.values['redis-server.service']['UnitFileState'] = 'enabled'
+        self.values['mariadb.service']['UnitFileState'] = 'disabled'
+        self.values['devstack-mailpit.service']['UnitFileState'] = 'static'
+        with patch.object(m, 'units_snapshot', return_value=self.values):
+            rows = {r['id']: r for r in m.public_rows()}
+        self.assertEqual((rows['redis']['state'], rows['redis']['autostart'], rows['redis']['autostart_editable']),
+                         ('inactive', True, True))
+        self.assertEqual((rows['mariadb']['state'], rows['mariadb']['autostart']), ('active', False))
+        self.assertEqual((rows['nginx']['autostart'], rows['nginx']['autostart_editable']), (True, False))
+        self.assertEqual((rows['mailpit']['autostart'], rows['mailpit']['autostart_editable']), (None, False))
+
+    def test_autostart_only_persistent_enable_disable_of_optional_units(self):
+        target = 'redis-server.service'
+        disabled = {target: {**self.values[target], 'UnitFileState': 'disabled'}}
+        enabled = {target: {**self.values[target], 'UnitFileState': 'enabled'}}
+        with patch.object(m, 'action_pending', return_value=False), \
+             patch.object(m, 'units_snapshot', side_effect=[disabled, enabled, enabled, disabled, disabled]), \
+             patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run:
+            self.assertEqual(m.set_autostart('redis', True), {'service':'redis','autostart':True})
+            self.assertEqual(run.call_args.args[0], [m.SYSTEMCTL,'--no-ask-password','enable','--',target])
+            self.assertEqual(m.set_autostart('redis', False)['autostart'], False)
+            self.assertEqual(run.call_args.args[0], [m.SYSTEMCTL,'--no-ask-password','disable','--',target])
+            self.assertFalse(m.set_autostart('redis', False)['autostart'])
+            for service, value in [('nginx',False),('php',False),('sshd',True),('redis','true'),([],True)]:
+                with self.assertRaises(ValueError): m.set_autostart(service,value)
+            self.assertEqual(run.call_count, 2)
+
+    def test_autostart_rejects_unavailable_and_unconfirmed_units(self):
+        target = 'redis-server.service'
+        for load, file_state in [('not-found',''),('masked','masked'),('loaded','static'),('loaded','enabled-runtime')]:
+            with patch.object(m, 'action_pending', return_value=False), \
+                 patch.object(m, 'units_snapshot', return_value={target:{'LoadState':load,'UnitFileState':file_state}}), \
+                 patch.object(m.subprocess, 'run') as run:
+                with self.assertRaises(ValueError): m.set_autostart('redis',True)
+                run.assert_not_called()
+        with patch.object(m,'action_pending',return_value=True), patch.object(m.subprocess,'run') as run:
+            with self.assertRaises(RuntimeError): m.set_autostart('redis',True)
+            run.assert_not_called()
+        with patch.object(m,'action_pending',return_value=False), \
+             patch.object(m,'units_snapshot',return_value={target:{'LoadState':'loaded','UnitFileState':'disabled'}}), \
+             patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=0)):
+            with self.assertRaises(RuntimeError): m.set_autostart('redis',True)
+
     def test_selection_atomic_independent_and_empty_allowed(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(m,'SELECTION',pathlib.Path(tmp)/'selection.json'):
             self.assertEqual(m.selection(self.rows),['nginx','php','mariadb','redis'])
