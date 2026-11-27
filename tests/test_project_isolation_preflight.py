@@ -79,6 +79,24 @@ class PreflightTests(unittest.TestCase):
             with patch.object(p, 'mount_id', side_effect=[100, 101]):
                 self.assertEqual(p.inspect_layout(base, self.slug, 'public', os.getuid())['project'], 'unsafe')
 
+    def test_registration_identity_is_metadata_only(self):
+        self.assertEqual(p.project_spec(self.config, self.registry, self.slug)['identity'], 'legacy')
+        value = 'a' * 32
+        self.project['project_id'] = value
+        spec = p.project_spec(self.config, self.registry, self.slug)
+        self.assertEqual(spec['identity'], 'registered')
+        self.assertNotIn('project_id', spec)
+        result = p.build_report(spec, dict.fromkeys(p.LAYOUT_KEYS, 'present'), {})
+        self.assertEqual(result['registration_identity'], 'registered')
+        self.assertEqual(result['status'], 'blocked')
+        self.assertNotIn('project_identity_enrollment_required', result['blockers'])
+        self.registry['other'] = {'project_id': value}
+        self.assertEqual(p.project_spec(self.config, self.registry, self.slug)['identity'], 'invalid')
+        self.registry.pop('other')
+        for bad in (None, '', 'A'*32, [], 'x/../../etc'):
+            self.project['project_id'] = bad
+            self.assertEqual(p.project_spec(self.config, self.registry, self.slug)['identity'], 'invalid')
+
     def test_report_never_grants_access(self):
         spec = p.project_spec(self.config, self.registry, self.slug)
         layout = dict.fromkeys(p.LAYOUT_KEYS, 'present')
@@ -88,6 +106,8 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(result['sandbox']['approved'])
         self.assertIn('sandbox_backend_security_review', result['blockers'])
         self.assertIn('production_runtime_not_connected', result['blockers'])
+        self.assertIn('project_identity_enrollment_required', result['blockers'])
+        self.assertEqual(result['registration_identity'], 'legacy')
         self.assertNotIn('project_layout_review', result['blockers'])
         spec['settings']['database'] = True
         spec['settings']['extra_locations'] = True

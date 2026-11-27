@@ -336,7 +336,7 @@ class ValidationTests(unittest.TestCase):
             backup.write_text('previous nginx config')
             meta = {'name':'Demo','domain':'demo.test','path':str(root),
                     'webroot':'public','https':False,'database':False,
-                    'db_name':'','db_user':'','overrides':''}
+                    'db_name':'','db_user':'','overrides':'', 'project_id':'c'*32}
             statefile.write_text(json.dumps({'demo':meta}))
             secretfile.write_text('{}')
             cmds=[]
@@ -572,6 +572,55 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Sprawdz log') as cm:
                 d.mariadb_execute("SELECT 'secret-should-not-leak'")
             self.assertNotIn('secret-should-not-leak', str(cm.exception))
+
+    def test_new_registration_identity_is_unique_and_not_a_slug(self):
+        existing = 'a' * 32
+        new = 'b' * 32
+        state = {'legacy': {'name': 'Legacy'},
+                 'active': {'project_id': existing},
+                 'bad': {'project_id': []}}
+        snapshot = json.dumps(state)
+        with patch.object(d.secrets, 'token_hex', side_effect=[existing, new]) as token:
+            self.assertEqual(d.new_project_id(state), new)
+            self.assertEqual(token.call_count, 2)
+            token.assert_called_with(16)
+        self.assertEqual(json.dumps(state), snapshot)
+        with patch.object(d.secrets, 'token_hex', return_value=existing):
+            with self.assertRaises(RuntimeError):
+                d.new_project_id(state)
+
+    def test_create_commit_assigns_internal_identity_without_rewriting_legacy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            state = folder / 'projects.json'
+            secret = folder / 'credentials.json'
+            legacy = {'old': {'domain': 'old.test', 'name': 'Legacy'}}
+            d.write_json_atomic(state, legacy)
+            root = folder / 'demo'
+            public = root / 'public'
+            site, link, pool = [folder / x for x in ('site.conf', 'enabled.conf', 'pool.conf')]
+            payload = {'slug':'demo', 'name':'Demo', 'domain':'demo.test',
+                       'webroot':'public', 'database':False, 'https':False,
+                       'project_id':'f'*32}
+            with patch.object(d, 'config', return_value={'projects_dir': str(folder), 'dev_user': 'ubuntu'}), \
+                 patch.object(d, 'STATE_FILE', state), patch.object(d, 'SECRET_FILE', secret), \
+                 patch.object(d, 'site_path', return_value=site), \
+                 patch.object(d, 'site_link_path', return_value=link), \
+                 patch.object(d, 'pool_path', return_value=pool), \
+                 patch.object(d, 'ensure_project_paths', return_value=public), \
+                 patch.object(d, 'grant_public_access'), patch.object(d, 'run', return_value=''), \
+                 patch.object(d, 'defer_php_fpm_reload'), \
+                 patch.object(d, 'request_windows_hosts_sync', return_value=''), \
+                 patch.object(d.secrets, 'token_hex', return_value='1'*32):
+                d.create_environment(payload)
+                current = d.read_json(state)
+                self.assertEqual(current['old'], legacy['old'])
+                self.assertEqual(current['demo']['project_id'], '1'*32)
+                self.assertNotEqual(current['demo']['project_id'], payload['project_id'])
+                self.assertEqual(current['demo']['path'], str(root))
+                with patch.object(d, 'project_frameworks', return_value={}):
+                    self.assertTrue(all('project_id' not in p for p in d.public_projects()))
+                self.assertEqual(d.read_json(state), current)
 
     def test_atomic_json(self):
         with tempfile.TemporaryDirectory() as tmp:
