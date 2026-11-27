@@ -18,6 +18,7 @@ on:
       - 'tests/test_project_lifecycle.py'
       - 'tests/project_http_smoke.py'
       - 'tests/project-runtime-systemd-smoke.py'
+      - 'tests/project-idmap-smoke.py'
       - '.github/workflows/project-runtime.yml'
   push:
     branches: [main]
@@ -35,6 +36,7 @@ on:
       - 'daemon/project_lifecycle.py'
       - 'tests/test_project_lifecycle.py'
       - 'tests/project-runtime-systemd-smoke.py'
+      - 'tests/project-idmap-smoke.py'
       - 'tests/project_http_smoke.py'
       - '.github/workflows/project-runtime.yml'
   workflow_dispatch:
@@ -54,13 +56,13 @@ jobs:
       - name: Install runtime dependencies on disposable runner
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap acl libfcgi-bin php8.5-fpm php8.5-sqlite3 nginx openssl
+          sudo apt-get install -y --no-install-recommends bubblewrap acl libfcgi-bin php8.5-fpm php8.5-cli php8.5-sqlite3 nginx openssl
       - name: Check and exercise prototype
         run: |
           python3 -m py_compile daemon/project_runtime.py daemon/project_http.py daemon/project_lifecycle.py tests/project-runtime-systemd-smoke.py tests/project_http_smoke.py
           python3 -m py_compile daemon/project_mounts.py daemon/project_runtime_launch.py tests/project-mount-fd-smoke.py tests/test_project_mounts.py
           python3 -m py_compile daemon/project_runtime_identity.py tests/test_project_runtime_identity.py
-          python3 -m py_compile daemon/project_access.py tests/test_project_access.py
+          python3 -m py_compile daemon/project_access.py tests/test_project_access.py tests/project-idmap-smoke.py
           python3 -m unittest discover -s tests -p test_project_access.py -v
           python3 -m unittest discover -s tests -p test_project_runtime_identity.py -v
           python3 -m unittest discover -s tests -p test_project_lifecycle.py -v

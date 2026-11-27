@@ -30,7 +30,7 @@ sudo apt-get install -y --no-install-recommends \
     build-essential debhelper devscripts fakeroot \
     bash-completion docbook-xml docbook-xsl iproute2 libcap-dev libcap2-bin \
     libipc-run-perl libselinux-dev meson perl pkgconf python3 xsltproc \
-    bubblewrap php8.5-fpm php8.5-sqlite3 nginx libfcgi-bin acl curl
+    bubblewrap php8.5-fpm php8.5-cli php8.5-sqlite3 nginx libfcgi-bin acl curl
 old_version="$(dpkg-query -W -f='${Version}' bubblewrap)"
 old_arch="$(dpkg-query -W -f='${Architecture}' bubblewrap)"
 dpkg --compare-versions "$version" gt "$old_version"
