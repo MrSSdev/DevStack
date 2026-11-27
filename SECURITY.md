@@ -4,7 +4,9 @@ DevStack is intended for trusted local development. Keep the dashboard on loopba
 
 ## Dashboard and services
 
-The dashboard uses authenticated sessions, CSRF/origin checks and a restricted local privileged helper. Per-project PHP-FPM pools run as the developer account. Use trusted project code and keep database credentials and environment files private.
+The dashboard uses authenticated sessions, CSRF/origin checks and a restricted local privileged helper. Per-project PHP-FPM pools currently run as the same configured developer account. Separate pools do **not** isolate projects from each other. Use trusted project code and keep database credentials and environment files private.
+
+[Project isolation and AI integration](docs/PROJECT-ISOLATION-AI.md) defines the planned boundary; it is not an implemented security feature. Do not grant untrusted agents project access on the assumption that DevStack currently sandboxes them.
 
 Choose password authentication during installation. Passwordless mode grants administration access to local clients that can reach the dashboard. To configure it in Ubuntu:
 
