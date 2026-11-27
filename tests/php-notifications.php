@@ -4,8 +4,6 @@ require_once __DIR__.'/../backend/notifications.php';
 function check_notice(bool $ok,string $message):void {if(!$ok){fwrite(STDERR,"FAIL: $message\n");exit(1);}}
 $store=new DevStackNotices(':memory:');
 $a=str_repeat('a',32);$b=str_repeat('b',32);$m=str_repeat('M',22);$n=str_repeat('N',22);
-$stamp=gmdate('c');
-
 // Every POST handler is either registered as a journal operation or listed
 // as an explicit exception. Runtime classification also rejects an unknown
 // route before executing it; this guard catches the omission in CI.
@@ -44,9 +42,14 @@ foreach (DevStackNotices::POST_LOCAL as $route=>$reason) {
     check_notice($reason!==''&&DevStackNotices::postPolicy($route)==='local','Explicit exception '.$route);
     check_notice($store->operation($route,[],[],$a)===null,'Local exception does not create history: '.$route);
 }
-$store->observeMail([['ID'=>$m,'Created'=>$stamp,'Subject'=>'Old mail']]);
+// The first observation initializes the cursor to its own current time.
+// Generate the new receipt timestamp after that baseline, not before the
+// unrelated POST-policy checks (which may cross a wall-clock second).
+$oldStamp=gmdate('c',time()-1);
+$store->observeMail([['ID'=>$m,'Created'=>$oldStamp,'Subject'=>'Old mail']]);
 check_notice($store->poll($a)['items']===[],'Initial mail baseline does not replay');
-$store->observeMail([['ID'=>$n,'Created'=>$stamp,'Subject'=>'New mail'],['ID'=>$m,'Created'=>$stamp]]);
+$stamp=gmdate('c');
+$store->observeMail([['ID'=>$n,'Created'=>$stamp,'Subject'=>'New mail'],['ID'=>$m,'Created'=>$oldStamp]]);
 $first=$store->poll($a);
 check_notice(count($first['toast'])===1&&$first['toast'][0]['id']==='mail-'.$n,'One foreground claim');
 check_notice($store->poll($b)['toast']===[],'No duplicate toast in another tab');
@@ -103,7 +106,7 @@ $caStore->leave($a);$caStore->leave($b);
 check_notice($caStore->claimPush(time()-60)===null,'WSL CA settings results do not send Windows notifications');
 $since=time()-60;
 $store->setCategories(['mail']);
-$store->observeMail([['ID'=>str_repeat('Z',22),'Created'=>$stamp,'Subject'=>'Never include in push']]);
+$store->observeMail([['ID'=>str_repeat('Z',22),'Created'=>gmdate('c'),'Subject'=>'Never include in push']]);
 check_notice($store->claimPush($since)===null,'Any live client suppresses system push');
 $store->leave($a);$store->leave($b);
 // No sleep: fresh automatic mail must be eligible in this same cycle.
