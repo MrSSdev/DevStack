@@ -96,6 +96,14 @@ def fixture(base, name, account, developer, other, port):
     sockets.mkdir(mode=0o700)
     run('setfacl', '-m', 'u:' + account + ':rwx,u:www-data:--x', str(sockets))
     run('setfacl', '-m', 'd:u:www-data:rwX,d:g::---,d:o::---,d:m::rwx', str(sockets))
+    # Reopening systemd's journal stream via /dev/stderr is not supported
+    # inside this namespace. A private, pre-created fixture log is sufficient
+    # for diagnostics; it is not an authoritative audit log.
+    log = sockets / 'fpm-error.log'
+    log.touch(mode=0o600)
+    identity = pwd.getpwnam(account)
+    os.chown(log, identity.pw_uid, identity.pw_gid)
+    log.chmod(0o600)
     return RuntimePlan(root, config, sockets)
 
 
@@ -114,6 +122,32 @@ def start(unit, user, plan):
             return
         time.sleep(0.1)
     raise RuntimeError('FPM socket did not become ready: ' + unit)
+
+    
+def stop(unit):
+    result = subprocess.run(['systemctl', 'stop', unit], check=False,
+                            capture_output=True, text=True, timeout=30)
+    state = subprocess.run(['systemctl', 'show', '-p', 'LoadState',
+                            '-p', 'ActiveState', unit], check=False,
+                           capture_output=True, text=True, timeout=10)
+    values = dict(line.split('=', 1) for line in state.stdout.splitlines()
+                  if '=' in line)
+    # A --collect transient unit may already have disappeared.
+    if values.get('LoadState') == 'not-found':
+        return
+    if result.returncode or values.get('ActiveState') not in ('inactive', 'failed'):
+        raise RuntimeError('Cannot confirm runtime stopped: ' + unit)
+
+
+def assert_socket_closed(path):
+    # A killed FPM may leave a stale pathname; check the listening endpoint.
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(1)
+        try:
+            client.connect(str(path))
+        except (FileNotFoundError, ConnectionRefusedError):
+            return
+        raise AssertionError('Stopped runtime still accepts connections')
 
 
 def request(plan):
@@ -204,19 +238,23 @@ def main():
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
                     str(plan.sockets / 'php.sock'))
         print('PASS: Separate identities, sockets and developer access')
-        run('systemctl', 'stop', units[0])
-        assert not (plans[0].sockets / 'php.sock').is_socket()
+        stop(units[0])
+        assert_socket_closed(plans[0].sockets / 'php.sock')
         verify(plans[1], 'b', identities[1], host_net, 2)
         print('PASS: Independent project stop')
     except BaseException:
         for unit in attempted:
             subprocess.run(['journalctl', '-u', unit, '--no-pager', '-n', '60'],
                            check=False, timeout=10)
+        for name in ('a', 'b'):
+            log = base / ('sockets-' + name) / 'fpm-error.log'
+            if log.is_file():
+                print('Fixture FPM log', name, log.read_text(errors='replace')[-6000:])
         raise
     finally:
         listener.close()
         for unit in attempted:
-            run('systemctl', 'stop', unit)
+            stop(unit)
         # Do not delete fixture data or accounts if stopping a unit failed.
         shutil.rmtree(base)
         for user in reversed(created):

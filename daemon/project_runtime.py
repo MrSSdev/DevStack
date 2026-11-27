@@ -90,7 +90,7 @@ def fpm_config() -> str:
     # launched as www-data or as the developer.
     return f'''[global]
 daemonize = no
-error_log = /dev/stderr
+error_log = /run/project-fpm/fpm-error.log
 
 [project]
 listen = {SOCKET}
