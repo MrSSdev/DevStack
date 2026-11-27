@@ -124,7 +124,10 @@ project runtime group. Writable directories use a dedicated
 project group with setgid/default group permissions; only the trusted
 developer is a member of multiple project groups. Verify runtime-created
 files are editable from a fresh developer session. Group changes may
-require re-login; no such change is applied to an installed workstation. No project receives the manager identity.
+require re-login; no such change is applied to an installed workstation.
+The fixture uses a newly created unprivileged developer account with actual
+NSS memberships verified in its subprocess, not the hosted runner's login.
+A preflight exercises shared group writes before either FPM instance starts. No project receives the manager identity.
 Test both separate account DAC and the mount/network boundary using
 two real FPM processes, FastCGI requests, SQLite writes, developer access
 and independent stop. The initial prototype denies all host networking,

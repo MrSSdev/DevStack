@@ -59,7 +59,12 @@ def run(*args, **kwargs):
 
 
 def as_user(user, *args, **kwargs):
-    return run('/usr/sbin/runuser', '-u', user, '--', *args, **kwargs)
+    # Resolve the fixture identity and initialize its actual NSS groups.
+    # Avoid PAM session policies and cached groups of the CI login user.
+    account = pwd.getpwnam(user)
+    return run('/usr/bin/setpriv', '--reuid=' + str(account.pw_uid),
+               '--regid=' + str(account.pw_gid), '--init-groups',
+               '--no-new-privs', '--', *args, **kwargs)
 
 
 def fixture(base, name, account, developer, other, port):
@@ -190,11 +195,9 @@ def main():
     if (os.geteuid() != 0 or os.getenv('GITHUB_ACTIONS') != 'true'
             or os.getenv('DEVSTACK_RUNTIME_CI') != '1'):
         raise SystemExit('Only for the disposable CI runner, not a workstation.')
-    developer = pwd.getpwuid(int(os.environ['SUDO_UID']))
-    if developer.pw_uid == 0:
-        raise SystemExit('Requires a non-root CI developer.')
     token = secrets.token_hex(5)
     users = ['dsrt-a-' + token, 'dsrt-b-' + token]
+    developer_name = 'dsrt-dev-' + token
     units = ['devstack-runtime-probe-' + name for name in users]
     created = []
     attempted = []
@@ -213,8 +216,20 @@ def main():
             run('useradd', '--system', '--user-group', '--no-create-home',
                 '--shell', '/usr/sbin/nologin', user)
             created.append(user)
-            run('usermod', '-a', '-G', user, developer.pw_name)
+        # A new disposable developer account has exactly the intended project
+        # memberships from its creation; never mutate the CI runner account.
+        run('useradd', '--system', '--user-group', '--no-create-home',
+            '--shell', '/usr/sbin/nologin', '--groups', ','.join(users),
+            developer_name)
+        created.append(developer_name)
+        developer = pwd.getpwnam(developer_name)
         identities = [pwd.getpwnam(user) for user in users]
+        expected_groups = {developer.pw_gid, *(x.pw_gid for x in identities)}
+        assert set(os.getgrouplist(developer_name, developer.pw_gid)) == expected_groups
+        actual = as_user(developer_name, '/usr/bin/id', '-G', capture_output=True)
+        actual_groups = set(map(int, actual.stdout.split()))
+        assert actual_groups == expected_groups, (actual_groups, expected_groups)
+        print('PASS: Fresh developer credentials and project group memberships', flush=True)
         assert identities[0].pw_uid != identities[1].pw_uid
         for user, identity in zip(users, identities):
             assert identity.pw_uid != developer.pw_uid
@@ -225,6 +240,14 @@ def main():
             fixture(base, 'b', users[1], developer, base / 'project-a', port),
         ]
         for index in (0, 1):
+            # Test the shared writable directory independently of FPM.
+            # Both accounts must be able to modify a normal group-writable file.
+            sample = plans[index].project / 'storage' / 'acl-probe.txt'
+            as_user(developer_name, '/usr/bin/python3', '-c',
+                    'import sys; open(sys.argv[1], "w").write("developer")', str(sample))
+            as_user(users[index], '/usr/bin/python3', '-c',
+                    'import sys; open(sys.argv[1], "a").write("-runtime")', str(sample))
+            assert sample.read_text() == 'developer-runtime'
             as_user(users[index], '/usr/bin/test', '!', '-r',
                     str(plans[1 - index].project / 'marker.txt'))
             attempted.append(units[index])
@@ -239,7 +262,9 @@ def main():
             output = plan.project / 'storage/runtime.txt'
             assert output.stat().st_gid == identities[index].pw_gid
             run('getfacl', '-p', str(output))
-            as_user(developer.pw_name, '/usr/bin/test', '-w', str(output))
+            run('namei', '-l', str(output))
+            as_user(developer_name, '/usr/bin/id')
+            as_user(developer_name, '/usr/bin/test', '-w', str(output))
             as_user(developer.pw_name, '/usr/bin/python3', '-c',
                     'import sys; open(sys.argv[1], "a").write("-developer")', str(output))
             assert output.read_text() == 'runtime-developer'
@@ -268,8 +293,6 @@ def main():
         # Do not delete fixture data or accounts if stopping a unit failed.
         shutil.rmtree(base)
         for user in reversed(created):
-            if pwd.getpwnam(user).pw_gid in os.getgrouplist(developer.pw_name, developer.pw_gid):
-                run('gpasswd', '-d', developer.pw_name, user)
             run('userdel', user)
     print('=== PHP RUNTIME PROTOTYPE PASSED ===')
 
