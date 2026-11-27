@@ -331,6 +331,19 @@ class BrowserAcceptance(unittest.TestCase):
         long_slug='long-'+'a'*35
         response=self.post('/api/projects',dict(slug=long_slug,name='A'*70,domain=long_slug+'.test',webroot='public',database=False,https=False,local_mail=False,engine='none',starter_kit='none',installer_options={}))
         self.assertEqual(response.status,200,response.text())
+        # This second layout fixture was created outside the browser UI.
+        # Its PHP-FPM pool is activated by a deferred reload. A background
+        # /api/state poll can be interrupted by that reload, and the next
+        # regular poll is not guaranteed to finish before the first layout
+        # assertion. Observe the actual pool readiness, then load the real
+        # project list afresh rather than rely on the 30-second polling phase.
+        pool = pathlib.Path('/run/php') / ('devstack-' + long_slug + '.sock')
+        deadline = time.monotonic() + 30
+        while not pool.is_socket() and time.monotonic() < deadline:
+            time.sleep(.2)
+        self.assertTrue(pool.is_socket(), 'Long-name fixture PHP-FPM pool did not become ready')
+        self.goto('projects')
+        expect(self.page.locator('main button').filter(has_text='A'*70)).to_be_visible()
         send(HTML_SUBJECT, HTML)
         self.wait_total(1)
         self.dismiss_visible_toasts()
