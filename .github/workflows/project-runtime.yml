@@ -7,6 +7,7 @@ on:
       - 'daemon/project_runtime.py'
       - 'daemon/project_mounts.py'
       - 'daemon/project_idmap.py'
+      - 'daemon/project_data_views.py'
       - 'daemon/project_runtime_launch.py'
       - 'daemon/project_runtime_identity.py'
       - 'daemon/project_access.py'
@@ -27,6 +28,7 @@ on:
       - 'daemon/project_runtime.py'
       - 'daemon/project_mounts.py'
       - 'daemon/project_idmap.py'
+      - 'daemon/project_data_views.py'
       - 'daemon/project_runtime_launch.py'
       - 'daemon/project_runtime_identity.py'
       - 'daemon/project_access.py'
@@ -64,7 +66,7 @@ jobs:
           python3 -m py_compile daemon/project_runtime.py daemon/project_http.py daemon/project_lifecycle.py tests/project-runtime-systemd-smoke.py tests/project_http_smoke.py
           python3 -m py_compile daemon/project_mounts.py daemon/project_runtime_launch.py tests/project-mount-fd-smoke.py tests/test_project_mounts.py
           python3 -m py_compile daemon/project_runtime_identity.py tests/test_project_runtime_identity.py
-          python3 -m py_compile daemon/project_access.py daemon/project_idmap.py tests/test_project_access.py tests/project-idmap-smoke.py
+          python3 -m py_compile daemon/project_access.py daemon/project_idmap.py daemon/project_data_views.py tests/test_project_access.py tests/project-idmap-smoke.py
           python3 -m unittest discover -s tests -p test_project_access.py -v
           python3 -m unittest discover -s tests -p test_project_runtime_identity.py -v
           python3 -m unittest discover -s tests -p test_project_lifecycle.py -v
