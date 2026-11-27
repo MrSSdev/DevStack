@@ -145,6 +145,36 @@ registry and selective networking where required. No silent fallback
 to the shared developer pool and no automatic migration of existing
 projects. Native Windows agent policy remains a separate gate.
 
+## HTTP ingress prototype (E1.3b, not activated)
+
+The shared Nginx must not resolve agent-controlled project paths. The
+experimental ingress in `daemon/project_http.py` uses fixed per-host
+Unix-socket HTTP upstreams instead of shared static roots. Each project
+has an unprivileged Nginx instance in a separate Bubblewrap namespace;
+it mounts only public assets and the conventional published storage
+directory read-only, plus the project's private FastCGI socket and HTTP
+socket directory. It does not mount the other projects or the private
+application root. The conventional Laravel public/storage symlink is
+not followed; a fixed alias publishes storage/app/public if present.
+Other symlinks are refused, hidden paths and non-front-controller PHP
+files are denied. /build/ serves built assets; missing assets do not
+fall through to PHP. Dynamic routes, method, query and body are passed
+to the fixed index.php. The ingress terminates HTTPS, replaces forwarding
+headers, ignores upstream X-Accel-Redirect, rejects unknown hosts and
+fails closed if a project's HTTP instance is unavailable.
+
+The real CI fixture exercises validated HTTPS (a disposable trusted
+certificate), static JS MIME, storage assets, dynamic POST routing,
+forwarded header replacement, sibling/private/host symlink denials and
+independent HTTP shutdown. The same test preserves the earlier FPM,
+SQLite and developer-write assertions. No deployment configuration,
+registry or production Nginx file is changed; the prototype runs only on
+a disposable hosted runner. Live Vite HMR, actual Laravel/Livewire
+installation, TLS deployment, production socket publication, safe mount
+source lifecycle, hardlink handling and management APIs are still
+separate acceptance gates. Per-project HTTP worker overhead and lazy
+activation must be considered before production integration.
+
 ## Configuration management and adapters
 
 DevStack is a management plane, not a mandatory AI chat client or runtime.

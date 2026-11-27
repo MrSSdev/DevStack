@@ -19,7 +19,9 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_runtime import RuntimePlan, fpm_config
+from project_http_smoke import exercise_http
 
 PHP = r'''<?php
 header('Content-Type: application/json');
@@ -49,6 +51,11 @@ $result = [
     'home_hidden' => count(scandir('/home')) === 2,
     'network_namespace' => readlink('/proc/self/ns/net'),
     'network_blocked' => $net === false,
+    'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+    'request_method' => $_SERVER['REQUEST_METHOD'] ?? '',
+    'request_body' => file_get_contents('php://input'),
+    'https' => $_SERVER['HTTPS'] ?? '',
+    'remote_addr' => $_SERVER['REMOTE_ADDR'] ?? '',
 ];
 echo json_encode($result, JSON_THROW_ON_ERROR);
 '''
@@ -293,9 +300,11 @@ with sqlite3.connect(sys.argv[1]) as db:
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
                     str(plan.sockets / 'php.sock'))
         print('PASS: Separate identities, sockets and developer access')
+        exercise_http(base, token, plans, users, developer, identities, attempted,
+                      as_user, stop, verify, host_net)
         stop(units[0])
         assert_socket_closed(plans[0].sockets / 'php.sock')
-        verify(plans[1], 'b', identities[1], host_net, 2)
+        verify(plans[1], 'b', identities[1], host_net, 3)
         print('PASS: Independent project stop')
     except BaseException:
         for unit in attempted:
@@ -308,13 +317,13 @@ with sqlite3.connect(sys.argv[1]) as db:
         raise
     finally:
         listener.close()
-        for unit in attempted:
+        for unit in reversed(attempted):
             stop(unit)
         # Do not delete fixture data or accounts if stopping a unit failed.
         shutil.rmtree(base)
         for user in reversed(created):
             run('userdel', user)
-    print('=== PHP RUNTIME PROTOTYPE PASSED ===')
+    print('=== PHP RUNTIME AND HTTPS INGRESS PROTOTYPE PASSED ===')
 
 
 if __name__ == '__main__':
