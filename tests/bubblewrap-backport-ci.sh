@@ -31,10 +31,24 @@ sudo apt-get install -y --no-install-recommends \
     libipc-run-perl libselinux-dev meson perl pkgconf python3 xsltproc \
     bubblewrap php8.5-fpm php8.5-sqlite3 nginx libfcgi-bin acl curl
 old_version="$(dpkg-query -W -f='${Version}' bubblewrap)"
+old_arch="$(dpkg-query -W -f='${Architecture}' bubblewrap)"
 dpkg --compare-versions "$version" gt "$old_version"
 (cd "$work/rollback" && apt-get download "bubblewrap=$old_version")
-original="$work/rollback/bubblewrap_${old_version}_amd64.deb"
-test -f "$original"
+# The hosted LTS archive can select an optimized amd64v3 package variant.
+# Validate the actual downloaded file rather than assume its filename.
+shopt -s nullglob
+originals=("$work/rollback/"*.deb)
+shopt -u nullglob
+if (( ${#originals[@]} != 1 )); then
+    echo 'Expected exactly one authenticated rollback package.' >&2
+    exit 1
+fi
+original="${originals[0]}"
+dpkg-deb -f "$original" Package Version Architecture
+test "$(dpkg-deb -f "$original" Package)" = bubblewrap
+test "$(dpkg-deb -f "$original" Version)" = "$old_version"
+test "$(dpkg-deb -f "$original" Architecture)" = "$old_arch"
+echo 'Verified original rollback package.'
 
 # Authenticate the newer *source index* with Ubuntu's archive keyring.
 # The separate list/cache directory is temporary and contains NO deb line.
@@ -70,7 +84,7 @@ dch --force-distribution --distribution resolute --newversion "$version" \
     'Test-only rebuild of authenticated Ubuntu source for Ubuntu 26.04 LTS.'
 dpkg-checkbuilddeps
 # Full package build, including the upstream/package test suite; no nocheck.
-dpkg-buildpackage -us -uc -b -j2
+DEB_BUILD_OPTIONS=parallel=2 dpkg-buildpackage -us -uc -b -j2
 
 candidate="$work/bubblewrap_${version}_amd64.deb"
 test -f "$candidate"
