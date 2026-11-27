@@ -33,6 +33,9 @@ $db = new PDO('sqlite:' . $root . '/database/fixture.sqlite');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $db->exec('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY)');
 $db->exec('INSERT INTO items DEFAULT VALUES');
+$runtimeDb = new PDO('sqlite:' . $root . '/database/runtime-created.sqlite');
+$runtimeDb->exec('CREATE TABLE IF NOT EXISTS runtime_proof (id INTEGER PRIMARY KEY)');
+$runtimeDb->exec('INSERT OR IGNORE INTO runtime_proof VALUES (1)');
 $net = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.3);
 if ($net) { fclose($net); }
 $result = [
@@ -45,6 +48,8 @@ $result = [
     'source_read_only' => @file_put_contents($root . '/unexpected.txt', 'x') === false,
     'storage_write' => file_put_contents($root . '/storage/runtime.txt', 'runtime') === 7,
     'cache_write' => file_put_contents($root . '/bootstrap/cache/runtime.txt', 'cache') === 5,
+    'nested_write' => (is_dir($root . '/storage/runtime-dir') || mkdir($root . '/storage/runtime-dir'))
+        && file_put_contents($root . '/storage/runtime-dir/nested.txt', 'runtime') === 7,
     'sqlite_count' => (int) $db->query('SELECT COUNT(*) FROM items')->fetchColumn(),
     'devstack_hidden' => !file_exists('/run/devstack'),
     'shared_php_hidden' => !file_exists('/run/php'),
@@ -92,18 +97,10 @@ def fixture(base, name, account, developer, other, port):
         os.chown(path, developer.pw_uid, developer.pw_gid, follow_symlinks=False)
         if not path.is_symlink():
             path.chmod(0o700 if path.is_dir() else 0o600)
-    run('setfacl', '-P', '-R', '-m', 'u:' + account + ':rX', str(root))
-    for relative in ('storage', 'bootstrap/cache', 'database'):
-        path = root / relative
-        # Only the project runtime group is mapped into its user namespace.
-        # Share writable application data through that dedicated group,
-        # not through the broad developer group or an unmapped named ACL.
-        identity = pwd.getpwnam(account)
-        os.chown(path, developer.pw_uid, identity.pw_gid)
-        run('setfacl', '-m', 'g::rwx,u:' + account + ':rwx', str(path))
-        run('setfacl', '-m', 'd:u::rwx,d:g::rwx,d:o::---', str(path))
-        path.chmod(0o2770)
-    run('setfacl', '-m', 'u:' + account + ':rw', str(db))
+    # The unprivileged owner, not root, prepares this new quiescent tree.
+    # Inherited named ACLs remove the need for developer group membership.
+    as_user(developer.pw_name, '/usr/bin/python3', '-I',
+            str(base / 'launcher/project_access.py'), str(root))
     config_dir = base / ('config-' + name)
     config_dir.mkdir(mode=0o755)
     config = config_dir / 'fpm.conf'
@@ -190,7 +187,7 @@ def verify(plan, name, identity, host_net, expected_count):
     assert result['own'] == name, result
     assert result['sqlite_count'] == expected_count, result
     for field in ('other_hidden', 'link_blocked', 'source_read_only',
-                  'storage_write', 'cache_write', 'devstack_hidden',
+                  'storage_write', 'cache_write', 'nested_write', 'devstack_hidden',
                   'shared_php_hidden', 'windows_hidden', 'home_hidden', 'network_blocked'):
         assert result[field] is True, (field, result)
     assert result['network_namespace'] != host_net, result
@@ -222,7 +219,8 @@ def main():
         launcher.mkdir(mode=0o755)
         source = Path(__file__).resolve().parents[1] / 'daemon'
         for name in ('project_runtime_launch.py', 'project_runtime.py',
-                     'project_http.py', 'project_mounts.py', 'project_runtime_identity.py'):
+                     'project_http.py', 'project_mounts.py', 'project_runtime_identity.py',
+                     'project_access.py'):
             destination = launcher / name
             destination.write_bytes((source / name).read_bytes())
             destination.chmod(0o644)
@@ -272,20 +270,19 @@ def main():
         else:
             raise AssertionError('Sibling runtime launcher accepted')
         print('PASS: Real launcher denies a different project identity', flush=True)
-        # A new disposable developer account has exactly the intended project
-        # memberships from its creation; never mutate the CI runner account.
+        # One ordinary developer principal, no added runtime-group memberships.
         run('useradd', '--system', '--user-group', '--no-create-home',
-            '--shell', '/usr/sbin/nologin', '--groups', ','.join(users),
+            '--home-dir', '/nonexistent', '--shell', '/usr/sbin/nologin',
             developer_name)
         created.append(developer_name)
         developer = pwd.getpwnam(developer_name)
         identities = [pwd.getpwnam(user) for user in users]
-        expected_groups = {developer.pw_gid, *(x.pw_gid for x in identities)}
+        expected_groups = {developer.pw_gid}
         assert set(os.getgrouplist(developer_name, developer.pw_gid)) == expected_groups
         actual = as_user(developer_name, '/usr/bin/id', '-G', capture_output=True)
         actual_groups = set(map(int, actual.stdout.split()))
         assert actual_groups == expected_groups, (actual_groups, expected_groups)
-        print('PASS: Fresh developer credentials and project group memberships', flush=True)
+        print('PASS: Developer has no runtime group memberships', flush=True)
         assert identities[0].pw_uid != identities[1].pw_uid
         for user, identity in zip(users, identities):
             assert identity.pw_uid != developer.pw_uid
@@ -297,7 +294,7 @@ def main():
         ]
         for index in (0, 1):
             # Test the shared writable directory independently of FPM.
-            # Both accounts must be able to modify a normal group-writable file.
+            # Both accounts must be able to modify a file created with normal defaults.
             sample = plans[index].project / 'storage' / 'acl-probe.txt'
             as_user(developer_name, '/usr/bin/python3', '-c',
                     'import sys; open(sys.argv[1], "w").write("developer")', str(sample))
@@ -306,6 +303,23 @@ def main():
             assert sample.read_text() == 'developer-runtime'
             as_user(users[index], '/usr/bin/test', '!', '-r',
                     str(plans[1 - index].project / 'marker.txt'))
+            # A normal editor's newly created file inherits the runtime read
+            # grant, not permission to write sources. Test actual I/O.
+            source = plans[index].project / 'public/editor-created.js'
+            as_user(developer_name, '/usr/bin/python3', '-c',
+                    'import sys;open(sys.argv[1],"w").write("editor")', str(source))
+            assert as_user(users[index], '/usr/bin/cat', str(source),
+                           capture_output=True).stdout == 'editor'
+            as_user(users[index], '/usr/bin/python3', '-c', '''
+import sys
+try:
+    with open(sys.argv[1], 'a') as f:
+        f.write('unexpected')
+except PermissionError:
+    pass
+else:
+    raise SystemExit('Runtime can write source outside sandbox')
+''', str(source))
             attempted.append(units[index])
             start(units[index], users[index], plans[index])
         host_net = os.readlink('/proc/self/ns/net')
@@ -345,10 +359,26 @@ with sqlite3.connect(sys.argv[1]) as db:
             import sqlite3
             with sqlite3.connect(plan.project / 'database/fixture.sqlite') as db:
                 assert db.execute('SELECT value FROM developer_probe').fetchall() == [('developer',)]
-            print('PASS: Developer writes PHP-created file and SQLite', index, flush=True)
+            # Real runtime-owned nested entries and a database created by PHP,
+            # not only a file that was previously owned by the developer.
+            nested = plan.project / 'storage/runtime-dir/nested.txt'
+            as_user(developer_name, '/usr/bin/python3', '-c',
+                    'import sys;open(sys.argv[1],"a").write("-developer")', str(nested))
+            assert nested.read_text() == 'runtime-developer'
+            runtime_db = plan.project / 'database/runtime-created.sqlite'
+            assert runtime_db.stat().st_uid == identities[index].pw_uid
+            as_user(developer_name, '/usr/bin/python3', '-c', '''
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute('INSERT INTO runtime_proof VALUES (2)')
+''', str(runtime_db))
+            with sqlite3.connect(runtime_db) as conn:
+                assert conn.execute('SELECT id FROM runtime_proof ORDER BY id').fetchall() == [(1,), (2,)]
+            print('PASS: Developer writes runtime-owned nested file and SQLite without runtime groups', index, flush=True)
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
                     str(plan.sockets / 'php.sock'))
-        print('PASS: Separate identities, sockets and developer access')
+        assert set(os.getgrouplist(developer_name, developer.pw_gid)) == expected_groups
+        print('PASS: Separate identities, sockets and developer access; no group changes')
         for slot, user in zip(('a', 'b'), users):
             verify_binding(base, slot, expected_user=user)
         # Hand off the same fixture data to the real pair lifecycle. Never
