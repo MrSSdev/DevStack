@@ -86,17 +86,18 @@ cleanup() {
   if ! $committed; then rm -rf --one-file-system -- "$incoming"; fi
 }
 trap cleanup EXIT
-# Copy without following links, preserving neither ownership nor extended
-# attributes. The destination is exclusively controlled by root.
-cp -R -P --no-preserve=all -- "$payload/." "$incoming/"
+# Preserve executable bits (GNU cp --no-preserve=all also drops them), but
+# not ownership, xattrs or hardlinks. The destination is root-only until
+# permissions are normalized; no setuid/setgid file is exposed.
+cp -R -P --preserve=mode -- "$payload/." "$incoming/"
 [[ -z "$(find -P "$incoming" ! -type f ! -type d ! -type l -print -quit)" ]] ||
   die 'Unsupported copied file.'
 while IFS= read -r -d '' link; do
   target="$(realpath -e -- "$link")" || die 'Broken link in release.'
   [[ $target == "$incoming/"* ]] || die 'Link escapes the release.'
 done < <(find -P "$incoming" -type l -print0)
-find -P "$incoming" -type d -exec chmod 0755 {} +
 find -P "$incoming" -type f -exec chmod a-s,a-t,u=rwX,go=rX {} +
+find -P "$incoming" -type d -exec chmod 0755 {} +
 [[ -z "$(find -P "$incoming" ! -user root -print -quit)" ]] ||
   die 'Release ownership is not root.'
 for file in BUILD smoke.cjs bin/playwright bin/playwright-cli playwright/package.json \

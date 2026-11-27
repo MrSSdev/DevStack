@@ -53,7 +53,7 @@ done
 # no second package/browser download. No root-owned state in the candidate.
 stage="$(mktemp -d /tmp/devstack-tools.XXXXXXXX)"
 mkdir "$stage/payload"
-cp -R -P --no-preserve=all -- "$first/." "$stage/payload/"
+cp -R -P --preserve=mode -- "$first/." "$stage/payload/"
 chmod -R u+rwX "$stage/payload"
 cp "$stage/payload/smoke.cjs" "$stage/smoke-original.cjs"
 printf '%s\n' 'process.exit(42);' > "$stage/payload/smoke.cjs"

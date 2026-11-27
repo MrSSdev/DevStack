@@ -2,7 +2,6 @@
 # Explicit developer action only. Downloads and Node code run without root.
 set -Eeuo pipefail
 umask 077
-export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 [[ $EUID -ne 0 ]] || { echo 'Run as the developer, not root.' >&2; exit 2; }
 src="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 base=/opt/devstack-tools
