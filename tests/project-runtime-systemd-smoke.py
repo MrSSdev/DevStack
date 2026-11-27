@@ -21,6 +21,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_runtime import RuntimePlan, fpm_config
+from project_mounts import reject_nested_mounts
 from project_http_smoke import exercise_http
 from project_lifecycle import RUNTIME_SECURITY_PROPERTIES
 from project_runtime_identity import IdentityError, provision_fixture, verify_binding
@@ -38,8 +39,23 @@ $runtimeDb = new PDO('sqlite:' . $root . '/database/runtime-created.sqlite');
 $runtimeDb->exec('CREATE TABLE IF NOT EXISTS runtime_proof (id INTEGER PRIMARY KEY)');
 $runtimeDb->exec('INSERT OR IGNORE INTO runtime_proof VALUES (1)');
 $restricted = $root . '/storage/restricted.txt';
-file_put_contents($restricted, 'private fixture');
-chmod($restricted, 0600);
+if (!file_exists($restricted)) {
+    file_put_contents($restricted, 'private fixture');
+    chmod($restricted, 0600);
+}
+if (is_dir($root . '/storage/app/public')) {
+    file_put_contents($root . '/storage/app/public/runtime-upload.txt', 'runtime-upload');
+}
+// Verify the actual mount attributes observed by the PHP worker.
+$mounts = [];
+foreach (file('/proc/self/mountinfo', FILE_IGNORE_NEW_LINES) as $line) {
+    $fields = explode(' ', $line);
+    if (count($fields) > 5 && in_array($fields[4], [
+        $root, $root . '/storage', $root . '/bootstrap/cache', $root . '/database'
+    ], true)) {
+        $mounts[$fields[4]] = explode(',', $fields[5]);
+    }
+}
 $net = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.3);
 if ($net) { fclose($net); }
 // Run a fixed child of the actual FPM worker to verify inherited filters.
@@ -92,6 +108,9 @@ $policyOK = $policyOK
     && preg_match('/^Seccomp:[ \\t]+2$/m', $processStatus) === 1;
 $result = [
     'security_policy' => $policyOK,
+    'mounts' => $mounts,
+    'runtime_proof' => array_map('intval', $runtimeDb->query('SELECT id FROM runtime_proof ORDER BY id')->fetchAll(PDO::FETCH_COLUMN)),
+    'restricted_content' => file_get_contents($restricted),
     'uid' => posix_geteuid(),
     'gid' => posix_getegid(),
     'own' => trim(file_get_contents($root . '/marker.txt')),
@@ -133,7 +152,7 @@ def as_user(user, *args, **kwargs):
                '--no-new-privs', '--', *args, **kwargs)
 
 
-def fixture(base, name, account, developer, other, port):
+def fixture(base, name, account, developer, other, port, *, mapped_data=False):
     root = base / ('project-' + name)
     root.mkdir(mode=0o700)
     for rel in ('public', 'storage', 'bootstrap', 'bootstrap/cache', 'database'):
@@ -153,7 +172,8 @@ def fixture(base, name, account, developer, other, port):
     # The unprivileged owner, not root, prepares this new quiescent tree.
     # Inherited named ACLs remove the need for developer group membership.
     as_user(developer.pw_name, '/usr/bin/python3', '-I',
-            str(base / 'launcher/project_access.py'), str(root))
+            str(base / 'launcher/project_access.py'), str(root),
+            *(['idmapped'] if mapped_data else []))
     config_dir = base / ('config-' + name)
     config_dir.mkdir(mode=0o755)
     config = config_dir / 'fpm.conf'
@@ -171,7 +191,7 @@ def fixture(base, name, account, developer, other, port):
     identity = pwd.getpwnam(account)
     os.chown(log, identity.pw_uid, identity.pw_gid)
     log.chmod(0o600)
-    return RuntimePlan(root, config, sockets)
+    return RuntimePlan(root, config, sockets, mapped_data)
 
 
 def start(unit, user, plan):
@@ -249,16 +269,15 @@ def verify(plan, name, identity, host_net, expected_count):
     return result
 
 
-def main():
-    if (os.geteuid() != 0 or os.getenv('GITHUB_ACTIONS') != 'true'
-            or os.getenv('DEVSTACK_RUNTIME_CI') != '1'):
-        raise SystemExit('Only for the disposable CI runner, not a workstation.')
+def exercise_fixture(*, mapped_data):
+    print('=== RUNTIME PROFILE:', 'IDMAP' if mapped_data else 'ACL baseline', '===', flush=True)
     token = secrets.token_hex(5)
     project_ids = [secrets.token_hex(16), secrets.token_hex(16)]
     users = []
     developer_name = 'dsrt-dev-' + token
     created = []
     attempted = []
+    pairs = []
     base = Path(tempfile.mkdtemp(prefix='devstack-runtime-probe-', dir='/var/lib'))
     base.chmod(0o711)
     listener = socket.socket()
@@ -341,146 +360,148 @@ def main():
             assert identity.pw_uid != developer.pw_uid
             groups = os.getgrouplist(user, identity.pw_gid)
             assert groups == [identity.pw_gid], (user, groups)
-        # Separate, privileged feasibility test: mount only newly created
-        # disposable data, in a private child mount namespace. No changes to
-        # the established ACL/FPM prototype or its expected limitation.
-        subprocess.run(['/usr/bin/unshare', '--mount', '--propagation', 'private',
-            '/usr/bin/python3', '-I',
-            str(Path(__file__).with_name('project-idmap-smoke.py').absolute()),
-            str(base), developer_name, str(os.stat('/proc/self/ns/mnt').st_ino)],
-            check=True, text=True, timeout=120)
+        if not mapped_data:
+            # Separate, privileged feasibility test: mount only newly created
+            # disposable data, in a private child mount namespace. No changes to
+            # the established ACL/FPM prototype or its expected limitation.
+            subprocess.run(['/usr/bin/unshare', '--mount', '--propagation', 'private',
+                '/usr/bin/python3', '-I',
+                str(Path(__file__).with_name('project-idmap-smoke.py').absolute()),
+                str(base), developer_name, str(os.stat('/proc/self/ns/mnt').st_ino)],
+                check=True, text=True, timeout=120)
         plans = [
-            fixture(base, 'a', users[0], developer, base / 'project-b', port),
-            fixture(base, 'b', users[1], developer, base / 'project-a', port),
+            fixture(base, 'a', users[0], developer, base / 'project-b', port, mapped_data=mapped_data),
+            fixture(base, 'b', users[1], developer, base / 'project-a', port, mapped_data=mapped_data),
         ]
-        for index in (0, 1):
-            # Test the shared writable directory independently of FPM.
-            # Both accounts must be able to modify a file created with normal defaults.
-            sample = plans[index].project / 'storage' / 'acl-probe.txt'
-            as_user(developer_name, '/usr/bin/python3', '-c',
-                    'import sys; open(sys.argv[1], "w").write("developer")', str(sample))
-            as_user(users[index], '/usr/bin/python3', '-c',
-                    'import sys; open(sys.argv[1], "a").write("-runtime")', str(sample))
-            assert sample.read_text() == 'developer-runtime'
-            as_user(users[index], '/usr/bin/test', '!', '-r',
-                    str(plans[1 - index].project / 'marker.txt'))
-            # A normal editor's newly created file inherits the runtime read
-            # grant, not permission to write sources. Test actual I/O.
-            source = plans[index].project / 'public/editor-created.js'
-            as_user(developer_name, '/usr/bin/python3', '-c',
-                    'import sys;open(sys.argv[1],"w").write("editor")', str(source))
-            assert as_user(users[index], '/usr/bin/cat', str(source),
-                           capture_output=True).stdout == 'editor'
-            as_user(users[index], '/usr/bin/python3', '-c', '''
-import sys
-try:
-    with open(sys.argv[1], 'a') as f:
-        f.write('unexpected')
-except PermissionError:
-    pass
-else:
-    raise SystemExit('Runtime can write source outside sandbox')
-''', str(source))
-            attempted.append(units[index])
-            start(units[index], users[index], plans[index])
         host_net = os.readlink('/proc/self/ns/net')
-        a = verify(plans[0], 'a', identities[0], host_net, 1)
-        b = verify(plans[1], 'b', identities[1], host_net, 1)
-        assert a['network_namespace'] != b['network_namespace']
-        verify(plans[0], 'a', identities[0], host_net, 2)
-        for index, plan in enumerate(plans):
-            assert (plan.project / 'storage/runtime.txt').read_text() == 'runtime'
-            output = plan.project / 'storage/runtime.txt'
-            assert output.stat().st_gid == identities[index].pw_gid
-            run('getfacl', '-p', str(output))
-            run('namei', '-l', str(output))
-            as_user(developer_name, '/usr/bin/id')
-            # Do not infer functional write access from an access(2) probe.
-            # Exercise the actual open/write operation and verify its effect.
-            as_user(developer_name, '/usr/bin/python3', '-c', '''
-import os, sys
-p = sys.argv[1]
-s = os.stat(p)
-print("Developer file probe:", os.getuid(), os.getgroups(),
-      s.st_uid, s.st_gid, oct(s.st_mode), "access(W_OK) =", os.access(p, os.W_OK),
-      flush=True)
-with open(p, "a") as stream:
-    stream.write("-developer")
-''', str(output))
-            assert output.read_text() == 'runtime-developer'
-            # The CLI must also be able to commit a real transaction in the
-            # same SQLite database. Use an independent table so the existing
-            # FPM request count remains a useful regression assertion.
-            as_user(developer_name, '/usr/bin/python3', '-c', '''
-import sqlite3, sys
-with sqlite3.connect(sys.argv[1]) as db:
-    db.execute("CREATE TABLE developer_probe (value TEXT NOT NULL)")
-    db.execute("INSERT INTO developer_probe VALUES (?)", ("developer",))
-''', str(plan.project / 'database/fixture.sqlite'))
-            import sqlite3
-            with sqlite3.connect(plan.project / 'database/fixture.sqlite') as db:
-                assert db.execute('SELECT value FROM developer_probe').fetchall() == [('developer',)]
-            # Real runtime-owned nested entries and a database created by PHP,
-            # not only a file that was previously owned by the developer.
-            nested = plan.project / 'storage/runtime-dir/nested.txt'
-            as_user(developer_name, '/usr/bin/python3', '-c',
-                    'import sys;open(sys.argv[1],"a").write("-developer")', str(nested))
-            assert nested.read_text() == 'runtime-developer'
-            runtime_db = plan.project / 'database/runtime-created.sqlite'
-            assert runtime_db.stat().st_uid == identities[index].pw_uid
-            # SQLite may create a database with mode 0644. In that case the
-            # inherited named developer ACL is masked to read-only. Record
-            # the real behavior rather than chmod'ing it in the application
-            # or silently declaring runtime-created data fully compatible.
-            result = as_user(developer_name, '/usr/bin/python3', '-c', '''
-import os, sqlite3, stat, sys
-path, restricted = sys.argv[1:]
-from pathlib import Path
-with sqlite3.connect(Path(path).as_uri()+'?mode=ro', uri=True) as db:
-    assert db.execute('SELECT id FROM runtime_proof').fetchall() == [(1,)]
-with sqlite3.connect(path) as db:
-    if os.stat(path).st_mode & stat.S_IWGRP:
-        db.execute('INSERT INTO runtime_proof VALUES (2)')
-        print('runtime-db:shared-write')
+        if not mapped_data:
+            for index in (0, 1):
+                # Test the shared writable directory independently of FPM.
+                # Both accounts must be able to modify a file created with normal defaults.
+                sample = plans[index].project / 'storage' / 'acl-probe.txt'
+                as_user(developer_name, '/usr/bin/python3', '-c',
+                        'import sys; open(sys.argv[1], "w").write("developer")', str(sample))
+                as_user(users[index], '/usr/bin/python3', '-c',
+                        'import sys; open(sys.argv[1], "a").write("-runtime")', str(sample))
+                assert sample.read_text() == 'developer-runtime'
+                as_user(users[index], '/usr/bin/test', '!', '-r',
+                        str(plans[1 - index].project / 'marker.txt'))
+                # A normal editor's newly created file inherits the runtime read
+                # grant, not permission to write sources. Test actual I/O.
+                source = plans[index].project / 'public/editor-created.js'
+                as_user(developer_name, '/usr/bin/python3', '-c',
+                        'import sys;open(sys.argv[1],"w").write("editor")', str(source))
+                assert as_user(users[index], '/usr/bin/cat', str(source),
+                               capture_output=True).stdout == 'editor'
+                as_user(users[index], '/usr/bin/python3', '-c', '''
+    import sys
+    try:
+        with open(sys.argv[1], 'a') as f:
+            f.write('unexpected')
+    except PermissionError:
+        pass
     else:
-        try:
+        raise SystemExit('Runtime can write source outside sandbox')
+    ''', str(source))
+                attempted.append(units[index])
+                start(units[index], users[index], plans[index])
+            a = verify(plans[0], 'a', identities[0], host_net, 1)
+            b = verify(plans[1], 'b', identities[1], host_net, 1)
+            assert a['network_namespace'] != b['network_namespace']
+            verify(plans[0], 'a', identities[0], host_net, 2)
+            for index, plan in enumerate(plans):
+                assert (plan.project / 'storage/runtime.txt').read_text() == 'runtime'
+                output = plan.project / 'storage/runtime.txt'
+                assert output.stat().st_gid == identities[index].pw_gid
+                run('getfacl', '-p', str(output))
+                run('namei', '-l', str(output))
+                as_user(developer_name, '/usr/bin/id')
+                # Do not infer functional write access from an access(2) probe.
+                # Exercise the actual open/write operation and verify its effect.
+                as_user(developer_name, '/usr/bin/python3', '-c', '''
+    import os, sys
+    p = sys.argv[1]
+    s = os.stat(p)
+    print("Developer file probe:", os.getuid(), os.getgroups(),
+          s.st_uid, s.st_gid, oct(s.st_mode), "access(W_OK) =", os.access(p, os.W_OK),
+          flush=True)
+    with open(p, "a") as stream:
+        stream.write("-developer")
+    ''', str(output))
+                assert output.read_text() == 'runtime-developer'
+                # The CLI must also be able to commit a real transaction in the
+                # same SQLite database. Use an independent table so the existing
+                # FPM request count remains a useful regression assertion.
+                as_user(developer_name, '/usr/bin/python3', '-c', '''
+    import sqlite3, sys
+    with sqlite3.connect(sys.argv[1]) as db:
+        db.execute("CREATE TABLE developer_probe (value TEXT NOT NULL)")
+        db.execute("INSERT INTO developer_probe VALUES (?)", ("developer",))
+    ''', str(plan.project / 'database/fixture.sqlite'))
+                import sqlite3
+                with sqlite3.connect(plan.project / 'database/fixture.sqlite') as db:
+                    assert db.execute('SELECT value FROM developer_probe').fetchall() == [('developer',)]
+                # Real runtime-owned nested entries and a database created by PHP,
+                # not only a file that was previously owned by the developer.
+                nested = plan.project / 'storage/runtime-dir/nested.txt'
+                as_user(developer_name, '/usr/bin/python3', '-c',
+                        'import sys;open(sys.argv[1],"a").write("-developer")', str(nested))
+                assert nested.read_text() == 'runtime-developer'
+                runtime_db = plan.project / 'database/runtime-created.sqlite'
+                assert runtime_db.stat().st_uid == identities[index].pw_uid
+                # SQLite may create a database with mode 0644. In that case the
+                # inherited named developer ACL is masked to read-only. Record
+                # the real behavior rather than chmod'ing it in the application
+                # or silently declaring runtime-created data fully compatible.
+                result = as_user(developer_name, '/usr/bin/python3', '-c', '''
+    import os, sqlite3, stat, sys
+    path, restricted = sys.argv[1:]
+    from pathlib import Path
+    with sqlite3.connect(Path(path).as_uri()+'?mode=ro', uri=True) as db:
+        assert db.execute('SELECT id FROM runtime_proof').fetchall() == [(1,)]
+    with sqlite3.connect(path) as db:
+        if os.stat(path).st_mode & stat.S_IWGRP:
             db.execute('INSERT INTO runtime_proof VALUES (2)')
-        except sqlite3.OperationalError as exc:
-            assert 'readonly' in str(exc).lower(), str(exc)
+            print('runtime-db:shared-write')
         else:
-            raise AssertionError('Restrictive SQLite creation mode was bypassed')
-        print('runtime-db:masked-read-only')
-try:
-    with open(restricted) as stream:
-        stream.read()
-except PermissionError:
-    pass
-else:
-    raise AssertionError('Explicit private mode was bypassed')
-''', str(runtime_db), str(plan.project / 'storage/restricted.txt'), capture_output=True)
-            observed = result.stdout.strip()
-            with sqlite3.connect(runtime_db) as conn:
-                rows = conn.execute('SELECT id FROM runtime_proof ORDER BY id').fetchall()
-                if observed == 'runtime-db:masked-read-only':
-                    assert rows == [(1,)]
-                    print('OBSERVED LIMITATION: runtime-created SQLite ACL mask is read-only for developer', index, flush=True)
-                else:
-                    assert observed == 'runtime-db:shared-write' and rows == [(1,), (2,)]
-                    print('PASS: runtime-created SQLite permits shared write on this build', index, flush=True)
-            print('PASS: Developer writes nested runtime-owned data and pre-provisioned SQLite without runtime groups; private mode respected', index, flush=True)
-            as_user(users[1 - index], '/usr/bin/test', '!', '-w',
-                    str(plan.sockets / 'php.sock'))
-        assert set(os.getgrouplist(developer_name, developer.pw_gid)) == expected_groups
-        print('PASS: Separate identities, sockets and developer access; no group changes')
-        for slot, user in zip(('a', 'b'), users):
-            verify_binding(base, slot, expected_user=user)
-        # Hand off the same fixture data to the real pair lifecycle. Never
-        # run a legacy/direct FPM instance alongside the new pair.
-        for index, unit in enumerate(units):
-            stop(unit)
-            assert_socket_closed(plans[index].sockets / 'php.sock')
+            try:
+                db.execute('INSERT INTO runtime_proof VALUES (2)')
+            except sqlite3.OperationalError as exc:
+                assert 'readonly' in str(exc).lower(), str(exc)
+            else:
+                raise AssertionError('Restrictive SQLite creation mode was bypassed')
+            print('runtime-db:masked-read-only')
+    try:
+        with open(restricted) as stream:
+            stream.read()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError('Explicit private mode was bypassed')
+    ''', str(runtime_db), str(plan.project / 'storage/restricted.txt'), capture_output=True)
+                observed = result.stdout.strip()
+                with sqlite3.connect(runtime_db) as conn:
+                    rows = conn.execute('SELECT id FROM runtime_proof ORDER BY id').fetchall()
+                    if observed == 'runtime-db:masked-read-only':
+                        assert rows == [(1,)]
+                        print('OBSERVED LIMITATION: runtime-created SQLite ACL mask is read-only for developer', index, flush=True)
+                    else:
+                        assert observed == 'runtime-db:shared-write' and rows == [(1,), (2,)]
+                        print('PASS: runtime-created SQLite permits shared write on this build', index, flush=True)
+                print('PASS: Developer writes nested runtime-owned data and pre-provisioned SQLite without runtime groups; private mode respected', index, flush=True)
+                as_user(users[1 - index], '/usr/bin/test', '!', '-w',
+                        str(plan.sockets / 'php.sock'))
+            assert set(os.getgrouplist(developer_name, developer.pw_gid)) == expected_groups
+            print('PASS: Separate identities, sockets and developer access; no group changes')
+            for slot, user in zip(('a', 'b'), users):
+                verify_binding(base, slot, expected_user=user)
+            # Hand off the same fixture data to the real pair lifecycle. Never
+            # run a legacy/direct FPM instance alongside the new pair.
+            for index, unit in enumerate(units):
+                stop(unit)
+                assert_socket_closed(plans[index].sockets / 'php.sock')
         exercise_http(base, token, plans, users, developer, identities, attempted,
-                      as_user, stop, verify, host_net)
+                      as_user, stop, verify, host_net, pairs)
     except BaseException:
         for unit in attempted:
             subprocess.run(['journalctl', '-u', unit, '--no-pager', '-n', '60'],
@@ -492,12 +513,35 @@ else:
         raise
     finally:
         listener.close()
+        cleanup_errors = []
+        owned_pair_units = {unit for pair in pairs for unit in pair.units}
+        for pair in reversed(pairs):
+            try:
+                pair.stop()
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                cleanup_errors.append(exc)
         for unit in reversed(attempted):
-            stop(unit)
-        # Do not delete fixture data or accounts if stopping a unit failed.
+            if unit not in owned_pair_units:
+                try:
+                    stop(unit)
+                except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                    cleanup_errors.append(exc)
+        # Never rmtree a fixture containing a live or unknown mounted view.
+        if cleanup_errors:
+            raise RuntimeError('Fixture cleanup incomplete; preserving ' + str(base)) from cleanup_errors[0]
+        reject_nested_mounts(base)
         shutil.rmtree(base)
         for user in reversed(created):
             run('userdel', user)
+    print('=== PHP RUNTIME PROFILE PASSED:', 'IDMAP' if mapped_data else 'ACL baseline', '===', flush=True)
+
+
+def main():
+    if (os.geteuid() != 0 or os.getenv('GITHUB_ACTIONS') != 'true'
+            or os.getenv('DEVSTACK_RUNTIME_CI') != '1'):
+        raise SystemExit('Only for the disposable CI runner, not a workstation.')
+    exercise_fixture(mapped_data=False)
+    exercise_fixture(mapped_data=True)
     print('=== PHP RUNTIME AND HTTPS INGRESS PROTOTYPE PASSED ===')
 
 
