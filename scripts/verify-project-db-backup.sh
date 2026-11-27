@@ -36,6 +36,10 @@ if [[ "$actual" != "$expected" ]]; then
   exit 1
 fi
 gzip -t "$archive"
+if ! command -v mariadb >/dev/null || ! systemctl is-active --quiet mariadb.service; then
+  echo 'MariaDB is not installed or running. Start it explicitly before a database restore test.' >&2
+  exit 1
+fi
 
 # This executes SQL: accept only trusted backups made by this installation.
 # A checksum protects against corruption, not a maliciously constructed dump.

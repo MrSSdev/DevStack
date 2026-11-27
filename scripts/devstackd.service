@@ -1,0 +1,24 @@
+[Unit]
+Description=DevStack local development manager helper
+After=local-fs.target nginx.service php8.5-fpm.service
+Wants=nginx.service php8.5-fpm.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/devstack/daemon/devstackd.py
+Restart=on-failure
+RestartSec=3s
+RuntimeDirectory=devstack
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

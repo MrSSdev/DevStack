@@ -239,6 +239,14 @@ def write_json_atomic(path: pathlib.Path, data: dict[str, Any]) -> None:
             os.unlink(tmp)
 
 
+def ensure_project_registry() -> None:
+    """An empty installation must still support the existing widget reader."""
+    if STATE_FILE.is_symlink() or (STATE_FILE.exists() and not STATE_FILE.is_file()):
+        raise RuntimeError('Nieprawidlowy plik rejestru projektow DevStack.')
+    if not STATE_FILE.exists():
+        write_json_atomic(STATE_FILE, {})
+
+
 def run(argv: list[str], input_text: str | None = None, env: dict[str, str] | None = None) -> str:
     try:
         result = subprocess.run(
@@ -661,10 +669,22 @@ def db_identifiers(slug: str) -> tuple[str, str]:
     return 'dev' + short + suffix, 'ds' + short + suffix
 
 
+def require_mariadb_available() -> None:
+    """Check only for operations explicitly requiring a project MariaDB."""
+    try:
+        available = (os.access('/usr/bin/mariadb', os.X_OK) and
+                     subprocess.run(['/usr/bin/systemctl', 'is-active', '--quiet', 'mariadb.service'],
+                                    capture_output=True, timeout=5, check=False).returncode == 0)
+    except (OSError, subprocess.TimeoutExpired):
+        available = False
+    if not available:
+        raise InputError('MariaDB nie jest zainstalowana lub uruchomiona. Uruchom ja przed operacja projektu.')
+
+
 def mariadb_execute(sql: str) -> None:
     try:
         run(['/usr/bin/mariadb', '--protocol=socket', '--batch', '--skip-column-names'], input_text=sql)
-    except RuntimeError:
+    except (OSError, RuntimeError):
         # Avoid reporting an SQL statement containing the freshly created password.
         raise RuntimeError('MariaDB nie wykonala operacji. Sprawdz log serwera.') from None
 
@@ -721,6 +741,8 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
     pool_file = pool_path(slug)
     if any(p.exists() or p.is_symlink() for p in [site_file, site_link, pool_file]):
         raise InputError('Istnieja juz pliki konfiguracyjne dla tego projektu.')
+    if database:
+        require_mariadb_available()
     generated: list[pathlib.Path] = []
     db_info = None
     pool_created = site_created = link_created = False
@@ -811,6 +833,7 @@ def test_project_database(data: dict[str, Any]) -> dict[str, str]:
     if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9_-]{40,80}', password):
         raise InputError('Nieprawidlowe dane polaczenia z baza.')
 
+    require_mariadb_available()
     with tempfile.TemporaryDirectory(prefix='db-check-', dir='/run/devstack') as temp_dir:
         opts = pathlib.Path(temp_dir) / 'client.cnf'
         fd = os.open(opts, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -825,7 +848,7 @@ def test_project_database(data: dict[str, Any]) -> dict[str, str]:
                           '--protocol=TCP', '--host=127.0.0.1', '--port=3306',
                           '--database=' + expected_name, '--batch',
                           '--skip-column-names', '--silent'], input_text=sql)
-        except RuntimeError:
+        except (OSError, RuntimeError):
             raise RuntimeError('Test MariaDB nie powiodl sie. Sprawdz stan uslugi i uprawnienia konta.') from None
     if result.strip() != '1':
         raise RuntimeError('MariaDB nie zwrocila oczekiwanej wartosci testowej.')
@@ -886,6 +909,7 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
                 or project.get('db_user') != expected_user
                 or slug not in secrets_state):
             raise InputError('Niespojne dane MariaDB. Niczego nie usunieto.')
+        require_mariadb_available()
 
     with tempfile.TemporaryDirectory(prefix='.delete-' + slug + '-', dir=STATE_FILE.parent) as work:
         staged = pathlib.Path(work)
@@ -1417,8 +1441,10 @@ def create(data: dict[str, Any]) -> dict[str, Any]:
                'installer_options': selected, 'installer_option_labels': list(labels.values())}
     job = {'id': secrets.token_hex(16), 'action': 'create', 'engine': engine,
            'slug': slug, 'request': request}
-    if request['database'] and ENGINE_DB_FILE.exists():
-        raise InputError('Poprzednia rezerwacja MariaDB wymaga sprawdzenia przez administratora.')
+    if request['database']:
+        if ENGINE_DB_FILE.exists():
+            raise InputError('Poprzednia rezerwacja MariaDB wymaga sprawdzenia przez administratora.')
+        require_mariadb_available()
     driver = 'mariadb' if request['database'] else 'sqlite'
     settings = {'url': ('https://' if request['https'] else 'http://') + domain,
                 'installer_options': selected}
@@ -1674,6 +1700,7 @@ def handle(raw: bytes) -> bytes:
 
 def serve() -> None:
     config()
+    ensure_project_registry()
     recover_engine_job()
     uid = pwd.getpwnam('devstackweb').pw_uid
     gid = pwd.getpwnam('devstackweb').pw_gid

@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Install only after reading README/SECURITY and running the preflight.
 set -Eeuo pipefail
+project_services=1
+if [[ "${1:-}" == --core-only ]]; then
+  project_services=0
+  shift
+fi
+if [[ "$#" -ne 0 ]]; then
+  echo 'Usage: sudo bash scripts/install.sh [--core-only]' >&2
+  exit 2
+fi
 if [[ "$EUID" -ne 0 ]]; then
   echo 'Use: sudo bash scripts/install.sh' >&2
   exit 1
@@ -24,7 +33,7 @@ if [[ ! -f "$SRC/backend/public/index.html" ]] || [[ ! -d "$SRC/backend/public/a
   echo 'Frontend is not built. First run bash scripts/build-frontend.sh as normal user.' >&2
   exit 1
 fi
-if [[ ! -f "$SRC/backend/public/index.php" || ! -f "$SRC/daemon/devstackd.py" || ! -f "$SRC/daemon/project_frameworks.py" ]]; then
+if [[ ! -f "$SRC/backend/public/index.php" || ! -f "$SRC/daemon/devstackd.py" || ! -f "$SRC/daemon/project_frameworks.py" || ! -f "$SRC/scripts/devstackd.service" ]]; then
   echo 'Source tree is incomplete.' >&2
   exit 1
 fi
@@ -34,7 +43,11 @@ if ! command -v systemctl >/dev/null || [[ "$(ps -p 1 -o comm=)" != systemd ]]; 
 fi
 printf '[1/8] Installing official Ubuntu prerequisites...\n'
 apt-get update
-apt-get install -y nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-xml php8.5-sqlite3 php8.5-mbstring mariadb-server redis-server mkcert acl python3 ca-certificates
+packages=(nginx php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-xml php8.5-sqlite3 php8.5-mbstring mkcert acl python3 ca-certificates)
+if [[ "$project_services" -eq 1 ]]; then
+  packages+=(mariadb-server redis-server)
+fi
+apt-get install -y "${packages[@]}"
 printf '[2/8] Creating unprivileged panel account and root-owned directories...\n'
 if ! id devstackweb >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin devstackweb
@@ -53,7 +66,7 @@ cp -a "$SRC/backend/mail-preview.php" /opt/devstack/mail-preview.php
 for item in notifications.php; do
   install -m 0644 -o root -g root "$SRC/backend/$item" "/opt/devstack/$item"
 done
-for item in notifications-worker.php devstack-notifications.service devstack-notifications.timer; do
+for item in notifications-worker.php devstack-notifications.service devstack-notifications.timer devstackd.service; do
   install -m 0644 -o root -g root "$SRC/scripts/$item" "/opt/devstack/scripts/$item"
 done
 install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/devstackd.py
@@ -141,39 +154,19 @@ server {
 NGINX
 ln -s /etc/nginx/sites-available/devstack-manager.conf /etc/nginx/sites-enabled/devstack-manager.conf
 printf '[6/8] Installing restricted systemd helper...\n'
-cat > /etc/systemd/system/devstackd.service <<'UNIT'
-[Unit]
-Description=DevStack local development manager helper
-After=local-fs.target nginx.service php8.5-fpm.service mariadb.service
-Wants=nginx.service php8.5-fpm.service mariadb.service
-
-[Service]
-Type=simple
-User=root
-Group=root
-ExecStart=/usr/bin/python3 /opt/devstack/daemon/devstackd.py
-Restart=on-failure
-RestartSec=3s
-RuntimeDirectory=devstack
-RuntimeDirectoryMode=0750
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+install -m 0644 -o root -g root "$SRC/scripts/devstackd.service" /etc/systemd/system/devstackd.service
 printf '[7/8] Select local panel authentication (password is recommended)...\n'
 /usr/bin/php /opt/devstack/scripts/configure-auth.php --setup
 printf '[8/8] Validating and starting services...\n'
 php-fpm8.5 -t
 nginx -t
 systemctl daemon-reload
-systemctl enable --now nginx php8.5-fpm mariadb redis-server
+systemctl enable --now nginx php8.5-fpm
+# Installing optional project services is an explicit choice of the full
+# first-install path, not a dependency of the DevStack helper.
+if [[ "$project_services" -eq 1 ]]; then
+  systemctl enable --now mariadb redis-server
+fi
 systemctl reload php8.5-fpm
 systemctl reload nginx
 systemctl enable --now devstackd
@@ -185,6 +178,9 @@ systemctl start devstack-notifications.service
 [[ "$(systemctl show -p ExecMainStatus --value devstack-notifications.service)" == 0 ]]
 systemctl enable --now devstack-notifications.timer
 curl -fsSk --resolve devstack.test:443:127.0.0.1 https://devstack.test/ | grep -q '<div id="root"></div>'
-systemctl --no-pager is-active devstackd nginx php8.5-fpm mariadb redis-server
+systemctl --no-pager is-active devstackd nginx php8.5-fpm
+if [[ "$project_services" -eq 1 ]]; then
+  systemctl --no-pager is-active mariadb redis-server
+fi
 printf '\nDevStack installed on WSL. Run windows/sync-hosts.ps1 as Windows Administrator.\n'
 printf 'Protect /var/lib/devstack/ca/rootCA-key.pem and all secret/state files.\n'

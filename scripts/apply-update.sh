@@ -2,7 +2,8 @@
 # Root-only second stage for scripts/update.sh. Do not run by itself.
 # Stages files, backs up the previous code, verifies syntax, swaps directories,
 # checks live services and automatically restores the old code on failure.
-# Does not touch /var/lib/devstack, /etc/devstack, project files or databases.
+# Preserves project/state data. The known legacy helper unit is independently
+# corrected so a code rollback cannot start an optional database service.
 set -Eeuo pipefail
 umask 077
 
@@ -44,7 +45,7 @@ fi
 
 for file in backend/public/index.php backend/public/index.html backend/public/sw.js backend/public/manifest.webmanifest backend/public/pwa/icon-192.png backend/public/pwa/icon-512.png backend/public/pwa/devstack.svg backend/security.php backend/mail-preview.php backend/notifications.php \
     daemon/devstackd.py daemon/project_frameworks.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
-    scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/devstack-notifications.service scripts/devstack-notifications.timer; do
+    scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/devstack-notifications.service scripts/devstack-notifications.timer scripts/devstackd.service; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
     echo "Missing or unsafe source file: $file" >&2
     exit 1
@@ -69,6 +70,8 @@ stage_dir="$(mktemp -d /opt/.devstack-stage.XXXXXXXX)"
 prior_dir="$stage_dir.previous"
 old_moved=0
 notice_units_created=0
+core_unit_changed=0
+unit_tmp=''
 notice_timer_was_active=0
 if systemctl is-active --quiet devstack-notifications.timer; then notice_timer_was_active=1; fi
 
@@ -76,6 +79,10 @@ rollback() {
   local status="$1"
   trap - ERR INT TERM
   set +e
+  if [[ -n "$unit_tmp" ]]; then rm -f -- "$unit_tmp"; fi
+  if [[ "$core_unit_changed" -eq 1 ]]; then
+    echo 'The compatible core-unit dependency correction is retained; the prior unit is in the protected backup.' >&2
+  fi
   if [[ "$notice_units_created" -eq 1 ]]; then
     systemctl disable --now devstack-notifications.timer
     systemctl stop devstack-notifications.service
@@ -88,8 +95,9 @@ rollback() {
       mv -- /opt/devstack "$stage_dir.failed"
     fi
     mv -- "$prior_dir" /opt/devstack
-    systemctl restart devstackd
-    systemctl reload php8.5-fpm
+    if ! systemctl restart devstackd || ! systemctl reload php8.5-fpm; then
+      echo 'CRITICAL: previous-code service restart failed; inspect the protected backup.' >&2
+    fi
     if [[ "$notice_timer_was_active" -eq 1 ]]; then systemctl start devstack-notifications.timer; fi
     if [[ ! -d /opt/devstack ]]; then
       echo 'CRITICAL: automatic rollback failed; restore from protected backup!' >&2
@@ -131,7 +139,7 @@ install -d -m 0755 -o root -g root "$stage_dir/framework-installers" "$stage_dir
 for item in README.md catalog.json common.py registry.py runner.py laravel/README.md laravel/__init__.py laravel/adapter.py; do
   install -m 0644 -o root -g root "$src/framework-installers/$item" "$stage_dir/framework-installers/$item"
 done
-for item in list-domains.py watch-domains.py set-password.php configure-auth.php notifications-worker.php devstack-notifications.service devstack-notifications.timer; do
+for item in list-domains.py watch-domains.py set-password.php configure-auth.php notifications-worker.php devstack-notifications.service devstack-notifications.timer devstackd.service; do
   install -m 0644 -o root -g root "$src/scripts/$item" "$stage_dir/scripts/$item"
 done
 
@@ -167,6 +175,38 @@ PY
 nginx -t
 php-fpm8.5 -t
 
+# Only replace the exact unit previously shipped by DevStack. Do not
+# overwrite administrator customizations or follow a symlink. This change
+# is compatible with the old Python daemon and deliberately survives a
+# code rollback: restoring Wants=mariadb.service would wake a stopped DB.
+unit_path=/etc/systemd/system/devstackd.service
+new_unit="$stage_dir/scripts/devstackd.service"
+if [[ ! -f "$unit_path" || -L "$unit_path" ||
+      "$(systemctl show -p FragmentPath --value devstackd.service)" != "$unit_path" ]]; then
+  echo 'Unexpected DevStack helper unit location; refusing update.' >&2
+  false
+fi
+if ! cmp -s "$unit_path" "$new_unit"; then
+  if ! cmp -s "$unit_path" <(sed -e '/^After=local-fs.target nginx.service php8.5-fpm.service$/s/$/ mariadb.service/' -e '/^Wants=nginx.service php8.5-fpm.service$/s/$/ mariadb.service/' "$new_unit"); then
+    echo 'DevStack helper unit has custom changes; review them before upgrading.' >&2
+    false
+  fi
+  cp -a -- "$unit_path" "$backup_dir/devstackd.service.before"
+  unit_tmp="$(mktemp /etc/systemd/system/.devstackd-XXXXXXXX)"
+  install -m 0644 -o root -g root "$new_unit" "$unit_tmp"
+  mv -T -- "$unit_tmp" "$unit_path"
+  core_unit_changed=1
+  unit_tmp=''
+fi
+systemctl daemon-reload
+# Also catch a local drop-in or dependency symlink that would undo the
+# correction. Inspect the effective unit before any helper restart.
+dependencies="$(systemctl show --value -p Wants -p Requires -p Requisite -p BindsTo -p Upholds devstackd.service)"
+if grep -Eq '(^|[[:space:]])(mariadb|mysql|mysqld|redis|redis-server)(@[^[:space:]]*)?\.service([[:space:]]|$)' <<< "$dependencies"; then
+  echo 'DevStack helper still depends on an optional project service; review local systemd overrides.' >&2
+  false
+fi
+
 echo '[update] Swapping installed code and restarting the helper...'
 # Keep the previous application in /opt for same-filesystem atomic renames.
 if [[ "$notice_timer_was_active" -eq 1 ]]; then systemctl stop devstack-notifications.timer; fi
@@ -190,7 +230,7 @@ mv -- "$stage_dir" /opt/devstack
 systemctl restart devstackd
 systemctl reload php8.5-fpm
 
-for service in devstackd nginx php8.5-fpm mariadb redis-server; do
+for service in devstackd nginx php8.5-fpm; do
   if ! systemctl is-active --quiet "$service"; then
     echo "Required DevStack service is inactive: $service" >&2
     false
@@ -238,4 +278,7 @@ old_moved=0
 trap - ERR INT TERM
 echo 'DevStack update successful.'
 echo "Previous-code backup kept at: $backup_dir/installed"
-echo 'Persistent state, project code, MariaDB and mkcert CA were not changed.'
+echo 'Persistent state, project code, MariaDB/Redis service state and mkcert CA were preserved.'
+if [[ "$core_unit_changed" -eq 1 ]]; then
+  echo "Previous helper unit kept at: $backup_dir/devstackd.service.before"
+fi

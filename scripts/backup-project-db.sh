@@ -49,6 +49,11 @@ print(expected)
 PY
 )"
 
+if ! command -v mariadb >/dev/null || ! command -v mariadb-dump >/dev/null || ! systemctl is-active --quiet mariadb.service; then
+  echo 'MariaDB is not installed or running. Start it explicitly before a project backup.' >&2
+  exit 1
+fi
+
 if ! mariadb --batch --skip-column-names -e \
   "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$db_name';" |
     grep -Fxq "$db_name"; then

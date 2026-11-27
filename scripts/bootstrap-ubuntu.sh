@@ -2,6 +2,10 @@
 # Fresh Ubuntu 26.04 / WSL2 bootstrap from an inspected DevStack git checkout.
 # Run as the ordinary Ubuntu user. The actual installer prompts before setup.
 set -Eeuo pipefail
+if [[ "$#" -gt 1 || ( "$#" -eq 1 && "$1" != --core-only ) ]]; then
+  echo 'Usage: bash scripts/bootstrap-ubuntu.sh [--core-only]' >&2
+  exit 2
+fi
 
 if [[ "${EUID}" -eq 0 ]]; then
   echo 'Run as a normal Ubuntu developer, not as root/sudo.' >&2
@@ -44,7 +48,7 @@ echo '[4/5] Running tests that do not require privileged services...'
 python3 -m unittest discover -s tests -v
 
 echo '[5/5] Installing DevStack server (requires sudo and auth-mode selection)...'
-sudo bash scripts/install.sh
+sudo bash scripts/install.sh "$@"
 
 echo
 echo 'Ubuntu installation finished. Open elevated Windows PowerShell and run:'
