@@ -6,6 +6,7 @@ on:
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
       - 'daemon/project_mounts.py'
+      - 'daemon/project_idmap.py'
       - 'daemon/project_runtime_launch.py'
       - 'daemon/project_runtime_identity.py'
       - 'daemon/project_access.py'
@@ -28,6 +29,7 @@ on:
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
       - 'daemon/project_mounts.py'
+      - 'daemon/project_idmap.py'
       - 'daemon/project_runtime_launch.py'
       - 'daemon/project_runtime_identity.py'
       - 'daemon/project_access.py'

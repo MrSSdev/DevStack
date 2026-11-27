@@ -708,3 +708,37 @@ UID reuse, preserve existing data/ACLs and recover cleanly after stop,
 restart, failed activation and WSL restart. Never pass CAP_SYS_ADMIN to
 an application or agent. Keep activation blocked until the actual
 compatibility and security requirements are satisfied.
+
+
+### Descriptor-based ID-mapped publication and managed runtime filters (E1.3j)
+
+The next implementation step replaces the disposable IDMAP smoke's
+path-based mount call with an internal detached mount primitive.
+`open_tree(2)` clones the already pinned directory non-recursively,
+`mount_setattr(2)` applies one exact non-root UID/GID mapping and
+nosuid/nodev/noexec before publication, and `move_mount(2)` attaches
+the clone to an already pinned, empty protected target. No checked
+source pathname is reopened; the test deliberately replaces that name.
+The primitive rejects a mismatched source owner and nonempty target.
+It creates a dedicated mapping user namespace with only the exact
+requested IDs; it never exposes a command interface to an agent.
+Unavailability or mismatched attributes are errors, not a fallback
+to a broader bind mount.
+
+The same socket/syscall restrictions accepted on the workstation are
+applied to the existing disposable systemd PHP/HTTP runtime pair:
+native syscall architecture, allow AF_UNIX/INET/INET6/NETLINK, reject
+other socket families, deny io_uring, and retain NoNewPrivileges.
+The real FPM worker and a fixed child probe must demonstrate the
+effective policy in the existing FPM/HTTPS smoke. The host gateway,
+developer session, Windows interop outside the sandbox, local model,
+and unrelated services are not changed.
+
+This is not a production mount authorization API. The new primitive
+is exercised only in the existing private CI mount namespace.
+A protected publication registry, stable source/target and mount
+identities, enrollment/hardlink policy, lifecycle cleanup and
+recovery, and integration of mapped writable directories into the
+real FPM/HTTP pair remain required before activating project
+isolation. Existing ACL/FPM mode-limit assertions stay in place
+until that integration passes.

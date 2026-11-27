@@ -68,6 +68,8 @@ class RuntimePlan:
             '--tmpfs', '/tmp', '--dir', '/home', '--dir', '/mnt',
             '--dir', '/run', '--dir', '/etc',
         ]
+        if Path('/usr/lib/wsl').is_dir():
+            args += ['--tmpfs', '/usr/lib/wsl']
         args += mounts.bind('')
         for relative in WRITABLE:
             args += mounts.bind(relative, writable=True, optional=True)
