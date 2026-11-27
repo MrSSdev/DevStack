@@ -18,6 +18,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 from project_runtime_identity import verify_binding
+from project_idmap import IdMapping, IdmapError, publish_idmapped
+from project_mounts import DIR_FLAGS
 
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'}
 
@@ -163,13 +165,52 @@ def main():
             view.mkdir(mode=0o700)
             sources.append(source)
             views.append(view)
-            # Map the on-disk developer UID/GID to the runtime's apparent
-            # UID/GID, exactly one ID of each kind; no root/range mapping.
-            mapping = ('X-mount.idmap=u:' + str(developer.pw_uid) + ':' +
-                       str(account.pw_uid) + ':1 g:' + str(developer.pw_gid) +
-                       ':' + str(account.pw_gid) + ':1,nosuid,nodev,noexec')
-            run('/usr/bin/mount', '-n', '--bind', '-o', mapping,
-                str(source), str(view))
+            # Pin the source and publication target before constructing the
+            # detached tree. Never pass a path to the privileged mount API.
+            mapping = IdMapping(developer.pw_uid, developer.pw_gid,
+                                account.pw_uid, account.pw_gid)
+            source_fd = os.open(source, DIR_FLAGS)
+            view_fd = os.open(view, DIR_FLAGS)
+            try:
+                # A nonempty root-owned target is not a publication slot.
+                if index == 0:
+                    (view / 'unexpected').touch()
+                    try:
+                        try:
+                            publish_idmapped(source_fd, view_fd, mapping)
+                        except IdmapError:
+                            pass
+                        else:
+                            raise AssertionError('Nonempty publication accepted')
+                    finally:
+                        (view / 'unexpected').unlink()
+                    wrong = IdMapping(account.pw_uid, account.pw_gid,
+                                      developer.pw_uid, developer.pw_gid)
+                    try:
+                        publish_idmapped(source_fd, view_fd, wrong)
+                    except IdmapError:
+                        pass
+                    else:
+                        raise AssertionError('Wrong source owner accepted')
+                    # Replace the source pathname after descriptor selection.
+                    # The detached mount must still refer to the original
+                    # inode, not to the unrelated directory behind a symlink.
+                    moved = work / 'pinned-original'
+                    source.rename(moved)
+                    source.symlink_to(code, target_is_directory=True)
+                    try:
+                        publish_idmapped(source_fd, view_fd, mapping)
+                        assert (view / 'seed').read_text() == 'developer'
+                        assert not (view / 'marker').exists()
+                    finally:
+                        source.unlink()
+                        moved.rename(source)
+                    print('PASS: FD publication rejects wrong owner/nonempty target and survives source replacement', flush=True)
+                else:
+                    publish_idmapped(source_fd, view_fd, mapping)
+            finally:
+                os.close(view_fd)
+                os.close(source_fd)
             assert owner(source) == (developer.pw_uid, developer.pw_gid)
             assert owner(view) == (account.pw_uid, account.pw_gid)
             assert os.path.samestat(source.stat(), view.stat())
