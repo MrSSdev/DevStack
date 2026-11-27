@@ -15,6 +15,7 @@ import subprocess
 import time
 
 from project_http import ProjectHttp, gateway_config
+from project_lifecycle import LifecycleError, RuntimePair, StartError
 
 
 def run(*args, **kwargs):
@@ -27,15 +28,6 @@ def launch(unit, user, args):
         '--property=NoNewPrivileges=yes', '--property=KillMode=control-group',
         '--property=UMask=0007', '--property=TimeoutStopSec=5s',
         '--property=RuntimeMaxSec=180s', *args)
-
-
-def wait_socket(path):
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if path.is_socket():
-            return
-        time.sleep(0.1)
-    raise RuntimeError('HTTP socket not ready: ' + str(path))
 
 
 def prepare_public(root, user, developer, name, other, outside):
@@ -72,7 +64,7 @@ def exercise_http(base, token, plans, users, developer, identities, attempted,
     assert as_user('www-data', '/usr/bin/cat', str(outside),
                    capture_output=True).stdout == 'OUTSIDE_FIXTURE_SECRET'
     routes = {}
-    http_units = []
+    pairs = []
     for index, name in enumerate(('a', 'b')):
         runtime = plans[index]
         user = users[index]
@@ -97,11 +89,35 @@ else:
         plan = ProjectHttp(runtime, config, sockets)
         config.write_text(plan.nginx_config())
         config.chmod(0o644)
-        unit = 'devstack-http-probe-' + user
-        attempted.append(unit)
-        http_units.append(unit)
-        launch(unit, user, plan.argv())
-        wait_socket(sockets / 'http.sock')
+        pair = RuntimePair(plan, user)
+        attempted.extend(pair.units)
+        # A colliding unit name is not an authorization to stop it.
+        if index == 0:
+            run('systemd-run', '--quiet', '--collect', '--service-type=exec',
+                '--unit=' + pair.php.unit, '--uid=' + user,
+                '--description=Unrelated disposable fixture', '/usr/bin/sleep', '30')
+            try:
+                try:
+                    pair.start()
+                except LifecycleError:
+                    pass
+                else:
+                    raise AssertionError('Foreign unit accepted by lifecycle')
+                run('systemctl', 'is-active', '--quiet', pair.php.unit)
+            finally:
+                stop(pair.php.unit)
+            print('PASS: Foreign unit collision refused without stopping it', flush=True)
+        assert pair.status() == 'stopped'
+        assert pair.start() == 'running'
+        # Idempotent start must not replace either transient invocation.
+        def invocation(unit):
+            return run('systemctl', 'show', '-p', 'InvocationID', '--value', unit,
+                       capture_output=True).stdout.strip()
+        before = tuple(invocation(unit) for unit in pair.units)
+        assert all(before)
+        assert pair.start() == 'running'
+        assert tuple(invocation(unit) for unit in pair.units) == before
+        pairs.append(pair)
         routes[name + '.fixture.test'] = plan
 
     work = base / 'gateway'
@@ -174,9 +190,41 @@ else:
         assert payload['other_hidden'] and payload['network_blocked']
         print('PASS: HTTPS, PHP routing, static assets and published storage', name, flush=True)
         print('PASS: Host/sibling/private symlinks, hidden and PHP source denied', name, flush=True)
-    stop(http_units[0])
+
+    a, b = pairs
+    assert a.stop() == 'stopped'
+    assert a.stop() == 'stopped'
+    assert a.status() == 'stopped' and b.status() == 'running'
     assert request('a.fixture.test', '/build/assets/app.js')[0] == 502
     assert request('b.fixture.test', '/build/assets/app.js')[0] == 200
     print('PASS: Ingress fails closed and other project remains available', flush=True)
+    # Force a real Nginx startup failure after PHP has started. The control
+    # file is root-owned; neither project is asked to execute test shell code.
+    config = a.plan.config
+    original = config.read_text()
+    try:
+        config.write_text('invalid_fixture_directive;\n')
+        try:
+            a.start()
+        except StartError as exc:
+            assert exc.component == 'http' and exc.rolled_back, exc
+        else:
+            raise AssertionError('Broken HTTP configuration unexpectedly accepted')
+        assert a.status() == 'stopped' and b.status() == 'running'
+        assert request('a.fixture.test', '/')[0] == 502
+        assert request('b.fixture.test', '/build/assets/app.js')[0] == 200
+    finally:
+        config.write_text(original)
+    print('PASS: Real partial startup rolled back; sibling remains running', flush=True)
+    assert a.start() == 'running'
+    status, body, _ = request('a.fixture.test', '/after-rollback')
+    assert status == 200 and json.loads(body)['sqlite_count'] == 4, (status, body)
+    assert a.restart() == 'running'
+    status, body, _ = request('a.fixture.test', '/after-restart')
+    assert status == 200 and json.loads(body)['sqlite_count'] == 5, (status, body)
+    assert b.status() == 'running'
+    verify(plans[1], 'b', identities[1], host_net, 3)
+    print('PASS: Pair restart preserves SQLite data and independent project', flush=True)
+    assert a.stop() == 'stopped'
+    assert b.stop() == 'stopped'
     stop(unit)
-    stop(http_units[1])

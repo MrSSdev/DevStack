@@ -175,6 +175,33 @@ source lifecycle, hardlink handling and management APIs are still
 separate acceptance gates. Per-project HTTP worker overhead and lazy
 activation must be considered before production integration.
 
+## Isolated runtime lifecycle (E1.3c, fixture-only)
+
+`daemon/project_lifecycle.py` coordinates a fixed PHP-FPM/HTTP pair:
+start PHP then HTTP, check both transient unit identities and actual
+Unix listener connectivity, stop HTTP before PHP, serialize per-project
+operations with a root-owned lock, and roll back a partial startup.
+Repeated start/stop is idempotent; restart does not touch source or
+database files. Observed status is running/stopped/degraded; inability
+to verify ownership or state is an error, not a stopped result. Listener
+readiness is not a proof of application health. A mismatched unit
+description, account or transient identity is refused rather than
+stopped. An unprivileged fixed-path check, not a root unlink or generic
+command endpoint, handles stale fixture sockets. There is no fallback to
+the shared PHP pool.
+
+The real test now uses the lifecycle after the independent FPM assertions,
+keeps both SQLite databases, and induces a real invalid HTTP config after
+PHP startup. It checks rollback, sibling HTTPS availability, idempotent
+start/stop, foreign-unit refusal, restart and database continuity.
+The controller requires the protected /var/lib disposable fixture layout
+and is not registered with devstackd, installed as a service, or exposed
+to the panel. This deliberately does not solve persistent runtime ownership,
+crash recovery of a deployment transaction, safe mounting of a developer
+tree, production socket publication, account/ACL provisioning, selective
+networking, project authorization or Windows isolation. Those are gates
+before production integration, not features inferred from fixture tests.
+
 ## Configuration management and adapters
 
 DevStack is a management plane, not a mandatory AI chat client or runtime.

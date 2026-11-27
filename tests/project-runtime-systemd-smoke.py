@@ -300,12 +300,13 @@ with sqlite3.connect(sys.argv[1]) as db:
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
                     str(plan.sockets / 'php.sock'))
         print('PASS: Separate identities, sockets and developer access')
+        # Hand off the same fixture data to the real pair lifecycle. Never
+        # run a legacy/direct FPM instance alongside the new pair.
+        for index, unit in enumerate(units):
+            stop(unit)
+            assert_socket_closed(plans[index].sockets / 'php.sock')
         exercise_http(base, token, plans, users, developer, identities, attempted,
                       as_user, stop, verify, host_net)
-        stop(units[0])
-        assert_socket_closed(plans[0].sockets / 'php.sock')
-        verify(plans[1], 'b', identities[1], host_net, 3)
-        print('PASS: Independent project stop')
     except BaseException:
         for unit in attempted:
             subprocess.run(['journalctl', '-u', unit, '--no-pager', '-n', '60'],

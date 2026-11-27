@@ -6,6 +6,8 @@ on:
     paths:
       - 'daemon/project_runtime.py'
       - 'daemon/project_http.py'
+      - 'daemon/project_lifecycle.py'
+      - 'tests/test_project_lifecycle.py'
       - 'tests/project_http_smoke.py'
       - 'tests/project-runtime-systemd-smoke.py'
       - '.github/workflows/project-runtime.yml'
@@ -14,6 +16,8 @@ on:
     paths:
       - 'daemon/project_runtime.py'
       - 'daemon/project_http.py'
+      - 'daemon/project_lifecycle.py'
+      - 'tests/test_project_lifecycle.py'
       - 'tests/project-runtime-systemd-smoke.py'
       - 'tests/project_http_smoke.py'
       - '.github/workflows/project-runtime.yml'
@@ -24,7 +28,7 @@ permissions:
 
 jobs:
   runtime:
-    name: Two isolated PHP-FPM instances, SQLite and real HTTPS ingress
+    name: Two isolated project runtimes, HTTPS and transactional lifecycle
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -37,5 +41,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends bubblewrap acl libfcgi-bin php8.5-fpm php8.5-sqlite3 nginx openssl
       - name: Check and exercise prototype
         run: |
-          python3 -m py_compile daemon/project_runtime.py daemon/project_http.py tests/project-runtime-systemd-smoke.py tests/project_http_smoke.py
+          python3 -m py_compile daemon/project_runtime.py daemon/project_http.py daemon/project_lifecycle.py tests/project-runtime-systemd-smoke.py tests/project_http_smoke.py
+          python3 -m unittest discover -s tests -p test_project_lifecycle.py -v
           sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 python3 -I tests/project-runtime-systemd-smoke.py
