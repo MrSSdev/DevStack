@@ -264,12 +264,32 @@ def main():
             run('getfacl', '-p', str(output))
             run('namei', '-l', str(output))
             as_user(developer_name, '/usr/bin/id')
-            as_user(developer_name, '/usr/bin/test', '-w', str(output))
-            as_user(developer.pw_name, '/usr/bin/python3', '-c',
-                    'import sys; open(sys.argv[1], "a").write("-developer")', str(output))
+            # Do not infer functional write access from an access(2) probe.
+            # Exercise the actual open/write operation and verify its effect.
+            as_user(developer_name, '/usr/bin/python3', '-c', '''
+import os, sys
+p = sys.argv[1]
+s = os.stat(p)
+print("Developer file probe:", os.getuid(), os.getgroups(),
+      s.st_uid, s.st_gid, oct(s.st_mode), "access(W_OK) =", os.access(p, os.W_OK),
+      flush=True)
+with open(p, "a") as stream:
+    stream.write("-developer")
+''', str(output))
             assert output.read_text() == 'runtime-developer'
-            as_user(developer.pw_name, '/usr/bin/test', '-w',
-                    str(plan.project / 'database/fixture.sqlite'))
+            # The CLI must also be able to commit a real transaction in the
+            # same SQLite database. Use an independent table so the existing
+            # FPM request count remains a useful regression assertion.
+            as_user(developer_name, '/usr/bin/python3', '-c', '''
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute("CREATE TABLE developer_probe (value TEXT NOT NULL)")
+    db.execute("INSERT INTO developer_probe VALUES (?)", ("developer",))
+''', str(plan.project / 'database/fixture.sqlite'))
+            import sqlite3
+            with sqlite3.connect(plan.project / 'database/fixture.sqlite') as db:
+                assert db.execute('SELECT value FROM developer_probe').fetchall() == [('developer',)]
+            print('PASS: Developer writes PHP-created file and SQLite', index, flush=True)
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
                     str(plan.sockets / 'php.sock'))
         print('PASS: Separate identities, sockets and developer access')
