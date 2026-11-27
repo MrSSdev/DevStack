@@ -1,0 +1,35 @@
+name: Bubblewrap LTS backport experiment
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/bubblewrap-backport-ci.sh'
+      - '.github/workflows/bubblewrap-backport.yml'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tests/bubblewrap-backport-ci.sh'
+      - '.github/workflows/bubblewrap-backport.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  backport:
+    name: Authenticated source rebuild on Ubuntu 26.04 amd64
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build, test and roll back the temporary package
+        run: bash tests/bubblewrap-backport-ci.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bubblewrap-resolute-test-backport-amd64
+          path: bubblewrap-backport-ci-output/
+          if-no-files-found: error
+          retention-days: 7
