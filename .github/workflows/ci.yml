@@ -3,8 +3,14 @@ name: DevStack CI
 on:
   push:
     branches: [main, test/windows-local-notifications, test/windows-component-layout]
+    paths-ignore:
+      - 'extensions/devstack-tools/**'
+      - '.github/workflows/devstack-tools.yml'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'extensions/devstack-tools/**'
+      - '.github/workflows/devstack-tools.yml'
   workflow_dispatch:
 
 permissions:

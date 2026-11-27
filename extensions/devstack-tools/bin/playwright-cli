@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# Use the CLI built into the exact same Playwright package, not a second npm tree.
+# The explicit CLI browser option can still select another installed browser.
+export PLAYWRIGHT_MCP_BROWSER="${PLAYWRIGHT_MCP_BROWSER:-chromium}"
+exec /opt/devstack-tools/bin/playwright cli "$@"
