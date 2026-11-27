@@ -1346,6 +1346,11 @@ class BrowserAcceptance(unittest.TestCase):
                 if(!toast.hasAttribute('data-ending-style')||!animations.length)throw new Error('No running exit animation to exercise');
                 const finished=Promise.allSettled(animations.map(a=>a.finished));
                 target.click();
+                // The browser or React may synchronously resolve styles during
+                // dialog focus restoration, before MutationObserver delivery.
+                // Exercise that ordering explicitly; a late move must fail.
+                toast.getBoundingClientRect();
+                toast.getAnimations();
                 await frame();
                 const parent=opening?document.querySelector('dialog:modal'):document.body;
                 const moved=!!parent&&host.parentElement===parent&&toast.isConnected&&host.contains(toast);
@@ -1354,10 +1359,10 @@ class BrowserAcceptance(unittest.TestCase):
             }""",{'opening':opening,'subject':subject})
             self.assertGreater(result['animations'],0,result)
             self.assertTrue(result['moved'],result)
+            self.assertEqual(result['cancelled'],0,{'opening':opening,**result})
             # Count the actual DOM item, INCLUDING data-ending-style. Merely
             # hiding or filtering out the stuck toast is not a successful exit.
             expect(notice).to_have_count(0,timeout=5000)
-            self.assertEqual(result['cancelled'],0,result)
             expect(self.page.locator('dialog:modal')).to_have_count(1 if opening else 0)
         expect(self.page.locator('body > [data-slot="toast-host"]')).to_have_count(1)
         expect(all_toasts).to_have_count(0)

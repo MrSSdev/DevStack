@@ -54,9 +54,10 @@ function useToastHost() {
   const [host]=useState(()=>document.createElement('div'))
   useEffect(()=>{
     host.dataset.slot='toast-host'
-    const sync=()=>{
-      const dialogs=document.querySelectorAll<HTMLDialogElement>('dialog:modal')
-      const parent=dialogs.item(dialogs.length-1)??document.body
+    const sync=(closing?:HTMLDialogElement)=>{
+      const dialogs=Array.from(document.querySelectorAll<HTMLDialogElement>('dialog:modal'))
+        .filter(dialog=>dialog!==closing)
+      const parent=dialogs.at(-1)??document.body
       if(host.parentElement===parent)return
       // appendChild disconnects and reconnects descendants, cancelling their
       // CSS transitions. Base UI 1.6 waits on Animation.finished to remove
@@ -71,10 +72,26 @@ function useToastHost() {
         parent.appendChild(host)
       }
     }
+    // Closing a native dialog hides its descendants before the mutation
+    // observer runs. A synchronous layout/focus update in that interval can
+    // cancel even state-preserving moves' animations. Evacuate the live
+    // host while the closing dialog is still rendered. beforetoggle does
+    // not bubble; capture it at document level (including requestClose).
+    const beforeToggle=(event:Event)=>{
+      const closing=event.target
+      if(closing instanceof HTMLDialogElement && (event as ToggleEvent).newState==='closed' && host.parentElement===closing){
+        sync(closing)
+      }
+    }
+    document.addEventListener('beforetoggle',beforeToggle,true)
     sync()
-    const observer=new MutationObserver(sync)
+    const observer=new MutationObserver(()=>sync())
     observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['open']})
-    return ()=>{observer.disconnect();host.remove()}
+    return ()=>{
+      observer.disconnect()
+      document.removeEventListener('beforetoggle',beforeToggle,true)
+      host.remove()
+    }
   },[host])
   return host
 }
