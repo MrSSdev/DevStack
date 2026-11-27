@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_runtime import RuntimePlan, fpm_config
 from project_http_smoke import exercise_http
+from project_lifecycle import RUNTIME_SECURITY_PROPERTIES
 from project_runtime_identity import IdentityError, provision_fixture, verify_binding
 
 PHP = r'''<?php
@@ -41,7 +42,56 @@ file_put_contents($restricted, 'private fixture');
 chmod($restricted, 0600);
 $net = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.3);
 if ($net) { fclose($net); }
+// Run a fixed child of the actual FPM worker to verify inherited filters.
+// No connections to the host and no caller-controlled command.
+$policyProbe = <<<'PY'
+import ctypes, errno, os, socket
+for family, kind in ((socket.AF_UNIX, socket.SOCK_STREAM),
+                     (socket.AF_INET, socket.SOCK_STREAM),
+                     (socket.AF_INET6, socket.SOCK_STREAM),
+                     (socket.AF_NETLINK, socket.SOCK_RAW)):
+    with socket.socket(family, kind):
+        pass
+for family, kind in ((getattr(socket, 'AF_VSOCK', 40), socket.SOCK_STREAM),
+                     (socket.AF_PACKET, socket.SOCK_DGRAM)):
+    try:
+        with socket.socket(family, kind):
+            pass
+    except OSError as exc:
+        if exc.errno != errno.EAFNOSUPPORT:
+            raise
+    else:
+        raise RuntimeError('Unexpected socket family')
+if os.uname().machine != 'x86_64':
+    raise RuntimeError('Unexpected CI architecture')
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+params = ctypes.create_string_buffer(256)
+fd = libc.syscall(425, ctypes.c_uint(1), ctypes.byref(params))
+if fd >= 0:
+    os.close(fd)
+    raise RuntimeError('io_uring unexpectedly allowed')
+if ctypes.get_errno() != errno.ENOSYS:
+    raise RuntimeError('Unexpected io_uring error')
+print('FILTERED')
+PY;
+$proc = proc_open(['/usr/bin/python3', '-I', '-S', '-c', $policyProbe],
+    [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'],
+     2 => ['file', '/dev/null', 'w']], $pipes);
+$policyOK = false;
+if (is_resource($proc)) {
+    $out = stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    $policyOK = proc_close($proc) === 0 && trim($out) === 'FILTERED';
+}
+$processStatus = file_get_contents('/proc/self/status');
+$policyOK = $policyOK
+    && preg_match('/^CapEff:[ \\t]+0+$/m', $processStatus) === 1
+    && preg_match('/^CapPrm:[ \\t]+0+$/m', $processStatus) === 1
+    && preg_match('/^NoNewPrivs:[ \\t]+1$/m', $processStatus) === 1
+    && preg_match('/^Seccomp:[ \\t]+2$/m', $processStatus) === 1;
 $result = [
+    'security_policy' => $policyOK,
     'uid' => posix_geteuid(),
     'gid' => posix_getegid(),
     'own' => trim(file_get_contents($root . '/marker.txt')),
@@ -127,7 +177,7 @@ def fixture(base, name, account, developer, other, port):
 def start(unit, user, plan):
     run('systemd-run', '--quiet', '--collect', '--service-type=exec',
         '--unit=' + unit, '--uid=' + user,
-        '--property=NoNewPrivileges=yes',
+        *RUNTIME_SECURITY_PROPERTIES,
         '--property=KillMode=control-group',
         '--property=UMask=0007',
         '--property=TimeoutStopSec=5s',
@@ -189,7 +239,7 @@ def verify(plan, name, identity, host_net, expected_count):
     assert result['gid'] == identity.pw_gid, result
     assert result['own'] == name, result
     assert result['sqlite_count'] == expected_count, result
-    for field in ('other_hidden', 'link_blocked', 'source_read_only',
+    for field in ('security_policy', 'other_hidden', 'link_blocked', 'source_read_only',
                   'storage_write', 'cache_write', 'nested_write', 'devstack_hidden',
                   'shared_php_hidden', 'windows_hidden', 'home_hidden', 'network_blocked'):
         assert result[field] is True, (field, result)
