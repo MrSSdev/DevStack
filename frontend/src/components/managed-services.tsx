@@ -15,7 +15,7 @@ const labels:Record<string,string>={active:'Działa',inactive:'Zatrzymana',faile
 const actionLabels:Record<Action,string>={start:'Uruchom',stop:'Zatrzymaj',restart:'Uruchom ponownie'}
 function Status({state}:{state:string}){return <Badge className={state==='active'?'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300':undefined}>{labels[state]??state}</Badge>}
 
-export function ManagedServices({services,csrf,request,refresh,blocked,onAutostartSaved}:Props&{blocked:boolean;onAutostartSaved:(id:string,enabled:boolean)=>void}){
+export function ManagedServices({services,csrf,request,refresh,blocked,statusUnavailable,onAutostartSaved}:Props&{blocked:boolean;statusUnavailable:boolean;onAutostartSaved:(id:string,enabled:boolean)=>void}){
   const [selected,setSelected]=useState('')
   const [confirm,setConfirm]=useState<Action|null>(null)
   const [busy,setBusy]=useState(false)
@@ -24,7 +24,7 @@ export function ManagedServices({services,csrf,request,refresh,blocked,onAutosta
   useEffect(()=>{if(current&&!dialog.current?.open)dialog.current?.showModal();if(!current&&dialog.current?.open)dialog.current.close()},[current])
   function close(){if(busy)return;setSelected('');setConfirm(null);dialog.current?.close()}
   async function execute(){
-    if(!current||!confirm||busy||blocked)return
+    if(!current||!confirm||busy||blocked||statusUnavailable)return
     setBusy(true)
     const pending=beginNotice('Zlecanie operacji…',current.name+' — '+actionLabels[confirm])
     try{
@@ -38,7 +38,7 @@ export function ManagedServices({services,csrf,request,refresh,blocked,onAutosta
     finally{setBusy(false)}
   }
   async function saveAutostart(enabled:boolean){
-    if(!current||busy||blocked||confirm||!current.autostart_editable||current.load_state!=='loaded')return
+    if(!current||busy||blocked||statusUnavailable||confirm||!current.autostart_editable||current.load_state!=='loaded')return
     const id=current.id
     setBusy(true)
     const pending=beginNotice('Zapisywanie autostartu…',current.name)
@@ -50,8 +50,9 @@ export function ManagedServices({services,csrf,request,refresh,blocked,onAutosta
     }catch(e){fail(e,pending,'Nie udało się zapisać autostartu.')}
     finally{await refresh();setBusy(false)}
   }
-  const unavailable=blocked||busy||current?.load_state!=='loaded'||['activating','deactivating','reloading'].includes(current?.state??'')
+  const unavailable=blocked||statusUnavailable||busy||current?.load_state!=='loaded'||['activating','deactivating','reloading'].includes(current?.state??'')
   return <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>Stan usług</CardTitle></div><Badge>systemd</Badge></div></CardHeader><CardContent className="space-y-3">
+    {statusUnavailable&&<p role="status" className="text-xs text-muted-foreground">Nie można odczytać aktualnego stanu usług. Ponawianie odczytu…</p>}
     {blocked&&<p className="text-xs text-muted-foreground">Trwa operacja instalatora lub usługi. Sterowanie chwilowo niedostępne.</p>}
     {!services.length&&<p className="text-sm text-muted-foreground">Brak odczytu usług. Odśwież dane.</p>}
     <div className="divide-y">{services.map(s=>{const Icon=icons[s.id as keyof typeof icons]??Activity;return <button type="button" key={s.id} data-service-id={s.id} onClick={()=>{setSelected(s.id);setConfirm(null)}} className="flex w-full items-center gap-2 rounded-md py-2 text-left hover:bg-secondary/50"><span className="flex size-8 shrink-0 items-center justify-center rounded-xl border bg-secondary"><Icon className="size-4"/></span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-1.5 text-sm font-medium"><span>{s.name}</span>{s.autostart===true&&<Badge title={s.panel_dependency?'Uruchamiana z DevStack':'Uruchamiana przy starcie Ubuntu'}>Autostart</Badge>}</span><span className="block text-xs text-muted-foreground">{s.description}</span></span><Status state={s.state}/><ChevronRight className="size-4 shrink-0 text-muted-foreground"/></button>})}</div>

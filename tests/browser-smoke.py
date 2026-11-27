@@ -572,7 +572,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.wait_total(1)
         anonymous=self.browser.new_context()
         self.addCleanup(anonymous.close)
-        for path in ['/api/mail/messages','/api/mail/message/'+'A'*22]:
+        for path in ['/api/mail/messages','/api/mail/message/'+'A'*22,'/api/services/status']:
             self.assertEqual(anonymous.request.get(BASE+path).status,401)
         token=anonymous.request.get(BASE+'/api/session').json()['csrf']
         self.assertEqual(anonymous.request.post(BASE+'/api/mail/clear',data={'confirmation':'delete-all'},headers={'Origin':BASE,'X-CSRF-Token':token}).status,401)
@@ -663,6 +663,88 @@ class BrowserAcceptance(unittest.TestCase):
         dialog.get_by_role('button',name='Uruchom',exact=True).click()
         dialog.get_by_role('button',name='Potwierdź',exact=True).click()
         expect(dialog.get_by_text('Działa',exact=True)).to_be_visible(timeout=12000)
+
+    def test_04b_live_external_service_status(self):
+        # Use real systemd, outside the panel RPC, as the Windows bridge does.
+        # A successful command is not evidence that the displayed state changed.
+        requests=[]
+        self.page.on('request',lambda req: requests.append(req.url))
+        self.goto('dashboard')
+        row=self.page.locator('main button[data-service-id="redis"]')
+        expect(row.get_by_text('Działa',exact=True)).to_be_visible()
+        self.page.wait_for_function("""()=>performance.getEntriesByType('resource').some(e=>e.name.endsWith('/api/services/status')&&e.responseEnd>0)""")
+        response=self.context.request.get(BASE+'/api/services/status')
+        self.assertEqual(response.status,200,response.text())
+        self.assertIn('no-store',response.headers['cache-control'])
+        initial=response.json()['result']
+        self.assertEqual(set(initial),{'services','managed_services','service_action_pending','mailpit'})
+        initial_redis=next(r for r in initial['managed_services'] if r['id']=='redis')
+        full_reads=requests.count(BASE+'/api/state')
+        try:
+            subprocess.run(['sudo','systemctl','stop','redis-server.service'],check=True,timeout=20)
+            expect(row.get_by_text('Zatrzymana',exact=True)).to_be_visible(timeout=6000)
+            row.click()
+            dialog=self.page.locator('dialog:modal')
+            expect(dialog.get_by_text('Zatrzymana',exact=True)).to_be_visible()
+            subprocess.run(['sudo','systemctl','start','redis-server.service'],check=True,timeout=20)
+            expect(dialog.get_by_text('Działa',exact=True)).to_be_visible(timeout=6000)
+            dialog.get_by_role('button',name='Zamknij',exact=True).click()
+            expect(row.get_by_text('Działa',exact=True)).to_be_visible()
+            current=self.context.request.get(BASE+'/api/services/status').json()['result']
+            redis=next(r for r in current['managed_services'] if r['id']=='redis')
+            self.assertEqual(redis['autostart'],initial_redis['autostart'])
+            self.assertEqual(requests.count(BASE+'/api/state'),full_reads,'Fast status must not depend on full state refresh')
+            # Separately exercise an unavailable read, without changing the
+            # real service or the successful start/stop checks above.
+            def unavailable(route):
+                route.fulfill(status=503,json={'ok':False,'error':'Unavailable service snapshot'})
+            self.page.route('**/api/services/status',unavailable)
+            try:
+                expect(row.get_by_text('Brak danych',exact=True)).to_be_visible(timeout=6000)
+                expect(self.page.get_by_text('Nie można odczytać aktualnego stanu usług.',exact=False)).to_be_visible()
+                row.click()
+                expect(dialog.get_by_role('button',name='Uruchom ponownie',exact=True)).to_be_disabled()
+                dialog.get_by_role('button',name='Zamknij',exact=True).click()
+            finally:
+                self.page.unroute('**/api/services/status',unavailable)
+            expect(row.get_by_text('Działa',exact=True)).to_be_visible(timeout=10000)
+            self.assertEqual(subprocess.run(['systemctl','is-active','--quiet','redis-server.service']).returncode,0)
+        finally:
+            subprocess.run(['sudo','systemctl','start','redis-server.service'],check=True,timeout=20)
+
+    def test_04c_live_unexpected_service_failure(self):
+        # The suite runs only on a disposable isolated installation.
+        # Disable automatic process restart TEMPORARILY, so a real crash
+        # has a persistent failed state instead of immediately recovering.
+        # Never alter the service's persistent autostart configuration.
+        unit='redis-server.service'
+        directory='/run/systemd/system/'+unit+'.d'
+        subprocess.run(['sudo','mkdir','-p',directory],check=True)
+        override=subprocess.check_output(['sudo','mktemp','--suffix=.conf',directory+'/zz-devstack-browser-crash-XXXXXX'],text=True).strip()
+        try:
+            subprocess.run(['sudo','tee',override],input='[Service]\nRestart=no\n',text=True,stdout=subprocess.DEVNULL,check=True)
+            subprocess.run(['sudo','systemctl','daemon-reload'],check=True,timeout=20)
+            self.assertEqual(subprocess.check_output(['systemctl','show','-p','Restart','--value',unit],text=True).strip(),'no')
+            self.goto('dashboard')
+            row=self.page.locator('main button[data-service-id="redis"]')
+            expect(row.get_by_text('Działa',exact=True)).to_be_visible()
+            # A real signal to the running unit, not a panel command or fake
+            # API response. The panel must independently observe the crash.
+            subprocess.run(['sudo','systemctl','kill','--signal=SIGKILL',unit],check=True,timeout=10)
+            expect(row.get_by_text('Błąd',exact=True)).to_be_visible(timeout=6000)
+            self.assertEqual(subprocess.check_output(['systemctl','show','-p','ActiveState','--value',unit],text=True).strip(),'failed')
+            row.click()
+            dialog=self.page.locator('dialog:modal')
+            expect(dialog.get_by_text('Błąd',exact=True)).to_be_visible()
+            self.assertTrue(dialog.get_by_role('button',name='Uruchom',exact=True).is_enabled())
+        finally:
+            subprocess.run(['sudo','rm','-f',override],check=True)
+            subprocess.run(['sudo','systemctl','daemon-reload'],check=True,timeout=20)
+            subprocess.run(['sudo','systemctl','reset-failed',unit],check=False,timeout=10)
+            subprocess.run(['sudo','systemctl','start',unit],check=True,timeout=20)
+        expect(dialog.get_by_text('Działa',exact=True)).to_be_visible(timeout=6000)
+        dialog.get_by_role('button',name='Zamknij',exact=True).click()
+        expect(row.get_by_text('Działa',exact=True)).to_be_visible()
 
     def test_07_global_toasts_and_job_presentation(self):
         # Real operations for the shared renderer; separately replay only a
