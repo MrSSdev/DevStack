@@ -102,7 +102,7 @@ php -l backend/notifications.php
 php -l scripts/notifications-worker.php
 php -l scripts/set-password.php
 php -l scripts/configure-auth.php
-python3 -m py_compile daemon/devstackd.py daemon/wsl_ca.py daemon/project_frameworks.py daemon/managed_services.py scripts/list-domains.py scripts/watch-domains.py
+python3 -m py_compile daemon/devstackd.py daemon/wsl_ca.py daemon/project_frameworks.py daemon/project_isolation_preflight.py daemon/managed_services.py scripts/list-domains.py scripts/watch-domains.py
 
 echo '[4/5] Building frontend as non-root...'
 bash scripts/build-frontend.sh

@@ -166,6 +166,29 @@ def journal():
     assert rpc('notification_snapshot')['services']
 
 
+
+def isolation_preflight(slug, *, database=False):
+    installed = Path('/opt/devstack/daemon/project_isolation_preflight.py')
+    assert installed.stat().st_uid == 0 and not installed.stat().st_mode & 0o022
+    before = (STATE/'projects.json').read_bytes()
+    pool = Path('/etc/php/8.5/fpm/pool.d/devstack-'+slug+'.conf')
+    original = pool.read_bytes()
+    result = json.loads(run('/usr/bin/python3', '-I', str(installed),
+                            '--project', slug).stdout)
+    assert result['project'] == slug and result['status'] == 'blocked', result
+    assert result['layout']['project'] == 'present' and result['layout']['webroot'] == 'present', result
+    assert result['settings']['database'] is database
+    assert 'sandbox_backend_security_review' in result['blockers']
+    assert 'production_runtime_not_connected' in result['blockers']
+    assert not result['sandbox']['approved']
+    if database:
+        assert 'project_service_access_review' in result['blockers']
+    assert (STATE/'projects.json').read_bytes() == before and pool.read_bytes() == original
+    rejected = run('/usr/bin/python3', '-I', str(installed), '--project', 'devstack-source', check=False)
+    assert rejected.returncode == 2
+    print('PASS: Installed read-only isolation preflight blocks activation', flush=True)
+
+
 def missing():
     assert UNIT.read_text() == CORE_UNIT
     before = optional_snapshot('missing')
@@ -189,6 +212,8 @@ def missing():
     run('/usr/sbin/runuser','-u',USER,'--','/usr/bin/python3','-c',
         'from pathlib import Path;import sys;Path(sys.argv[1]).write_text(sys.stdin.read())',
         str(PROJECTS/SLUG/'public/index.php'),input=php)
+    assert app_response(SLUG) == '1'
+    isolation_preflight(SLUG)
     assert app_response(SLUG) == '1'
     rpc('set_preferences',{'theme':'dark'})
     rpc('set_widget_services',{'services':['nginx','php']})
@@ -281,6 +306,8 @@ def upgrade():
     wait_rpc()
     assert rpc('get_preferences') == {'theme':'dark'}
     widgets('stopped',2)
+    isolation_preflight(SLUG)
+    isolation_preflight(DB_SLUG, database=True)
     assert app_response(SLUG) == '1'
     reject_create()
     assert 'MariaDB' in rpc('test_project_database',{'slug':DB_SLUG},expect_ok=False)

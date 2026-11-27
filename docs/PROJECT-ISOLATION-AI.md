@@ -202,6 +202,47 @@ tree, production socket publication, account/ACL provisioning, selective
 networking, project authorization or Windows isolation. Those are gates
 before production integration, not features inferred from fixture tests.
 
+## Registered-project readiness and production gate (E1.3d)
+
+The installed administrator diagnostic is read-only:
+
+~~~bash
+sudo /usr/bin/python3 -I /opt/devstack/daemon/project_isolation_preflight.py --project <registered-slug>
+~~~
+
+It reads the fixed root-owned server configuration and project registry,
+validates the canonical registration, then runs a bounded metadata worker
+as the configured developer. It inspects only the expected mount-source
+directories and front controller with descriptor-relative, no-follow
+opens and mount identity checks. It reports unsafe/missing paths,
+registered MariaDB/mail and custom Nginx settings, and Bubblewrap package
+metadata. It does not read application content, .env, credentials or
+databases. No recursive permission changes, sandbox launch, project service
+startup, registry update or Windows action occurs. A successful diagnostic
+may report blocked; it is not permission to migrate. Unknown Redis or
+other dependencies are not inferred from application configuration.
+
+Production activation remains blocked pending a reviewed patched backend
+and the actual integration. As reviewed on 2026-11-27, Ubuntu's
+[CVE-2026-87766](https://ubuntu.com/security/CVE-2026-87766) record lists
+Ubuntu 26.04 LTS as vulnerable; [USN-8779-2](https://ubuntu.com/security/notices/USN-8779-2)
+describes the reversion of an earlier incomplete symlink fix. The issue
+concerns setup before sandbox execution; a positive functional fixture
+test does not establish that launching against attacker-controlled trees
+is safe. Check the exact distribution package, signed origin, vendor
+advisory and relevant patches rather than interpreting the upstream
+version alone. No setuid fallback, arbitrary PPA, downgrade or runtime
+override is offered. Reevaluate the approved backend (patched Bubblewrap
+or a tested equivalent) before enabling real agents.
+
+Metadata inspection is deliberately not mount authorization. A later
+launcher must retain verified source descriptors or use a protected
+mount lifecycle, enforce project identity at launch, handle directory
+replacement and hardlinks throughout the tree, and protect all endpoints
+and rollback. The diagnostic remains blocked for every project until
+those production gates are implemented and reviewed; a future version
+number alone cannot enable it.
+
 ## Configuration management and adapters
 
 DevStack is a management plane, not a mandatory AI chat client or runtime.
