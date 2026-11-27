@@ -173,8 +173,20 @@ def isolation_preflight(slug, *, database=False):
     before = (STATE/'projects.json').read_bytes()
     pool = Path('/etc/php/8.5/fpm/pool.d/devstack-'+slug+'.conf')
     original = pool.read_bytes()
-    result = json.loads(run('/usr/bin/python3', '-I', str(installed),
-                            '--project', slug).stdout)
+    probe = run('/usr/bin/python3', '-I', str(installed),
+                '--project', slug, check=False)
+    if probe.returncode:
+        # Disposable fixture only: report metadata of known control ancestors,
+        # not registry content or any application credentials.
+        for directory in (Path('/'), Path('/opt'), Path('/opt/devstack'),
+                          Path('/opt/devstack/daemon'), Path('/etc'),
+                          Path('/etc/devstack'), Path('/var'), Path('/var/lib'),
+                          Path('/var/lib/devstack')):
+            info = directory.lstat()
+            print('Preflight control path:', directory, 'uid=', info.st_uid,
+                  'mode=', oct(info.st_mode), flush=True)
+    assert probe.returncode == 0, (probe.returncode, probe.stderr[-1024:])
+    result = json.loads(probe.stdout)
     assert result['project'] == slug and result['status'] == 'blocked', result
     assert result['layout']['project'] == 'present' and result['layout']['webroot'] == 'present', result
     assert result['settings']['database'] is database

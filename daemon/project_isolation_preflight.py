@@ -33,6 +33,8 @@ ADVISORY = 'https://ubuntu.com/security/CVE-2026-87766'
 LAYOUT_KEYS = ('project', 'webroot', 'front_controller', 'storage',
                'bootstrap_cache', 'database_dir', 'published_storage')
 LAYOUT_STATES = frozenset({'present', 'missing', 'unsafe', 'unavailable'})
+WORKER_STAGES = ('installed-path', 'installed-parents', 'installed-file',
+                 'worker-identity', 'worker-layout')
 
 
 def validate_webroot(value):
@@ -270,8 +272,18 @@ def inspect_as_developer(spec):
         '/usr/bin/python3', '-I', str(INSTALLED), '--inspect',
         spec['slug'], spec['webroot']], env=ENV, text=True, capture_output=True,
         timeout=20, check=False)
-    if result.returncode != 0 or len(result.stdout) > 4096:
+    if result.returncode != 0:
+        # Fixed stage labels only. Do not copy arbitrary process output.
+        label = 'unavailable'
+        for stage in WORKER_STAGES:
+            if 'Isolation preflight failed at ' + stage + '.' in result.stderr.splitlines():
+                label = stage
+                break
+        print('Metadata worker failed: exit=' + str(result.returncode) +
+              '; stage=' + label, file=sys.stderr)
         raise ValueError('Metadata worker unavailable')
+    if len(result.stdout) > 4096:
+        raise ValueError('Oversized metadata response')
     return json.loads(result.stdout)
 
 
@@ -281,30 +293,44 @@ def main():
     mode.add_argument('--project', metavar='SLUG', help='Inspect a registered project; requires administrator')
     mode.add_argument('--inspect', nargs=2, metavar=('SLUG', 'WEBROOT'), help=argparse.SUPPRESS)
     args = parser.parse_args()
+    stage = 'installed-path'
     try:
         if Path(__file__).absolute() != INSTALLED or not sys.flags.isolated:
             raise ValueError('Run only the installed helper using python3 -I')
+        stage = 'installed-parents'
         protected_parents(INSTALLED)
+        stage = 'installed-file'
         protected_control(INSTALLED, directory=False)
         if args.inspect:
+            stage = 'worker-identity'
             account = pwd.getpwuid(os.geteuid())
             if (account.pw_uid == 0 or account.pw_gid == 0
                     or account.pw_name in ('devstackweb', 'www-data')
                     or account.pw_dir != '/home/' + account.pw_name):
                 raise ValueError('Expected ordinary developer')
+            stage = 'worker-layout'
             slug, webroot = args.inspect
             data = inspect_layout(Path(account.pw_dir) / 'projects',
                                   slug, webroot, account.pw_uid)
         else:
+            stage = 'administrator-identity'
             if os.geteuid() != 0:
                 raise ValueError('Administrator required')
-            spec = project_spec(read_control_json(CONFIG), read_control_json(REGISTRY), args.project)
-            data = build_report(spec, inspect_as_developer(spec), package_info())
+            stage = 'server-config'
+            config = read_control_json(CONFIG)
+            stage = 'project-registry'
+            registry = read_control_json(REGISTRY)
+            stage = 'registration'
+            spec = project_spec(config, registry, args.project)
+            stage = 'metadata-worker'
+            layout = inspect_as_developer(spec)
+            stage = 'report'
+            data = build_report(spec, layout, package_info())
         print(json.dumps(data, ensure_ascii=True, sort_keys=True))
         return 0
     except (OSError, ValueError, KeyError, subprocess.SubprocessError, RecursionError):
-        # Do not echo raw registry values, project paths, command output or secrets.
-        print('Isolation preflight could not complete; verify registration and installed helper.', file=sys.stderr)
+        # Stage is a fixed label, never an exception message or registry value.
+        print('Isolation preflight failed at ' + stage + '.', file=sys.stderr)
         return 2
 
 

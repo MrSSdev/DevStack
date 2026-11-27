@@ -298,9 +298,44 @@ tests, not the choice of Bubblewrap, define acceptance.
 | Native agent | Official ChatGPT desktop / Codex or supported local agent | Native permissions and approvals, controlled project access and brokered Linux tools; verify Windows/UNC/WSL and child-process denials |
 | Model provider | Native Windows llama.cpp or another supported inference provider | Scoped inference connection, independent lifecycle, no project file access granted by model selection |
 
+### Reviewed backend selection
+
+The target LTS distribution's current package 0.11.1-1ubuntu0.3 is
+the USN-8779-2 regression-revert release, not a fix for CVE-2026-87766.
+Keep the distribution executable unchanged. Evaluate the official
+upstream signed release 0.13.1 (2026-10-14, above the 0.12.0 fix)
+as a separately managed, non-setuid, root-protected backend for DevStack.
+This is a candidate, not an installed or approved backend. Verify
+release provenance, archive integrity, reproducible build inputs,
+advisories and runtime behavior; never execute a download as root.
+Use a dedicated versioned path with explicit selection and rollback,
+not a system-wide PATH replacement, alternative, or change to /usr/bin.
+Run the existing namespace, real FPM/HTTPS and lifecycle tests on the
+selected build and the target WSL kernel; retain the production gate
+until safe mount lifecycle and tool acceptance are complete. Do not
+reuse a vulnerable backend as a silent fallback.
+
+References: [Ubuntu regression notice](https://ubuntu.com/security/notices/USN-8779-2),
+[upstream advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx),
+[upstream releases](https://github.com/containers/bubblewrap/releases).
+
 ### Official ChatGPT and Codex
 
-Preserve the official applications and account sign-in. Use documented
+Preserve the official applications and account sign-in. For projects in
+WSL2, the preferred official desktop Codex mode is the WSL agent
+environment (distinct from the integrated terminal setting). The GUI
+remains on Windows; the Codex agent and commands use Linux. A locally
+hosted model and its separate native Windows agent remain independent.
+Codex selects the first bwrap on its own PATH, according to its
+[Linux sandbox documentation](https://learn.chatgpt.com/docs/sandboxing).
+If a reviewed separate backend is used, verify that the supported
+app/CLI launch configuration selects it before sandbox startup, not
+just that an interactive terminal resolves it. Avoid nesting the
+DevStack PHP sandbox around Codex; test Codex's own permissions and
+seccomp and protect the application runtime separately. Do not rewrite
+the user's global PATH or assume the CLI and desktop app share the same
+config/auth directory. See [WSL](https://learn.chatgpt.com/docs/windows/wsl)
+and the [Windows app settings](https://learn.chatgpt.com/docs/windows/windows-app). Use documented
 native settings, CLI and supported tool interfaces rather than wrapping
 the whole app in a Linux sandbox or reverse-engineering credentials.
 The Windows Codex sandbox supports native execution, workspace permissions

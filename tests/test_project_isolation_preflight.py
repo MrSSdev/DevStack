@@ -98,3 +98,22 @@ class PreflightTests(unittest.TestCase):
         self.assertIn('custom_nginx_rules_review', result['blockers'])
         with self.assertRaises(ValueError):
             p.build_report(spec, {**layout, 'secret': 'present'}, {})
+
+
+    def test_worker_failure_exposes_only_fixed_stage(self):
+        import contextlib
+        import io
+        from types import SimpleNamespace
+        spec = p.project_spec(self.config, self.registry, self.slug)
+        account = SimpleNamespace(pw_name='developer', pw_uid=1000,
+                                  pw_gid=1000, pw_dir='/home/developer')
+        result = SimpleNamespace(returncode=2, stdout='',
+                                 stderr='Isolation preflight failed at worker-identity.\nPRIVATE_TEST_SENTINEL\n')
+        diagnostics = io.StringIO()
+        with patch.object(p.pwd, 'getpwnam', return_value=account), \
+             patch.object(p.subprocess, 'run', return_value=result), \
+             contextlib.redirect_stderr(diagnostics):
+            with self.assertRaises(ValueError):
+                p.inspect_as_developer(spec)
+        self.assertIn('exit=2; stage=worker-identity', diagnostics.getvalue())
+        self.assertNotIn('PRIVATE_TEST_SENTINEL', diagnostics.getvalue())
