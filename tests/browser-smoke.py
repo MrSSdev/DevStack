@@ -1288,8 +1288,9 @@ class BrowserAcceptance(unittest.TestCase):
             expect(switch).to_have_attribute('aria-checked',str(not original).lower(),timeout=15000)
             self.assertIs(read_service()['autostart'],not original)
             self.assertEqual(pid(),before)
-            expect(dialog.get_by_role('button',name='Zamknij')).to_be_enabled(timeout=15000)
-            dialog.get_by_role('button',name='Zamknij').click()
+            close=dialog.get_by_role('button',name='Zamknij',exact=True)
+            expect(close).to_be_enabled(timeout=15000)
+            close.click()
             expect(row.get_by_text('Autostart',exact=True)).to_have_count(0 if original else 1)
             self.page.reload()
             expect(row).to_be_visible()
@@ -1328,7 +1329,14 @@ class BrowserAcceptance(unittest.TestCase):
         self.wait_total(2)
         second=cards.filter(has_text='Stack fixture second')
         expect(second).to_be_visible(timeout=20000)
-        self.page.mouse.move(1,1)
+        # A new frontmost toast moves the hovered card during its animation.
+        # Re-enter the settled frontmost card, then leave the actual viewport
+        # for a known non-toast element within the native modal. Do not rely
+        # on backdrop hit testing or an old pointer position after insertion.
+        second.hover()
+        expect(second).to_have_attribute('data-expanded','')
+        self.assertFalse(host.evaluate('e=>e.contains(document.activeElement)'), 'Hover must not move keyboard focus into the toast stack')
+        dialog.get_by_role('heading',name='MariaDB',exact=True).hover()
         expect(first).not_to_have_attribute('data-expanded','')
         expect(second).not_to_have_attribute('data-expanded','')
         expect(first.locator('[data-slot="toast-content"]')).to_have_css('opacity','0')
