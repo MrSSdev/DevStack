@@ -4,7 +4,7 @@ Internal mount primitive, NOT a path authorization API or a daemon RPC.
 Caller must authorize both project and runtime identity, pin the approved
 source, prepare an empty root-owned publication directory under a protected
 parent, exclude nested mounts/hardlinks, and serialize mount operations.
-Only the disposable private CI mount namespace uses this primitive today.
+The registered pilot also uses it inside a private service mount namespace.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ OPEN_TREE_CLONE = 1
 MOVE_MOUNT_F_EMPTY_PATH = 0x04
 MOVE_MOUNT_T_EMPTY_PATH = 0x40
 MOUNT_ATTR_IDMAP = 0x00100000
+MOUNT_ATTR_RDONLY = 0x01
 MOUNT_ATTR_NOSUID = 0x02
 MOUNT_ATTR_NODEV = 0x04
 MOUNT_ATTR_NOEXEC = 0x08
@@ -155,7 +156,7 @@ def validate_sources(source_fd, target_fd, mapping):
     return source
 
 
-def publish_idmapped(source_fd, target_fd, mapping):
+def publish_idmapped(source_fd, target_fd, mapping, *, readonly=False):
     """Attach an exact non-recursive ID map to two already-authorized FDs.
 
     No project path is re-opened. All attributes and owner checks happen on
@@ -171,14 +172,16 @@ def publish_idmapped(source_fd, target_fd, mapping):
     try:
         with mapping_namespace(mapping) as userns_fd:
             attrs = MountAttr(MOUNT_ATTR_IDMAP | MOUNT_ATTR_NOSUID |
-                              MOUNT_ATTR_NODEV | MOUNT_ATTR_NOEXEC,
+                              MOUNT_ATTR_NODEV | MOUNT_ATTR_NOEXEC |
+                              (MOUNT_ATTR_RDONLY if readonly else 0),
                               0, 0, userns_fd)
             checked_call(setattr, fd, b'', AT_EMPTY_PATH,
                          ctypes.byref(attrs), ctypes.sizeof(attrs))
         view = os.fstat(fd)
         if (not os.path.samestat(source, view)
                 or (view.st_uid, view.st_gid) != mapping.runtime
-                or os.fstatvfs(fd).f_flag & MOUNT_FLAGS != MOUNT_FLAGS):
+                or os.fstatvfs(fd).f_flag & MOUNT_FLAGS != MOUNT_FLAGS
+                or bool(os.fstatvfs(fd).f_flag & os.ST_RDONLY) != readonly):
             raise IdmapError('Detached mapping or flags do not match request')
         checked_call(move, fd, b'', target_fd, b'',
                      MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH)
