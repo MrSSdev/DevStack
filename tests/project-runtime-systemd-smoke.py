@@ -260,6 +260,18 @@ def main():
         finally:
             path.write_text(original)
         print('PASS: Durable registration-account binding and mismatched UID refusal', flush=True)
+        # Exercise the actual staged launcher with the sibling's real UID.
+        # It must refuse at the identity gate, before attempting any mounts.
+        try:
+            as_user(users[1], '/usr/bin/python3', '-I',
+                    str(launcher / 'project_runtime_launch.py'),
+                    'php', str(base / 'project-a'), capture_output=True)
+        except subprocess.CalledProcessError as exc:
+            assert exc.returncode == 2, exc.returncode
+            assert 'Fixture source launch refused: IdentityError' in exc.stderr
+        else:
+            raise AssertionError('Sibling runtime launcher accepted')
+        print('PASS: Real launcher denies a different project identity', flush=True)
         # A new disposable developer account has exactly the intended project
         # memberships from its creation; never mutate the CI runner account.
         run('useradd', '--system', '--user-group', '--no-create-home',
