@@ -12,14 +12,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { toast, beginNotice, bindOperationToast, notify, fail } from '@/components/ui/toast'
+import { toast, beginNotice as beginLocalNotice, notify as notifyLocal, fail as failLocal } from '@/components/ui/toast'
+import { request, runOperation } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { acknowledgeJob, readAcknowledgedJob, rememberVisibleSuccess, showJobNotice, jobNoticeTimeout } from '@/lib/engine-job-notice'
 import { frameworkWebroot, resolveInstallerFields, type InstallerField, type InstallerValues } from '@/lib/installer-options'
 import { resolveProjectIdentity, projectIdentityPayload, type ProjectIdentityDraft } from '@/lib/project-identity'
 import { MailInbox } from '@/components/mail-inbox'
 import { NotificationCenter, NotificationSettings, useNotificationCenter } from '@/components/notification-center'
-import { acknowledgeOperation, isNoticeRoute, notificationClient, notificationChange, notificationRouteHash, readNoticeOnClose, renewNotificationClient } from '@/lib/notification-client'
+import { isNoticeRoute, notificationClient, notificationRouteHash, readNoticeOnClose, renewNotificationClient } from '@/lib/notification-client'
 import { PageHeader } from '@/components/page-header'
 import { ManagedServices, WidgetServiceSettings, type ManagedService } from '@/components/managed-services'
 
@@ -57,7 +58,6 @@ type State = ServiceState & { engine_notice?:{id:string;show:boolean}|null; proj
 function serviceFields(state:ServiceState):ServiceState {
   return {services:state.services,managed_services:state.managed_services,service_action_pending:state.service_action_pending,mailpit:state.mailpit}
 }
-type Envelope<T> = { notification_id?:string; ok: boolean; result?: T; error?: string; authenticated?: boolean; csrf?: string }
 type Draft = ProjectIdentityDraft & { webroot: string; database: boolean; https: boolean; local_mail: boolean; engine: string; starter_kit: string }
 
 // Render the two stored regions in one editor without losing legacy rules.
@@ -66,27 +66,6 @@ function nginxRules(config?: {overrides?:string;extra_locations?:string}) {
 }
 
 const blank: Draft = { name: '', slug: null, domain: null, webroot: 'public', database: true, https: true, local_mail: false, engine: 'none', starter_kit: 'none' }
-
-async function request<T>(method: 'GET'|'POST', path: string, csrf?: string, data?: unknown, operationToastId?:string, signal?:AbortSignal): Promise<T> {
-  const client=notificationClient
-  const response = await fetch(path, {
-    method, credentials: 'same-origin', cache: 'no-store', signal,
-    headers: { 'X-DevStack-Client':client, ...(data ? {'Content-Type':'application/json'} : {}), ...(method === 'POST' ? {'X-CSRF-Token':csrf ?? ''} : {}) },
-    ...(data ? {body:JSON.stringify(data)} : {}),
-  })
-  let body: Envelope<T>
-  try { body = await response.json() as Envelope<T> }
-  catch { throw new Error(`Nieprawidłowa odpowiedź serwera (HTTP ${response.status}).`) }
-  if(method==='POST'&&csrf){
-    const result=body.result as {notification_id?:string}|undefined
-    const id=result?.notification_id??body.notification_id
-    if(operationToastId)bindOperationToast(operationToastId,id,client)
-    acknowledgeOperation(id,csrf,client)
-    if(result?.notification_id?.startsWith('job-'))window.dispatchEvent(new Event(notificationChange))
-  }
-  if (!response.ok || !body.ok) throw new Error(body.error || `Błąd HTTP ${response.status}.`)
-  return (body.result ?? body) as T
-}
 
 function projectFramework(project:Project):string {
   const detected=project.detected_framework
@@ -213,7 +192,7 @@ export function App() {
     refreshRef.current=true
     const sequence=++serviceSequence.current
     const client=notificationClient
-    const pending=manual?beginNotice('Odświeżanie danych…'):undefined
+    const pending=manual?beginLocalNotice('Odświeżanie danych…'):undefined
     if(manual)setRefreshing(true)
     try {
       const next=await request<State>('GET','/api/state')
@@ -230,9 +209,9 @@ export function App() {
       if(!themeSaveRef.current && (next.preferences?.theme==='dark'||next.preferences?.theme==='light'))setTheme(next.preferences.theme)
       setLastRefreshed(new Date())
       toast.close('state-refresh-error')
-      if(manual)notify('Odświeżono dane.',pending)
+      if(manual)notifyLocal('Odświeżono dane.',pending)
     }catch(e){
-      if(client===notificationClient&&!closingSession.current)fail(e,pending??'state-refresh-error','Nie udało się odświeżyć danych.')
+      if(client===notificationClient&&!closingSession.current)failLocal(e,pending??'state-refresh-error','Nie udało się odświeżyć danych.')
     }finally{
       refreshRef.current=false
       if(manual)setRefreshing(false)
@@ -241,16 +220,17 @@ export function App() {
   async function toggleTheme(){
     if(savingTheme || themeSaveRef.current)return
     const next=theme==='light'?'dark':'light'
-    const pending=crypto.randomUUID()
     themeSaveRef.current=true
     setSavingTheme(true)
     try{
-      const saved=await request<{theme:'light'|'dark'}>('POST','/api/preferences',csrf,{theme:next},pending)
-      setTheme(saved.theme)
-      setServer(prev=>({...prev,preferences:{theme:saved.theme}}))
-      notify(saved.theme==='dark'?'Zapisano ciemny motyw na serwerze.':'Zapisano jasny motyw na serwerze.',pending)
-    }catch(e){
-      fail(e,pending,'Nie udało się zapisać motywu.')
+      await runOperation<{theme:'light'|'dark'}>('/api/preferences',csrf,{theme:next},{
+        title:'Zapisywanie motywu',loading:false,errorFallback:'Nie udało się zapisać motywu.',
+        onResult:saved=>{
+          setTheme(saved.theme)
+          setServer(prev=>({...prev,preferences:{theme:saved.theme}}))
+          return saved.theme==='dark'?'Zapisano ciemny motyw na serwerze.':'Zapisano jasny motyw na serwerze.'
+        }
+      })
     }finally{
       themeSaveRef.current=false
       setSavingTheme(false)
@@ -263,7 +243,7 @@ export function App() {
         const s=await request<{csrf:string;authenticated:boolean;password_required:boolean}>('GET','/api/session')
         if (!disposed) {setCsrf(s.csrf);setAuthenticated(s.authenticated);setPasswordRequired(s.password_required)}
         if (!disposed&&s.authenticated) await refresh()
-      } catch(e) {if(!disposed)fail(e)}
+      } catch(e) {if(!disposed)failLocal(e)}
       finally {if(!disposed)setInitializing(false)}
     })()
     return ()=>{disposed=true}
@@ -310,7 +290,7 @@ export function App() {
     setCaInfoError(false)
     void request<{sha256:string}>('GET','/api/ca/info')
       .then(info=>{if(!disposed)setCaFingerprint(info.sha256)})
-      .catch(()=>{if(!disposed){setCaInfoError(true);fail('Brak dostępu do certyfikatu — sprawdź usługę DevStack.','ca-info-error')}})
+      .catch(()=>{if(!disposed){setCaInfoError(true);failLocal('Brak dostępu do certyfikatu — sprawdź usługę DevStack.','ca-info-error')}})
     return ()=>{disposed=true}
   },[authenticated,view])
   useEffect(()=>{
@@ -344,7 +324,7 @@ export function App() {
       const timeout=window.setTimeout(()=>abort.abort(),8000)
       let delay=2000
       try{
-        const next=await request<ServiceState>('GET','/api/services/status',undefined,undefined,undefined,abort.signal)
+        const next=await request<ServiceState>('GET','/api/services/status',undefined,undefined,abort.signal)
         if(!disposed&&client===notificationClient&&!closingSession.current&&sequence>=appliedServiceSequence.current){
           if(!Array.isArray(next.managed_services)||typeof next.service_action_pending!=='boolean'||typeof next.mailpit!=='string'||!next.services)throw new Error('Niepełny stan usług.')
           appliedServiceSequence.current=sequence
@@ -399,11 +379,11 @@ export function App() {
     try {
       const info=await request<{authenticated:boolean;csrf:string}>('POST','/api/login',csrf,{password:loginPassword})
       renewNotificationClient();closingSession.current=false;setDismissedJob(readAcknowledgedJob());setCsrf(info.csrf);setAuthenticated(true);setLoginPassword('');await refresh()
-    }catch(e){fail(e,'login-error')}finally{setBusy(false)}
+    }catch(e){failLocal(e,'login-error')}finally{setBusy(false)}
   }
   async function logout(){
     try {const info=await request<{csrf:string}>('POST','/api/logout',csrf,{});setCsrf(info.csrf)}
-    catch(e){fail(e);return}
+    catch(e){failLocal(e);return}
     closingSession.current=true;jobPresentation.current=null;activeEngineToast.current=null;setAwaitingEngineJob('');renewNotificationClient();toast.close()
     appliedServiceSequence.current=++serviceSequence.current
     setServiceStatusUnavailable(false)
@@ -469,7 +449,7 @@ export function App() {
     setToolLoading(true);setToolInfo(null)
     void request<ToolInfo>('GET','/api/engines/'+encodeURIComponent(toolId))
       .then(info=>{if(!disposed){setToolInfo(info);toast.close('tool-status-error')}})
-      .catch(e=>{if(!disposed)fail(e,'tool-status-error','Błąd odczytu instalatora.')})
+      .catch(e=>{if(!disposed)failLocal(e,'tool-status-error','Błąd odczytu instalatora.')})
       .finally(()=>{if(!disposed)setToolLoading(false)})
     return ()=>{disposed=true}
   },[authenticated,engineAllowed,view,engineBusy,engineJob?.id,toolId])
@@ -485,15 +465,15 @@ export function App() {
       .then(info=>{
         if(disposed)return
         setKitInfo({engine:id,info})
-        if(info.installed && (!info.starter_kits?.length||!Array.isArray(info.installer_options)))fail('Nie udało się odczytać opcji aktualnego instalatora.','kit-status-error')
-        else if(!info.installed)fail('Najpierw zainstaluj oficjalny instalator w ustawieniach.','kit-status-error')
+        if(info.installed && (!info.starter_kits?.length||!Array.isArray(info.installer_options)))failLocal('Nie udało się odczytać opcji aktualnego instalatora.','kit-status-error')
+        else if(!info.installed)failLocal('Najpierw zainstaluj oficjalny instalator w ustawieniach.','kit-status-error')
         else toast.close('kit-status-error')
         setDraft(prev=>prev.engine===id && info.starter_kits?.length && !info.starter_kits.some(o=>o.id===prev.starter_kit)
           ? {...prev,starter_kit:''}:prev)
         setInstallerChoices(prev=>Object.fromEntries(Object.entries(prev).filter(([key,value])=>
           info.installer_options?.some(field=>field.id===key&&field.choices.some(choice=>choice.id===value)))))
       })
-      .catch(e=>{if(!disposed)fail(e,'kit-status-error','Nie udało się odczytać starter kitów.')})
+      .catch(e=>{if(!disposed)failLocal(e,'kit-status-error','Nie udało się odczytać starter kitów.')})
       .finally(()=>{if(!disposed)setKitLoading(false)})
     return ()=>{disposed=true}
   },[authenticated,engineAllowed,view,engineBusy,engineJob?.id,draft.engine,kitRefresh])
@@ -509,93 +489,109 @@ export function App() {
   async function toolAction(action:'check'|'install-tool'|'update-tool'){
     if(busy || engineBusy || toolLoading || !toolId)return
     setBusy(true)
-    const pending=beginNotice(toolDefinition?.tool??'Instalator','Zlecanie operacji…')
     setAwaitingEngineJob('submitting')
     try{
-      const result=await request<{message:string;job_id:string}>('POST','/api/engines/'+encodeURIComponent(toolId),csrf,{action},pending)
-      acceptEngineJob(result.job_id,pending,toolDefinition?.tool??'Instalator',result.message)
-      await refresh()
-    }catch(e){setAwaitingEngineJob('');fail(e,pending)}finally{setBusy(false)}
+      await runOperation<{message:string;job_id:string}>('/api/engines/'+encodeURIComponent(toolId),csrf,{action},{
+        title:toolDefinition?.tool??'Instalator',description:'Zlecanie operacji…',
+        onJob:(result,pending,job)=>acceptEngineJob(job,pending,toolDefinition?.tool??'Instalator',result.message),
+        onResult:async result=>{
+          if(!/^[a-f0-9]{32}$/.test(result.job_id))throw new Error('Brak potwierdzenia zadania instalatora.')
+          await refresh()
+        },
+        onError:()=>setAwaitingEngineJob('')
+      })
+    }finally{setBusy(false)}
   }
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault()
     if(busy||engineBusy||(!!draftEngine&&(!engineAllowed||!kitReady)))return
     setBusy(true)
-    const pending=beginNotice(draftEngine?'Instalacja projektu':'Tworzenie projektu',identity.slug)
     if(draftEngine)setAwaitingEngineJob('submitting')
     try {
       const payload={...draft,...projectIdentityPayload(draft),webroot:draftEngine?undefined:draft.webroot.trim(),installer_options:draftEngine?resolvedOptions.values:{}}
-      const answer=await request<{message:string;job_id?:string}>('POST','/api/projects',csrf,payload,pending)
-      if(answer.job_id)acceptEngineJob(answer.job_id,pending,'Instalacja projektu',payload.slug+'\n'+answer.message)
-      else setAwaitingEngineJob('')
-      await refresh();setDraft(blank);setInstallerChoices({})
-      if(!answer.job_id){setRulesDraft(null);setSelected(payload.slug);setView('project');notify(answer.message,pending)}
-    }catch(e){setAwaitingEngineJob('');fail(e,pending)}finally{setBusy(false)}
+      await runOperation<{message:string;job_id?:string}>('/api/projects',csrf,payload,{
+        title:draftEngine?'Instalacja projektu':'Tworzenie projektu',description:identity.slug,
+        onJob:(answer,pending,job)=>acceptEngineJob(job,pending,'Instalacja projektu',payload.slug+'\n'+answer.message),
+        onResult:async answer=>{
+          if(!answer.job_id)setAwaitingEngineJob('')
+          await refresh();setDraft(blank);setInstallerChoices({})
+          if(!answer.job_id){setRulesDraft(null);setSelected(payload.slug);setView('project')}
+        },
+        onError:()=>setAwaitingEngineJob('')
+      })
+    }finally{setBusy(false)}
   }
   async function copyWslCa(){
     if(copyingWslCa||!caFingerprint||caInfoError)return
     setCopyingWslCa(true)
-    const pending=beginNotice('Certyfikat CA w WSL','Dodawanie zaufania do lokalnego CA…')
     try{
-      const answer=await request<{message:string}>('POST','/api/ca/wsl',csrf,{})
-      notify(answer.message,pending)
-    }catch(e){fail(e,pending)}finally{setCopyingWslCa(false)}
+      await runOperation<{message:string}>('/api/ca/wsl',csrf,{},{
+        title:'Certyfikat CA w WSL',description:'Dodawanie zaufania do lokalnego CA…'
+      })
+    }finally{setCopyingWslCa(false)}
   }
   async function testDatabase(){
     if(!current || !current.database || busy || testingDb)return
     setTestingDb(true)
-    const pending=beginNotice('Sprawdzanie połączenia z bazą…',current.slug)
     try{
-      const result=await request<{message:string}>('POST','/api/projects/test-db',csrf,{slug:current.slug},pending)
-      notify(result.message,pending)
-    }catch(e){fail(e,pending)}finally{setTestingDb(false)}
+      await runOperation<{message:string}>('/api/projects/test-db',csrf,{slug:current.slug},{
+        title:'Sprawdzanie połączenia z bazą…',description:current.slug
+      })
+    }finally{setTestingDb(false)}
   }
   async function deleteProject(e:FormEvent<HTMLFormElement>){
     e.preventDefault()
     if(!current || deleteConfirmation!==current.slug || (current.database&&!deleteDbConfirm))return
     setBusy(true)
-    const pending=beginNotice('Usuwanie projektu…',current.slug)
     try{
-      const result=await request<{message:string}>('POST','/api/projects/delete',csrf,{
+      await runOperation<{message:string}>('/api/projects/delete',csrf,{
         slug:current.slug,confirmation:deleteConfirmation,delete_database:current.database && deleteDbConfirm
-      },pending)
-      setDeleteOpen(false)
-      setDeleteConfirmation('')
-      setDeleteDbConfirm(false)
-      setRulesDraft(null)
-      setSelected('')
-      setView('projects')
-      setDbSecret('')
-      await refresh()
-      notify(result.message,pending)
-    }catch(e){fail(e,pending)}finally{setBusy(false)}
+      },{
+        title:'Usuwanie projektu…',description:current.slug,
+        onResult:async()=>{
+          setDeleteOpen(false)
+          setDeleteConfirmation('')
+          setDeleteDbConfirm(false)
+          setRulesDraft(null)
+          setSelected('')
+          setView('projects')
+          setDbSecret('')
+          await refresh()
+        }
+      })
+    }finally{setBusy(false)}
   }
   async function saveConfig(){
     if(!current)return;setBusy(true)
-    const pending=beginNotice('Sprawdzanie konfiguracji Nginx…',current.slug)
     try {
-      const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config',csrf,{slug:current.slug,rules},pending)
-      setRulesDraft({slug:current.slug,value:nginxRules(result)})
-      await refresh();notify(result.message,pending)
-    }catch(e){fail(e,pending)}finally{setBusy(false)}
+      await runOperation<{message:string;overrides:string;extra_locations:string}>('/api/config',csrf,{slug:current.slug,rules},{
+        title:'Sprawdzanie konfiguracji Nginx…',description:current.slug,
+        onResult:async result=>{
+          setRulesDraft({slug:current.slug,value:nginxRules(result)})
+          await refresh()
+        }
+      })
+    }finally{setBusy(false)}
   }
   async function saveFullConfig(){
     if(!current || (passwordRequired && !fullPassword))return
     setBusy(true)
-    const pending=beginNotice('Sprawdzanie konfiguracji Nginx…',current.slug)
     try {
-      const result=await request<{message:string;overrides:string;extra_locations:string}>('POST','/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword},pending)
-      setRulesDraft({slug:current.slug,value:nginxRules(result)})
-      setFullPassword('')
-      setFullEditing(false)
-      await refresh()
-      notify(result.message,pending)
-    }catch(e){fail(e,pending)}finally{setBusy(false)}
+      await runOperation<{message:string;overrides:string;extra_locations:string}>('/api/config/full',csrf,{slug:current.slug,full_config:fullConfig,password:fullPassword},{
+        title:'Sprawdzanie konfiguracji Nginx…',description:current.slug,
+        onResult:async result=>{
+          setRulesDraft({slug:current.slug,value:nginxRules(result)})
+          setFullPassword('')
+          setFullEditing(false)
+          await refresh()
+        }
+      })
+    }finally{setBusy(false)}
   }
   function toggleFullEdit(){
     if(!current)return
     if(fullEditing){setFullEditing(false);setFullConfig(current.nginx_config);setFullPassword('');return}
-    if(rules!==nginxRules(current)){fail(new Error('Najpierw zapisz lub cofnij niezapisane zmiany reguł Nginx.'));return}
+    if(rules!==nginxRules(current)){failLocal(new Error('Najpierw zapisz lub cofnij niezapisane zmiany reguł Nginx.'));return}
     setFullConfig(current.nginx_config)
     setFullPassword('')
     setFullEditing(true)
@@ -604,12 +600,12 @@ export function App() {
     e.preventDefault();if(!current)return;setBusy(true)
     try {
       const result=await request<{password:string}>('POST','/api/reveal',csrf,{slug:current.slug,password:revealPassword})
-      setDbSecret(result.password);setRevealPassword('');notify('Hasło wyświetlone na 20 sekund. Nie zapisujemy go w przeglądarce.')
-    }catch(e){fail(e)}finally{setBusy(false)}
+      setDbSecret(result.password);setRevealPassword('');notifyLocal('Hasło wyświetlone na 20 sekund. Nie zapisujemy go w przeglądarce.')
+    }catch(e){failLocal(e)}finally{setBusy(false)}
   }
   async function copy(value:string){
-    try {await navigator.clipboard.writeText(value);notify('Skopiowano do schowka.')}
-    catch {fail('Przeglądarka zablokowała schowek.')}
+    try {await navigator.clipboard.writeText(value);notifyLocal('Skopiowano do schowka.')}
+    catch {failLocal('Przeglądarka zablokowała schowek.')}
   }
   function go(next:View){
     setView(next);setNavOpen(false);setDbSecret('');if(next==='mail')setMailRoute('')
@@ -638,7 +634,7 @@ export function App() {
         </nav>}</>}/></>}
       {view==='project'&&!current&&<Card><CardContent className="space-y-3 p-4"><p className="text-sm text-muted-foreground">{lastRefreshed?'Projekt nie jest dostępny.':'Wczytywanie projektu…'}</p><Button size="sm" variant="outline" onClick={()=>go('projects')}>Lista projektów</Button></CardContent></Card>}
       {view==='dashboard'&&<><div className="grid grid-cols-2 gap-3 xl:grid-cols-4"><Metric label="Projekty" value={String(projects.length)} foot="Domeny .test" icon={<FolderCode className="size-5"/>}/><Metric label="Aktywne usługi" value={serviceStatusUnavailable?'—':`${managed.filter(s=>s.state==='active').length}/${managed.length}`} foot="Uruchomione / wszystkie" icon={<Activity className="size-5"/>}/><Metric label="HTTPS" value={String(projects.filter(p=>p.https).length)} foot="Auto SSL" icon={<LockKeyhole className="size-5"/>}/><Metric label="Bazy danych" value={String(projects.filter(p=>p.database).length)} foot="MariaDB" icon={<Database className="size-5"/>}/></div>
-        <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]"><ManagedServices services={managed} csrf={csrf} request={request} refresh={()=>refresh()} statusUnavailable={serviceStatusUnavailable} blocked={engineBusy||!!server.service_action_pending} onAutostartSaved={(id,enabled)=>{
+        <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]"><ManagedServices services={managed} csrf={csrf} refresh={()=>refresh()} statusUnavailable={serviceStatusUnavailable} blocked={engineBusy||!!server.service_action_pending} onAutostartSaved={(id,enabled)=>{
           appliedServiceSequence.current=++serviceSequence.current
           setServer(prev=>({...prev,managed_services:prev.managed_services?.map(s=>s.id===id?{...s,autostart:enabled}:s)}))
         }}/>
@@ -692,13 +688,13 @@ export function App() {
             <div className="flex flex-wrap gap-2"><Button type="submit" variant="destructive" disabled={busy||deleteConfirmation!==current.slug||(current.database&&!deleteDbConfirm)}><Trash2/>{busy?'Usuwanie…':'Potwierdź usunięcie'}</Button><Button variant="outline" type="button" disabled={busy} onClick={()=>{setDeleteOpen(false);setDeleteConfirmation('');setDeleteDbConfirm(false)}}>Anuluj</Button></div>
           </form>}
         </CardContent></Card></div>}
-      {view==='mail'&&<MailInbox key={mailRoute} initialMessage={mailRoute} status={serviceStatusUnavailable?'unknown':server.mailpit} csrf={csrf} request={request} refreshStatus={()=>{void refresh()}}/>}
+      {view==='mail'&&<MailInbox key={mailRoute} initialMessage={mailRoute} status={serviceStatusUnavailable?'unknown':server.mailpit} csrf={csrf} refreshStatus={()=>{void refresh()}}/>}
       {view==='settings'&&<div className="space-y-3">
         
         <section aria-label="Środowisko" hidden={settingsTab!=='environment'}><Card><CardHeader><CardTitle>Parametry środowiska</CardTitle></CardHeader><CardContent className="space-y-2"><Info label="Panel" value="https://devstack.test"/><Info label="Backend" value="PHP-FPM 8.5 + Unix socket"/><Info label="SSL" value="mkcert (prywatny lokalny CA)"/><Info label="Usługi" value="systemd"/></CardContent></Card><div className="mt-3"><Card><CardHeader><CardTitle>Motyw</CardTitle></CardHeader><CardContent className="flex items-center justify-between gap-3"><span className="text-sm">{theme==='dark'?'Ciemny':'Jasny'}</span><Button size="sm" variant="outline" disabled={savingTheme} onClick={()=>{void toggleTheme()}}>{theme==='dark'?<Sun/>:<Moon/>}Zmień motyw</Button></CardContent></Card></div></section>
         <section aria-label="Instalatory" hidden={settingsTab!=='installers'}><Card><CardHeader><CardTitle>Narzędzia instalacyjne</CardTitle><CardDescription>Instalatory frameworków w Ubuntu.</CardDescription></CardHeader><CardContent className="space-y-3">{Object.keys(engines).length>1&&<select aria-label="Instalator" className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" value={toolId} onChange={e=>setSelectedTool(e.target.value)}>{Object.entries(engines).map(([id,definition])=><option key={id} value={id}>{definition.tool}</option>)}</select>}<Info label="Narzędzie" value={toolDefinition?.tool??'Brak'}/>{toolDefinition&&<p className="text-xs text-muted-foreground">{toolDefinition.description}</p>}{!engineAllowed?<div className="space-y-2 text-xs text-muted-foreground"><p>Zgoda administratora na instalatory w trybie bez hasła:</p><code className="block break-all rounded bg-secondary p-2">sudo php /opt/devstack/scripts/configure-auth.php --allow-local-installers --i-understand-local-risk</code><p>Odśwież panel po wykonaniu polecenia.</p></div>:<><Info label="Zainstalowana" value={toolLoading?'Odczytywanie…':toolInfo?.installed??(toolInfo?'Brak':'Nieznana')}/><Info label="Dostępna" value={engineJob&&engineJob.engine===toolId&&engineJob.action==='check'&&engineJob.state==='succeeded'?engineJob.tool?.latest??'Nieznana':'Sprawdź aktualizacje'}/>{toolInfo?.composer===false&&<p className="text-xs text-muted-foreground">Composer nie jest dostępny. Zainstaluj go w Ubuntu.</p>}<div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" disabled={busy||engineBusy||toolLoading||!toolInfo?.installed} onClick={()=>void toolAction('check')}><RefreshCw/>Sprawdź aktualizacje</Button><Button variant="outline" size="sm" disabled={busy||engineBusy||toolLoading||!toolInfo?.composer} onClick={()=>void toolAction(toolInfo?.installed?'update-tool':'install-tool')}>{toolInfo?.installed?'Aktualizuj instalator':'Zainstaluj instalator'}</Button></div><p className="text-xs text-muted-foreground">Aktualizacja instalatora nie zmienia istniejących projektów.</p></>}</CardContent></Card></section>
         <section aria-label="Windows" hidden={settingsTab!=='windows'}><Card><CardHeader><CardTitle>Synchronizacja Windows</CardTitle></CardHeader><CardContent className="space-y-3 text-sm"><p>Zmiany domen .test są automatycznie zapisywane w zarządzanym bloku Windows hosts.</p><p className="text-muted-foreground">Pierwsza instalacja wymaga administratora Windows. Ręczna synchronizacja: <code className="break-all rounded bg-secondary px-1">windows/sync-hosts.ps1</code>.</p></CardContent></Card></section>
-        <section aria-label="Widżety" hidden={settingsTab!=='widgets'}><WidgetServiceSettings services={managed} csrf={csrf} request={request} refresh={()=>refresh()}/></section>
+        <section aria-label="Widżety" hidden={settingsTab!=='widgets'}><WidgetServiceSettings services={managed} csrf={csrf} refresh={()=>refresh()}/></section>
         <section aria-label="Powiadomienia" hidden={settingsTab!=='notifications'}><NotificationSettings model={notifications}/></section>
         <section aria-label="Bezpieczeństwo" hidden={settingsTab!=='security'}><div className="space-y-3"><Card><CardHeader><CardTitle>Dostęp do panelu</CardTitle></CardHeader><CardContent className="space-y-2"><Info label="Logowanie" value={passwordRequired?'Włączone (hasło)':'Wyłączone (tylko lokalnie)'}/><Info label="Instalatory" value={engineAllowed?(passwordRequired?'Po zalogowaniu':'Dozwolone lokalnie bez hasła'):'Wymagają zgody administratora'}/><p className="text-xs text-muted-foreground">Zmiana trybu logowania (administrator Ubuntu): <code className="break-all">sudo php /opt/devstack/scripts/configure-auth.php --setup</code></p></CardContent></Card><Card><CardHeader><CardTitle>Certyfikat CA w Windows</CardTitle><CardDescription>Publiczny certyfikat mkcert dla Windows.</CardDescription></CardHeader>
         <CardContent className="space-y-3 text-sm">

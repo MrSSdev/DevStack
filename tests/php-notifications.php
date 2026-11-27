@@ -5,6 +5,45 @@ function check_notice(bool $ok,string $message):void {if(!$ok){fwrite(STDERR,"FA
 $store=new DevStackNotices(':memory:');
 $a=str_repeat('a',32);$b=str_repeat('b',32);$m=str_repeat('M',22);$n=str_repeat('N',22);
 $stamp=gmdate('c');
+
+// Every POST handler is either registered as a journal operation or listed
+// as an explicit exception. Runtime classification also rejects an unknown
+// route before executing it; this guard catches the omission in CI.
+$apiSource=file_get_contents(__DIR__.'/../backend/public/index.php');
+$dispatch=explode('// Authenticated route dispatch (guarded by notification policy).',$apiSource,2);
+check_notice(count($dispatch)===2,'Central API dispatch exists');
+check_notice(!str_contains($dispatch[1],'devstack_json(')&&!str_contains($dispatch[1],'devstack_notice_operation('),'Authenticated routes must use the shared response boundary');
+$routes=['/api/login','/api/logout'];
+foreach (explode("\n",$dispatch[1]) as $line) {
+    if (!str_starts_with($line,"    if (\$method === 'POST' && ")) continue;
+    if (str_contains($line,'$engineRoute')) {
+        $routes[]='/api/engines/:engine';
+    } else {
+        preg_match_all("~'(/api/[^']+)'~",$line,$matches);
+        check_notice(count($matches[1])>0,'Explicit POST policy for every route: '.$line);
+        array_push($routes,...$matches[1]);
+    }
+}
+$declared=array_merge(array_keys(DevStackNotices::POST_OPERATIONS),array_keys(DevStackNotices::POST_LOCAL));
+sort($routes);sort($declared);
+check_notice($routes===$declared,'POST handlers and notification policy catalogue match');
+check_notice(DevStackNotices::postPolicy('/api/new-feature')===null&&DevStackNotices::postPolicy('/api/notifications/new-feature')===null,'Unknown mutations have no implicit exception');
+foreach (DevStackNotices::POST_OPERATIONS as $route=>$policy) {
+    $sample=$route==='/api/engines/:engine'?'/api/engines/laravel':$route;
+    check_notice(DevStackNotices::postPolicy($sample)==='journal','Registered operation '.$sample);
+    $fixture=$route==='/api/services/control'?['service'=>'redis','action'=>'restart']:
+        ($route==='/api/services/autostart'?['service'=>'redis','enabled'=>true]:[]);
+    $response=$route==='/api/engines/:engine'?['job_id'=>str_repeat('f',32)]:[];
+    $coverage=new DevStackNotices(':memory:');
+    $eventId=$coverage->operation($sample,$fixture,$response,$a);
+    $rows=$coverage->poll($a)['items'];
+    check_notice(is_string($eventId)&&count($rows)===1&&$rows[0]['id']===$eventId&&$rows[0]['category']===$policy[0],
+        'Every registered operation produces one journal record: '.$sample);
+}
+foreach (DevStackNotices::POST_LOCAL as $route=>$reason) {
+    check_notice($reason!==''&&DevStackNotices::postPolicy($route)==='local','Explicit exception '.$route);
+    check_notice($store->operation($route,[],[],$a)===null,'Local exception does not create history: '.$route);
+}
 $store->observeMail([['ID'=>$m,'Created'=>$stamp,'Subject'=>'Old mail']]);
 check_notice($store->poll($a)['items']===[],'Initial mail baseline does not replay');
 $store->observeMail([['ID'=>$n,'Created'=>$stamp,'Subject'=>'New mail'],['ID'=>$m,'Created'=>$stamp]]);
@@ -40,6 +79,28 @@ check_notice($store->poll($a)['items'][0]['kind']==='info','Accepted service act
 $store->mutate('read-all');
 check_notice(!$store->poll($a)['items'][0]['unread'],'Read all');
 $store->mutate('clear');
+// The WSL CA button is an ordinary settings operation. Keep its exact ID,
+// fixed public history text and existing foreground acknowledgement rules.
+$caStore=new DevStackNotices(':memory:');
+$caStore->setCategories(DevStackNotices::CATEGORIES);
+$caStore->poll($a);
+$caId=$caStore->operation('/api/ca/wsl',[],['message'=>'untrusted diagnostic','sha256'=>str_repeat('A',64)],$a);
+check_notice(is_string($caId)&&preg_match('~^op-[a-f0-9]{32}$~D',$caId)===1,'WSL CA success has an operation ID');
+$caStore->acknowledge($caId,$a);
+$caItems=$caStore->poll($b);
+check_notice(count($caItems['items'])===1&&$caItems['toast']===[],'WSL CA does not duplicate its direct toast');
+$caRow=$caItems['items'][0];
+check_notice($caRow['id']===$caId&&$caRow['category']==='settings'&&$caRow['kind']==='success'&&$caRow['route']==='/#/settings'&&$caRow['unread']===true,'WSL CA success belongs to settings history');
+check_notice(!str_contains(json_encode($caRow),'untrusted diagnostic')&&!str_contains(json_encode($caRow),str_repeat('A',64)),'WSL CA history excludes RPC diagnostics and fingerprint');
+$caStore->mutate('read',$caId);
+check_notice(!$caStore->poll($a)['items'][0]['unread'],'WSL CA read acknowledgement preserves history');
+$caError=$caStore->operation('/api/ca/wsl',[],[],$a,false);
+check_notice(is_string($caError)&&$caError!==$caId,'WSL CA failure also has an operation ID');
+$caErrorRow=array_values(array_filter($caStore->poll($a)['items'],static fn($r)=>$r['id']===$caError))[0];
+check_notice($caErrorRow['kind']==='error'&&$caErrorRow['category']==='settings'&&$caErrorRow['description']==='Operacja nie powiodła się.','WSL CA failure stores a generic settings notice');
+check_notice($caStore->operation('/api/ca/wsl',['path'=>'invalid'],[],$a,false)===null,'Invalid WSL CA payload does not create history');
+$caStore->leave($a);$caStore->leave($b);
+check_notice($caStore->claimPush(time()-60)===null,'WSL CA settings results do not send Windows notifications');
 $since=time()-60;
 $store->setCategories(['mail']);
 $store->observeMail([['ID'=>str_repeat('Z',22),'Created'=>$stamp,'Subject'=>'Never include in push']]);

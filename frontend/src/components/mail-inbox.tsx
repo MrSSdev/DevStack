@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, ArrowRight, Copy, Download, ExternalLink, Paperclip, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { toast, beginNotice, notify, fail } from '@/components/ui/toast'
+import { toast, notify as notifyLocal, fail as failLocal } from '@/components/ui/toast'
+import { request, runOperation } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -14,8 +15,7 @@ type Attachment={PartID:string; FileName?:string; ContentType?:string; Size?:num
 type Summary={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null; Created?:string; Read?:boolean; Snippet?:string; Attachments?:number}
 type Message={ID:string; Subject?:string; From?:Address|null; To?:Address[]|null; Cc?:Address[]|null; Bcc?:Address[]|null; Date?:string; Text?:string; HTML?:string; Attachments?:Attachment[]|null; Inline?:Attachment[]|null}
 type Page={total:number; unread:number; messages_count:number; start:number; messages:Summary[]|null}
-type Request=<T>(method:'GET'|'POST',path:string,csrf?:string,data?:unknown,operationToastId?:string)=>Promise<T>
-type Props={initialMessage?:string;status?:string; csrf:string; request:Request; refreshStatus:()=>void}
+type Props={initialMessage?:string;status?:string; csrf:string; refreshStatus:()=>void}
 
 const idPattern=/^[A-Za-z0-9]{22}$/
 const partPattern=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -26,7 +26,7 @@ const messageDate=(s?:string)=>s&&!Number.isNaN(Date.parse(s))?new Date(s).toLoc
 function address(a?:Address|null):string{return a?(a.Name&&a.Address?a.Name+' <'+a.Address+'>':a.Address||a.Name||'—'):'—'}
 function addresses(a?:Address[]|null):string{return Array.isArray(a)?a.map(address).join(', '):'—'}
 
-export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:Props){
+export function MailInbox({initialMessage='',status,csrf,refreshStatus}:Props){
   const [query,setQuery]=useState('')
   const [appliedQuery,setAppliedQuery]=useState('')
   const [start,setStart]=useState(0)
@@ -57,7 +57,7 @@ export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:
       toast.close('mail-list-error');setPage({...result,messages:valid})
       setChecked(ids=>ids.filter(id=>valid.some(m=>m.ID===id)))
       if(!valid.length&&start>0)setStart(s=>Math.max(0,s-pageSize))
-    }).catch(e=>{if(!disposed){setListError('Nie można pobrać wiadomości.');fail(e,'mail-list-error','Nie można pobrać wiadomości.');setPage(null)}}).finally(()=>{if(!disposed)setLoading(false)})
+    }).catch(e=>{if(!disposed){setListError('Nie można pobrać wiadomości.');failLocal(e,'mail-list-error','Nie można pobrać wiadomości.');setPage(null)}}).finally(()=>{if(!disposed)setLoading(false)})
     return ()=>{disposed=true}
   },[active,appliedQuery,start,revision,request])
 
@@ -70,7 +70,7 @@ export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:
       if(result.ID!==selected)throw new Error('Nieprawidłowa odpowiedź skrzynki.')
       toast.close('mail-detail-error');setMessage(result);setFormat(result.HTML?'html':'text')
       setPage(p=>p?{...p,unread:Math.max(0,p.unread-((p.messages??[]).some(m=>m.ID===selected&&!m.Read)?1:0)),messages:(p.messages??[]).map(m=>m.ID===selected?{...m,Read:true}:m)}:p)
-    }).catch(e=>{if(!disposed)fail(e,'mail-detail-error','Nie można otworzyć wiadomości.')}).finally(()=>{if(!disposed)setOpening(false)})
+    }).catch(e=>{if(!disposed)failLocal(e,'mail-detail-error','Nie można otworzyć wiadomości.')}).finally(()=>{if(!disposed)setOpening(false)})
     return ()=>{disposed=true}
   },[active,selected,request])
 
@@ -94,23 +94,25 @@ export function MailInbox({initialMessage='',status,csrf,request,refreshStatus}:
     const ids=mode==='one'&&selected?[selected]:checked
     if(mode!=='all'&&(!ids.length||ids.some(id=>!idPattern.test(id))))return
     setDeleting(true)
-    const pending=beginNotice(mode==='all'?'Opróżnianie skrzynki…':'Usuwanie wiadomości…')
     try{
-      if(mode==='all')await request('POST','/api/mail/clear',csrf,{confirmation:'delete-all'},pending)
-      else if(mode==='one')await request('POST','/api/mail/delete',csrf,{id:ids[0]},pending)
-      else await request('POST','/api/mail/delete-many',csrf,{ids},pending)
-      if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(notificationRouteHash()))window.location.hash='/mail'
-      setSelected('');setMessage(null);setConfirmDelete(null);setChecked([])
-      if(mode==='all'){setQuery('');setAppliedQuery('');setStart(0)}
-      else if(messages.every(m=>ids.includes(m.ID))&&start>0)setStart(Math.max(0,start-pageSize))
-      notify(mode==='all'?'Opróżniono skrzynkę.':mode==='one'?'Usunięto wiadomość.':'Usunięto wiadomości.',pending)
-      setRevision(v=>v+1)
-    }catch(e){fail(e,pending,'Nie udało się usunąć wiadomości.')}
-    finally{setDeleting(false)}
+      const path=mode==='all'?'/api/mail/clear':mode==='one'?'/api/mail/delete':'/api/mail/delete-many'
+      const body=mode==='all'?{confirmation:'delete-all'}:mode==='one'?{id:ids[0]}:{ids}
+      await runOperation(path,csrf,body,{
+        title:mode==='all'?'Opróżnianie skrzynki…':'Usuwanie wiadomości…',errorFallback:'Nie udało się usunąć wiadomości.',
+        onResult:()=>{
+          if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(notificationRouteHash()))window.location.hash='/mail'
+          setSelected('');setMessage(null);setConfirmDelete(null);setChecked([])
+          if(mode==='all'){setQuery('');setAppliedQuery('');setStart(0)}
+          else if(messages.every(m=>ids.includes(m.ID))&&start>0)setStart(Math.max(0,start-pageSize))
+          setRevision(v=>v+1)
+          return mode==='all'?'Opróżniono skrzynkę.':mode==='one'?'Usunięto wiadomość.':'Usunięto wiadomości.'
+        }
+      })
+    }finally{setDeleting(false)}
   }
   async function copy(value:string,label:string){
-    try{await navigator.clipboard.writeText(value);notify(label+' — skopiowano.')}
-    catch{fail('Nie udało się skopiować. Zaznacz tekst ręcznie.')}
+    try{await navigator.clipboard.writeText(value);notifyLocal(label+' — skopiowano.')}
+    catch{failLocal('Nie udało się skopiować. Zaznacz tekst ręcznie.')}
   }
 
   return <div className="min-w-0 space-y-3">

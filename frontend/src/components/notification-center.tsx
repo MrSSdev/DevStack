@@ -3,7 +3,7 @@ import { Bell, CheckCheck, CircleAlert, CircleCheck, FolderCode, History, Info, 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { toast, fail } from '@/components/ui/toast'
+import { toast, fail as failLocal } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 import { acknowledgeRetiredNotificationClients, consumeNotificationClick, emptyNoticeState, isNoticeRoute, leaveNotifications, notificationCategories, notificationChange, notificationClickId, notificationClient, notificationDismissed, readNoticeOnClose, renewNotificationClient, retiredNotificationClients, updateAppBadge, type Notice, type NoticeRequest, type NoticeState } from '@/lib/notification-client'
 
@@ -129,7 +129,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
       if(action==='clear')for(const item of state.items)if(!item.id.startsWith('job-'))toast.close(item.id)
       await sync()
       return true
-    }catch(e){fail(e,'notification-history-error');return false}
+    }catch(e){failLocal(e,'notification-history-error');return false}
     finally{setWorking(false)}
   }
   const changeCategory=async(id:string,enabled:boolean)=>{
@@ -138,7 +138,7 @@ export function useNotificationCenter(authenticated:boolean,csrf:string,request:
     try{
       const categories=enabled?[...state.push_categories,id]:state.push_categories.filter(v=>v!==id)
       await request('POST','/api/notifications/categories',csrf,{categories});await sync()
-    }catch(e){fail(e,'notification-category-error')}
+    }catch(e){failLocal(e,'notification-category-error')}
     finally{setWorking(false)}
   }
   return {state,available,unread,working,sync,manage,changeCategory}

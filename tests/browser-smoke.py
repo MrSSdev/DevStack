@@ -439,6 +439,41 @@ class BrowserAcceptance(unittest.TestCase):
         self.assertEqual(result.json()['result']['sha256'], fingerprint)
         expect(self.page.get_by_text(re.compile('Certyfikat CA DevStack jest (juz )?zaufany w WSL\\.'))).to_be_visible()
         self.assertEqual(self.context.request.get(BASE + '/api/ca').body(), before)
+        # Reuse the same real button scenario for the persistent operation.
+        # The response must allocate one journal ID; the visible toast is
+        # linked to that exact ID rather than creating a second event.
+        event_id = result.json()['result']['notification_id']
+        self.assertRegex(event_id, r'^op-[a-f0-9]{32}$')
+        ca_toast = self.page.locator('[data-slot="toast"]').filter(
+            has_text=re.compile(r'Certyfikat CA DevStack jest (juz )?zaufany w WSL\.'))
+        expect(ca_toast).to_have_count(1)
+        # The global bell and settings category are both in <header>
+        # elements. The bell controls the actual history popover via
+        # aria-controls; the category button has aria-pressed instead.
+        bell = self.page.get_by_role('button', name='Powiadomienia', exact=True).and_(
+            self.page.locator('button[aria-label="Powiadomienia"][aria-controls][aria-expanded]'))
+        expect(bell).to_have_count(1)
+        bell.click()
+        history = self.page.get_by_role('region', name='Historia powiadomień')
+        expect(history).to_be_visible()
+        expect(history).to_have_attribute('id', bell.get_attribute('aria-controls'))
+        event = history.locator('[data-notification-id="' + event_id + '"]')
+        expect(event).to_have_count(1)
+        expect(event.get_by_text('Certyfikat CA w WSL', exact=True)).to_be_visible()
+        expect(event.locator('[aria-label="Nieprzeczytane"]')).to_have_count(1)
+        history.get_by_role('button', name='Zamknij historię').click()
+        # The actual close button must be usable even if an unrelated
+        # automatic notice has arrived in front of this operation toast.
+        self.page.locator('[data-slot="toast"]:not([data-ending-style])').first.hover()
+        close = ca_toast.get_by_role('button', name='Zamknij powiadomienie')
+        expect(close).to_be_visible()
+        close.click()
+        expect(ca_toast).to_have_count(0, timeout=5000)
+        bell.click()
+        expect(history).to_be_visible()
+        expect(event).to_have_count(1)
+        expect(event.locator('[aria-label="Nieprzeczytane"]')).to_have_count(0, timeout=10000)
+        expect(history.locator('[data-notification-id]').filter(has_text='Certyfikat CA w WSL')).to_have_count(1)
 
     def test_02_mail_rendering_download_search_pagination_and_deletion(self):
         for i in range(42):send(f'Pagination fixture {i:02}')
