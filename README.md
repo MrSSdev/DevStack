@@ -112,6 +112,7 @@ of the web request, and interrupted jobs retain files for review. See the
 - [Backups and recovery](docs/BACKUP-RESTORE.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Security](SECURITY.md)
+- [Project isolation and AI integration (planned)](docs/PROJECT-ISOLATION-AI.md)
 
 Use DevStack for trusted local development. Keep credentials, certificate keys and backups private.
 
