@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'daemon/project_runtime.py'
+      - 'daemon/project_pilot.py'
+      - 'tests/test_project_pilot.py'
       - 'daemon/project_mounts.py'
       - 'daemon/project_idmap.py'
       - 'daemon/project_data_views.py'
@@ -26,6 +28,8 @@ on:
     branches: [main]
     paths:
       - 'daemon/project_runtime.py'
+      - 'daemon/project_pilot.py'
+      - 'tests/test_project_pilot.py'
       - 'daemon/project_mounts.py'
       - 'daemon/project_idmap.py'
       - 'daemon/project_data_views.py'
@@ -70,6 +74,7 @@ jobs:
           python3 -m unittest discover -s tests -p test_project_access.py -v
           python3 -m unittest discover -s tests -p test_project_runtime_identity.py -v
           python3 -m unittest discover -s tests -p test_project_lifecycle.py -v
+          python3 -m unittest discover -s tests -p test_project_pilot.py -v
           python3 -m unittest discover -s tests -p test_project_mounts.py -v
           python3 -I tests/project-mount-fd-smoke.py
           sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 python3 -I tests/project-runtime-systemd-smoke.py
