@@ -6,6 +6,9 @@ on:
       - main
       - test/windows-local-notifications
       - test/windows-component-layout
+    paths-ignore:
+      - 'extensions/devstack-tools/**'
+      - '.github/workflows/devstack-tools.yml'
 
 permissions:
   contents: read

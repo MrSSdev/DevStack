@@ -1,0 +1,43 @@
+name: DevStack Tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/devstack-tools/**'
+      - '.github/workflows/devstack-tools.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'extensions/devstack-tools/**'
+      - '.github/workflows/devstack-tools.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devstack-tools-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tools:
+    name: Shared Playwright install, CLI, update and rollback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax and public repository secret guard
+        run: |
+          for f in extensions/devstack-tools/*.sh extensions/devstack-tools/bin/* extensions/devstack-tools/tests/*.sh; do
+            bash -n "$f"
+          done
+          node --check extensions/devstack-tools/smoke.cjs
+          bash scripts/security-scan.sh
+      - name: Real installation and lifecycle
+        run: bash extensions/devstack-tools/tests/installed-smoke.sh

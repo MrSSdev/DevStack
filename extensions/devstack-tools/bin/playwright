@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ $EUID -ne 0 ]] || { echo 'Never run Playwright as root.' >&2; exit 2; }
+base=/opt/devstack-tools
+exec 9<"$base/.lock"
+flock -s 9
+release="$(readlink -f -- "$base/current")"
+[[ $release =~ ^/opt/devstack-tools/releases/release-[a-zA-Z0-9]{8}$ ]] || exit 1
+export PLAYWRIGHT_BROWSERS_PATH="$release/browsers"
+# CommonJS tests in the calling project can import the central package.
+export NODE_PATH="$release/playwright/node_modules${NODE_PATH:+:$NODE_PATH}"
+exec node "$release/playwright/node_modules/@playwright/test/cli.js" "$@"
