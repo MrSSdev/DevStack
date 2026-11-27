@@ -44,6 +44,20 @@ def validate_webroot(value):
     return value
 
 
+def registration_identity(registry, slug):
+    """Report only whether the registry identity is ready for later enrollment."""
+    project = registry[slug]
+    if 'project_id' not in project:
+        return 'legacy'
+    value = project['project_id']
+    if (not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{32}', value)
+            or any(other != slug and isinstance(record, dict)
+                   and record.get('project_id') == value
+                   for other, record in registry.items())):
+        return 'invalid'
+    return 'registered'
+
+
 def project_spec(config, registry, slug):
     if not isinstance(slug, str) or not SLUG.fullmatch(slug):
         raise ValueError('Invalid project identifier')
@@ -75,7 +89,8 @@ def project_spec(config, registry, slug):
         if not isinstance(value, str):
             raise ValueError('Invalid registered Nginx settings')
         flags[key] = bool(value.strip())
-    return {'slug': slug, 'developer': user, 'webroot': webroot, 'settings': flags}
+    return {'slug': slug, 'developer': user, 'webroot': webroot, 'settings': flags,
+            'identity': registration_identity(registry, slug)}
 
 
 def protected_control(path, *, directory):
@@ -235,6 +250,8 @@ def build_report(spec, layout, package):
     # No production backend is approved. A functional fixture PASS, an
     # arbitrary version string, or a later package upgrade cannot clear this.
     blockers = ['sandbox_backend_security_review', 'production_runtime_not_connected']
+    if spec['identity'] != 'registered':
+        blockers.append('project_identity_enrollment_required')
     if (any(layout[k] != 'present' for k in ('project', 'webroot', 'front_controller'))
             or any(v in ('unsafe', 'unavailable') for v in layout.values())):
         blockers.append('project_layout_review')
@@ -248,6 +265,7 @@ def build_report(spec, layout, package):
         blockers.append('http_only_configuration_review')
     return {'schema': 1, 'project': spec['slug'], 'status': 'blocked',
             'blockers': blockers, 'layout': layout, 'settings': settings,
+            'registration_identity': spec['identity'],
             'sandbox': {'package': package, 'advisory': ADVISORY,
                         'reviewed_on': '2026-11-27', 'approved': False},
             'scope': 'metadata-only; no enrollment, activation or migration'}

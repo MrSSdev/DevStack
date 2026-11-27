@@ -307,20 +307,20 @@ tests, not the choice of Bubblewrap, define acceptance.
 
 ### Reviewed backend selection
 
-The target LTS distribution's current package 0.11.1-1ubuntu0.3 is
-the USN-8779-2 regression-revert release, not a fix for CVE-2026-87766.
-Keep the distribution executable unchanged. Evaluate the official
-upstream signed release 0.13.1 (2026-10-14, above the 0.12.0 fix)
-as a separately managed, non-setuid, root-protected backend for DevStack.
-This is a candidate, not an installed or approved backend. Verify
-release provenance, archive integrity, reproducible build inputs,
-advisories and runtime behavior; never execute a download as root.
-Use a dedicated versioned path with explicit selection and rollback,
-not a system-wide PATH replacement, alternative, or change to /usr/bin.
-Run the existing namespace, real FPM/HTTPS and lifecycle tests on the
-selected build and the target WSL kernel; retain the production gate
-until safe mount lifecycle and tool acceptance are complete. Do not
-reuse a vulnerable backend as a silent fallback.
+The Ubuntu LTS 0.11.1-1ubuntu0.3 package was the USN-8779-2
+regression-revert release, not a fix for CVE-2026-87766 at review time.
+Prefer a fixed official distribution package. Where unavailable, the
+[APT-managed 0.13.1 backport experiment](BUBBLEWRAP-BACKPORT-EXPERIMENT.md)
+rebuilds authenticated source on the target LTS, verifies the upstream
+archive digest, tests the package, namespace/runtime and exact rollback.
+A separate versioned backend is an alternative, not a second mandatory
+installation. Never install an unreviewed archive, disable archive trust
+or weaken global security settings. A local backport must be reconciled
+with future official security releases; its higher version can otherwise
+mask an official update. Neither a version string nor successful
+functional fixture tests constitute production approval. Retain the
+production gate until safe mount lifecycle and tool acceptance are
+complete. Do not reuse a vulnerable backend as a silent fallback.
 
 References: [Ubuntu regression notice](https://ubuntu.com/security/notices/USN-8779-2),
 [upstream advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx),
@@ -507,3 +507,53 @@ administrator coordinating source changes and the actual application/browser
 compatibility tests before enabling a real project.
 
 Reference: [Bubblewrap release history](https://github.com/containers/bubblewrap/releases/tag/v0.10.0).
+
+
+## Registration identity and existing project lifecycle (E1.3f)
+
+DevStack's existing project creation workflow remains the only supported
+entry point for normal project registration. Both a manually prepared
+project and the asynchronous official framework installer converge on
+`create_environment`. New successful registrations receive a
+server-generated random 128-bit `project_id` in the same protected JSON
+registry transaction, never supplied by a client or derived from a slug.
+It is an internal registration identifier, not a UID, credential or grant.
+Updates and restarts retain it. Deleting and re-registering a slug must
+create a fresh identity even when the previous source directory is retained.
+Existing entries without it continue working unchanged; no mass rewrite
+or automatic enrollment occurs. Preflight distinguishes registered,
+legacy and invalid/duplicate identity metadata but still blocks activation.
+Future runtime identity and AI assignments must bind the registration
+identity, not reuse an old grant based only on the slug. Existing legacy
+registrations require an explicit enrollment transaction.
+
+### Preserve DevStack features as isolation is integrated
+
+Isolation must be part of the existing project lifecycle, not require
+manual project creation, manual PHP pools, a second panel, or a separate
+framework installer. This is a compatibility requirement, not a claim
+that the production sandbox is already connected.
+
+| Existing mechanism | Required isolated-project behavior and acceptance |
+| --- | --- |
+| Create project, empty or existing directory, official Laravel installer and starter-kit options | Same form/API, supported choices, asynchronous job status/toasts, safe provisioning order; installer/build/migrations execute with scoped permissions and approved dependency access; failure preserves user files and cleans only reserved hosting resources |
+| Project list, framework metadata, domain/hosts synchronization, certificates and HTTPS | Keep project registration, detected metadata, stable local domain and trusted TLS; shared ingress cannot resolve untrusted project paths; no additional global Windows changes |
+| PHP, webroot, static assets, Livewire/Flux routes, Nginx managed rules and editor/rollback | Render validated configuration to appropriate isolated component; preserve supported custom webroots, tuning and asset rules with equivalent semantics; reject incompatible changes explicitly rather than silently reverting to shared FPM |
+| SQLite, optional MariaDB, Redis, Mailpit, credentials and database test/backup/restore | Preserve data, ownership and existing database workflows; grant only project-scoped resources; absent/stopped optional services remain absent/stopped unless explicitly started; test actual service-specific access and denial |
+| Artisan, Composer, npm, Vite builds/HMR, DevStack Tools and Playwright | Keep working developer workflow and central tools, dedicated project caches/browser sessions, approved dependency/network routes and HTTPS verification |
+| Notifications, PWA, widgets, service controls and project counts | Preserve existing UI events and operation outcomes, history/read state, observed service state, Windows integration and no unintended WSL/model startup; no access to management endpoints from project code |
+| DevStack update, restart, backup and rollback, delete/re-register | Preserve registry, credentials, project sources, DB, certificates and intended enabled state; use transactional cutover, verified service ownership and recovery; revoke project grants and stop isolated processes before removing enrollment; no silent legacy fallback |
+
+Existing regression suites remain in place. The installed-stack test
+extends the current create/upgrade/rollback, optional-service, framework
+installer, mail, journal and widget scenarios to assert durable identity,
+including a real delete/re-register of an existing SQLite application's
+retained files. This is registration compatibility evidence only, not yet
+the isolated equivalent of every mechanism. Before activating an isolated
+real project, exercise these same supported workflows under the new
+boundary and add representative negative tests; do not skip a supported
+option merely to obtain a successful isolated demo. Native adapters such
+as Codex can be installed and verified in their own integration stage,
+not as a prerequisite to developing project isolation. Until their
+individual acceptance passes, they must not be granted isolated-project
+access based solely on a successful PHP sandbox test.

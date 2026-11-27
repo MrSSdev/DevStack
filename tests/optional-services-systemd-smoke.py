@@ -167,6 +167,14 @@ def journal():
 
 
 
+def registration_id(slug):
+    registry = json.loads((STATE/'projects.json').read_text())
+    value = registry[slug]['project_id']
+    assert isinstance(value, str) and re.fullmatch('[0-9a-f]{32}', value)
+    assert sum(record.get('project_id') == value for record in registry.values()) == 1
+    return value
+
+
 def isolation_preflight(slug, *, database=False):
     installed = Path('/opt/devstack/daemon/project_isolation_preflight.py')
     assert installed.stat().st_uid == 0 and not installed.stat().st_mode & 0o022
@@ -193,6 +201,8 @@ def isolation_preflight(slug, *, database=False):
     assert 'sandbox_backend_security_review' in result['blockers']
     assert 'production_runtime_not_connected' in result['blockers']
     assert not result['sandbox']['approved']
+    assert result['registration_identity'] == 'registered'
+    assert 'project_identity_enrollment_required' not in result['blockers']
     if database:
         assert 'project_service_access_review' in result['blockers']
     assert (STATE/'projects.json').read_bytes() == before and pool.read_bytes() == original
@@ -215,7 +225,9 @@ def missing():
     run('/usr/bin/python3','-I',str(services/'setup.py'),input=json.dumps(payload))
     widgets('missing',0)
     reject_create()
-    rpc('create',project_payload(SLUG))
+    rpc('create',{**project_payload(SLUG), 'project_id':'f'*32})
+    original_id = registration_id(SLUG)
+    assert original_id != 'f'*32
     # This is a real PHP-FPM application using its own SQLite file, not the
     # DevStack notification database or an emulated project API.
     php = '<?php $d=new PDO("sqlite:".dirname(__DIR__)."/fixture.sqlite");'
@@ -226,6 +238,10 @@ def missing():
         str(PROJECTS/SLUG/'public/index.php'),input=php)
     assert app_response(SLUG) == '1'
     isolation_preflight(SLUG)
+    assert app_response(SLUG) == '1'
+    # Exercise the actual existing editor, including the managed tuning rule.
+    rpc('update_config', {'slug':SLUG, 'overrides':'client_max_body_size 32m;'})
+    assert registration_id(SLUG) == original_id
     assert app_response(SLUG) == '1'
     rpc('set_preferences',{'theme':'dark'})
     rpc('set_widget_services',{'services':['nginx','php']})
@@ -250,6 +266,7 @@ def missing():
     wait_rpc()
     assert rpc('get_preferences') == {'theme':'dark'}
     assert app_response(SLUG) == '1'
+    assert registration_id(SLUG) == original_id
     assert optional_snapshot('missing') == before
     print('PASS: actual core-only install, HTTPS/SQLite app, RPC, preferences, mail, journal, hosts domains, v1/v2 widgets and explicit DB refusal.',flush=True)
 
@@ -265,6 +282,9 @@ def upgrade():
     for unit in OPTIONAL:
         ctl('is-active','--quiet',unit)
     rpc('create',project_payload(DB_SLUG,True))
+    original_sqlite_id = registration_id(SLUG)
+    original_db_id = registration_id(DB_SLUG)
+    assert original_db_id != original_sqlite_id
     rpc('test_project_database',{'slug':DB_SLUG})
     registry=json.loads((STATE/'projects.json').read_text())
     db_name=registry[DB_SLUG]['db_name']
@@ -320,6 +340,8 @@ def upgrade():
     widgets('stopped',2)
     isolation_preflight(SLUG)
     isolation_preflight(DB_SLUG, database=True)
+    assert registration_id(SLUG) == original_sqlite_id
+    assert registration_id(DB_SLUG) == original_db_id
     assert app_response(SLUG) == '1'
     reject_create()
     assert 'MariaDB' in rpc('test_project_database',{'slug':DB_SLUG},expect_ok=False)
@@ -352,6 +374,8 @@ def upgrade():
     with sqlite3.connect(db.as_uri()+'?mode=ro',uri=True) as conn:
         assert conn.execute('SELECT count(*) FROM migrations').fetchone()[0]>0
     assert app_response(LARAVEL)
+    assert registration_id(LARAVEL) not in (original_sqlite_id, original_db_id)
+    isolation_preflight(LARAVEL)
     widgets('stopped',3)
     assert optional_snapshot('stopped') == before
     # Only this explicit user-equivalent action may start MariaDB/Redis.
@@ -359,6 +383,25 @@ def upgrade():
     rpc('test_project_database',{'slug':DB_SLUG})
     assert run('/usr/bin/mariadb','--protocol=socket','--database='+db_name,
                '--batch','--skip-column-names','-e','SELECT v FROM ci_proof;').stdout.strip()=='42'
+    # Reuse the already-created SQLite app rather than another test project.
+    # Removal only unregisters managed hosting, never application files.
+    app = PROJECTS/SLUG
+    original_source = (app/'public/index.php').read_bytes()
+    database_path = app/'fixture.sqlite'
+    before_db = database_path.read_bytes()
+    rpc('delete_project', {'slug':SLUG, 'confirmation':SLUG, 'delete_database':False})
+    assert SLUG not in json.loads((STATE/'projects.json').read_text())
+    assert (app/'public/index.php').read_bytes() == original_source
+    assert database_path.read_bytes() == before_db
+    assert SLUG+'.test' not in run('/usr/bin/python3','/opt/devstack/scripts/list-domains.py').stdout.splitlines()
+    rpc('create', project_payload(SLUG))
+    assert registration_id(SLUG) != original_sqlite_id
+    assert registration_id(DB_SLUG) == original_db_id
+    assert (app/'public/index.php').read_bytes() == original_source
+    assert app_response(SLUG) == '1'
+    assert SLUG+'.test' in run('/usr/bin/python3','/opt/devstack/scripts/list-domains.py').stdout.splitlines()
+    isolation_preflight(SLUG)
+    print('PASS: project registration identity follows create/edit/restart/upgrade/delete/recreate, including actual Laravel installer.',flush=True)
     print('PASS: legacy unit upgrade and rollback, preserved state/credentials/project data, stopped services, actual Laravel SQLite installation and explicit MariaDB recovery.',flush=True)
 
 

@@ -395,6 +395,8 @@ def public_projects() -> list[dict[str, Any]]:
         if not SLUG.fullmatch(slug) or not isinstance(p, dict):
             continue
         item = dict(p)
+        # Internal registration identity is not yet a public API or a grant.
+        item.pop('project_id', None)
         item['slug'] = slug
         item.pop('detected_framework', None)
         if slug in frameworks:
@@ -757,6 +759,23 @@ def drop_db(name: str, user: str) -> None:
     mariadb_execute(f"DROP DATABASE IF EXISTS `{name}`; DROP USER IF EXISTS '{user}'@'127.0.0.1';")
 
 
+def new_project_id(state: dict[str, Any]) -> str:
+    """Assign a registration identity, not a Linux UID or an authorization.
+
+    A slug, domain and retained source directory may all be reused after
+    deletion. New registrations must not inherit the previous identity.
+    Only the serialized, privileged registry writer generates this value.
+    Existing registrations are not rewritten as part of creating a project.
+    """
+    used = {item['project_id'] for item in state.values()
+            if isinstance(item, dict) and isinstance(item.get('project_id'), str)}
+    for _ in range(8):
+        candidate = secrets.token_hex(16)
+        if candidate not in used:
+            return candidate
+    raise RuntimeError('Nie mozna nadac unikalnej tozsamosci projektu.')
+
+
 def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str] | None = None) -> dict[str, str]:
     cfg = config()
     slug = check_slug(data.get('slug'))
@@ -772,6 +791,7 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
     secrets_state = read_json(SECRET_FILE)
     if slug in state or any(p.get('domain') == domain for p in state.values()):
         raise InputError('Projekt lub domena juz istnieje.')
+    project_id = new_project_id(state)
     root = pathlib.Path(cfg['projects_dir']) / slug
     site_file = site_path(slug)
     site_link = site_link_path(slug)
@@ -803,6 +823,7 @@ def create_environment(data: dict[str, Any], *, prepared_db: tuple[str, str, str
         # Validate now, schedule the actual reload for after the API response.
         defer_php_fpm_reload()
         state[slug] = {
+            'project_id': project_id,
             'name': name, 'domain': domain, 'path': str(root), 'webroot': webroot,
             'https': https, 'database': database, 'local_mail': local_mail,
             'db_name': db_info[0] if db_info else '',
