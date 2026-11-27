@@ -215,7 +215,9 @@ def isolation_preflight(slug, *, database=False):
     # allocate a principal or touch the ordinary FPM/registry.
     pilot = Path('/opt/devstack/daemon/project_pilot.py')
     status = run('/usr/bin/python3', '-I', str(pilot), 'status', slug, check=False)
-    if database:
+    settings = result['settings']
+    if (database or settings['overrides'] or settings['extra_locations']
+            or not settings['https']):
         assert status.returncode == 2, (status.returncode, status.stderr[-2000:])
     else:
         assert status.returncode == 0, (status.returncode, status.stderr[-2000:])
