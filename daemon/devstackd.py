@@ -473,7 +473,7 @@ def set_widget_services(data: dict[str, Any]) -> dict[str, Any]:
     return {'services': managed_services.save_selection(data['services'], installed)}
 
 
-def service_status(data: dict[str, Any]) -> dict[str, Any]:
+def managed_service_status(data: dict[str, Any]) -> dict[str, Any]:
     """Read only registered systemd units; never scan projects or collect notices."""
     if data:
         raise InputError('Ta operacja nie przyjmuje parametrow.')
@@ -484,7 +484,7 @@ def service_status(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def status(_: dict[str, Any]) -> dict[str, Any]:
-    return {**service_status({}), 'projects': public_projects(),
+    return {**managed_service_status({}), 'projects': public_projects(),
             'preferences': get_ui_preferences(), 'engine_job': public_engine_job(),
             'engines': engine_catalog(), 'engine_access_allowed': engine_access_allowed()}
 
@@ -1682,7 +1682,7 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
 
 
 OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notification': show_windows_notification,
-       'status': status, 'service_status': service_status, 'create': create, 'reveal': reveal,
+       'status': status, 'service_status': managed_service_status, 'create': create, 'reveal': reveal,
        'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
        'update_config': update_config, 'update_full_config': update_full_config,

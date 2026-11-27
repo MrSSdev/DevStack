@@ -324,6 +324,9 @@ export function App() {
     let controller:AbortController|undefined
     const cancelTimer=()=>{if(timer!==undefined){window.clearTimeout(timer);timer=undefined}}
     const schedule=(delay:number)=>{
+      // Focus/visibility can fire while a read is already in flight.
+      // Replace its scheduled retry rather than accumulating extra timers.
+      cancelTimer()
       if(!disposed&&document.visibilityState==='visible')timer=window.setTimeout(()=>{void poll()},delay)
     }
     async function poll(){
