@@ -394,15 +394,15 @@ def exercise_fixture(*, mapped_data):
                 assert as_user(users[index], '/usr/bin/cat', str(source),
                                capture_output=True).stdout == 'editor'
                 as_user(users[index], '/usr/bin/python3', '-c', '''
-    import sys
-    try:
-        with open(sys.argv[1], 'a') as f:
-            f.write('unexpected')
-    except PermissionError:
-        pass
-    else:
-        raise SystemExit('Runtime can write source outside sandbox')
-    ''', str(source))
+import sys
+try:
+    with open(sys.argv[1], 'a') as f:
+        f.write('unexpected')
+except PermissionError:
+    pass
+else:
+    raise SystemExit('Runtime can write source outside sandbox')
+''', str(source))
                 attempted.append(units[index])
                 start(units[index], users[index], plans[index])
             a = verify(plans[0], 'a', identities[0], host_net, 1)
@@ -419,25 +419,25 @@ def exercise_fixture(*, mapped_data):
                 # Do not infer functional write access from an access(2) probe.
                 # Exercise the actual open/write operation and verify its effect.
                 as_user(developer_name, '/usr/bin/python3', '-c', '''
-    import os, sys
-    p = sys.argv[1]
-    s = os.stat(p)
-    print("Developer file probe:", os.getuid(), os.getgroups(),
-          s.st_uid, s.st_gid, oct(s.st_mode), "access(W_OK) =", os.access(p, os.W_OK),
-          flush=True)
-    with open(p, "a") as stream:
-        stream.write("-developer")
-    ''', str(output))
+import os, sys
+p = sys.argv[1]
+s = os.stat(p)
+print("Developer file probe:", os.getuid(), os.getgroups(),
+      s.st_uid, s.st_gid, oct(s.st_mode), "access(W_OK) =", os.access(p, os.W_OK),
+      flush=True)
+with open(p, "a") as stream:
+    stream.write("-developer")
+''', str(output))
                 assert output.read_text() == 'runtime-developer'
                 # The CLI must also be able to commit a real transaction in the
                 # same SQLite database. Use an independent table so the existing
                 # FPM request count remains a useful regression assertion.
                 as_user(developer_name, '/usr/bin/python3', '-c', '''
-    import sqlite3, sys
-    with sqlite3.connect(sys.argv[1]) as db:
-        db.execute("CREATE TABLE developer_probe (value TEXT NOT NULL)")
-        db.execute("INSERT INTO developer_probe VALUES (?)", ("developer",))
-    ''', str(plan.project / 'database/fixture.sqlite'))
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute("CREATE TABLE developer_probe (value TEXT NOT NULL)")
+    db.execute("INSERT INTO developer_probe VALUES (?)", ("developer",))
+''', str(plan.project / 'database/fixture.sqlite'))
                 import sqlite3
                 with sqlite3.connect(plan.project / 'database/fixture.sqlite') as db:
                     assert db.execute('SELECT value FROM developer_probe').fetchall() == [('developer',)]
@@ -454,31 +454,31 @@ def exercise_fixture(*, mapped_data):
                 # the real behavior rather than chmod'ing it in the application
                 # or silently declaring runtime-created data fully compatible.
                 result = as_user(developer_name, '/usr/bin/python3', '-c', '''
-    import os, sqlite3, stat, sys
-    path, restricted = sys.argv[1:]
-    from pathlib import Path
-    with sqlite3.connect(Path(path).as_uri()+'?mode=ro', uri=True) as db:
-        assert db.execute('SELECT id FROM runtime_proof').fetchall() == [(1,)]
-    with sqlite3.connect(path) as db:
-        if os.stat(path).st_mode & stat.S_IWGRP:
-            db.execute('INSERT INTO runtime_proof VALUES (2)')
-            print('runtime-db:shared-write')
-        else:
-            try:
-                db.execute('INSERT INTO runtime_proof VALUES (2)')
-            except sqlite3.OperationalError as exc:
-                assert 'readonly' in str(exc).lower(), str(exc)
-            else:
-                raise AssertionError('Restrictive SQLite creation mode was bypassed')
-            print('runtime-db:masked-read-only')
-    try:
-        with open(restricted) as stream:
-            stream.read()
-    except PermissionError:
-        pass
+import os, sqlite3, stat, sys
+path, restricted = sys.argv[1:]
+from pathlib import Path
+with sqlite3.connect(Path(path).as_uri()+'?mode=ro', uri=True) as db:
+    assert db.execute('SELECT id FROM runtime_proof').fetchall() == [(1,)]
+with sqlite3.connect(path) as db:
+    if os.stat(path).st_mode & stat.S_IWGRP:
+        db.execute('INSERT INTO runtime_proof VALUES (2)')
+        print('runtime-db:shared-write')
     else:
-        raise AssertionError('Explicit private mode was bypassed')
-    ''', str(runtime_db), str(plan.project / 'storage/restricted.txt'), capture_output=True)
+        try:
+            db.execute('INSERT INTO runtime_proof VALUES (2)')
+        except sqlite3.OperationalError as exc:
+            assert 'readonly' in str(exc).lower(), str(exc)
+        else:
+            raise AssertionError('Restrictive SQLite creation mode was bypassed')
+        print('runtime-db:masked-read-only')
+try:
+    with open(restricted) as stream:
+        stream.read()
+except PermissionError:
+    pass
+else:
+    raise AssertionError('Explicit private mode was bypassed')
+''', str(runtime_db), str(plan.project / 'storage/restricted.txt'), capture_output=True)
                 observed = result.stdout.strip()
                 with sqlite3.connect(runtime_db) as conn:
                     rows = conn.execute('SELECT id FROM runtime_proof ORDER BY id').fetchall()
