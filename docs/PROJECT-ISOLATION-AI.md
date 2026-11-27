@@ -637,10 +637,26 @@ on the partially prepared fixture.
 
 The existing actual PHP/HTTPS/SQLite lifecycle test now exercises
 developer-created source and build files, inherited read-only permissions,
-runtime-created nested data and SQLite, ordinary developer write access
-and the neighboring project denial, using a developer with no runtime
-group memberships. Test the behavior both on the distro fixture backend
-and the LTS backport. The helper is not installed or exposed as RPC.
+runtime-created nested data, actual writes to pre-provisioned SQLite,
+new database creation and the neighboring project denial, using a
+developer with no runtime group memberships. Test the behavior both on
+the distro fixture backend and the LTS backport. The helper is not
+installed or exposed as RPC.
+
+**Creation-mode limitation.** POSIX ACL inheritance respects the mode
+requested by the application. In a separate Linux experiment, a
+runtime-owned SQLite database created with SQLite's usual mode 0644
+had a read-only effective developer ACL (mode 0640). Its developer
+transaction failed with a readonly-database error. The runtime smoke
+records that result explicitly if reproduced, without artificially
+chmod'ing the new database. Explicit private mode 0600 must not be
+bypassed. Ordinary Laravel installer-created SQLite remains a separate
+positive write test. Full developer access for approved runtime-created
+data requires a production policy and further evaluation (e.g. idmapped
+writable mounts where supported, or a narrow owner-side sharing operation
+for explicitly authorized data). Do not blanket widen permissions or
+require recurring manual chmod for normal development. This limitation
+remains a blocker for claiming full developer compatibility.
 
 Production still needs a protected publication/enrollment transaction,
 coordination with existing public ACLs and arbitrary legacy ownership,

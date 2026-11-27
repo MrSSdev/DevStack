@@ -6,7 +6,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
-from project_access import AccessError, LinuxACL, acl_plan, inspect_tree
+from project_access import AccessError, LinuxACL, WRITABLE, acl_plan, inspect_tree
+from project_runtime import WRITABLE as RUNTIME_WRITABLE
 from project_mounts import PinnedProject, mount_id
 
 
@@ -65,6 +66,7 @@ class ProjectAccessTests(unittest.TestCase):
             os.close(fd)
 
     def test_acl_plans_preserve_owner_and_separate_writable_subtrees(self):
+        self.assertEqual(tuple('/'.join(parts) for parts in WRITABLE), RUNTIME_WRITABLE)
         source = acl_plan(self.file.stat(), ('source.php',), 1000, 900)
         self.assertEqual(source, ((0x8000, 'u::rw-,u:900:r--,g::---,m::r--,o::---'),))
         target = acl_plan(self.file.stat(), ('database', 'fixture.sqlite'), 1000, 900)

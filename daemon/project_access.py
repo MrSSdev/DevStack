@@ -183,7 +183,8 @@ def prepare_tree(root, developer_uid, developer_gid, runtime_uid, device, mount_
     info = private_entry(root, (), developer_uid, developer_gid, device, mount_id)
     if snapshot[()] != fingerprint(info):
         raise AccessError('Project root changed during preparation')
-    for kind, text in acl_plan(info, (), developer_uid, runtime_uid):
+    # Set default ACL first, then expose traversal through the access ACL.
+    for kind, text in reversed(acl_plan(info, (), developer_uid, runtime_uid)):
         acl.apply(root, kind, text)
     return len(snapshot)
 

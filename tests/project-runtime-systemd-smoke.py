@@ -36,6 +36,9 @@ $db->exec('INSERT INTO items DEFAULT VALUES');
 $runtimeDb = new PDO('sqlite:' . $root . '/database/runtime-created.sqlite');
 $runtimeDb->exec('CREATE TABLE IF NOT EXISTS runtime_proof (id INTEGER PRIMARY KEY)');
 $runtimeDb->exec('INSERT OR IGNORE INTO runtime_proof VALUES (1)');
+$restricted = $root . '/storage/restricted.txt';
+file_put_contents($restricted, 'private fixture');
+chmod($restricted, 0600);
 $net = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.3);
 if ($net) { fclose($net); }
 $result = [
@@ -367,14 +370,46 @@ with sqlite3.connect(sys.argv[1]) as db:
             assert nested.read_text() == 'runtime-developer'
             runtime_db = plan.project / 'database/runtime-created.sqlite'
             assert runtime_db.stat().st_uid == identities[index].pw_uid
-            as_user(developer_name, '/usr/bin/python3', '-c', '''
-import sqlite3, sys
-with sqlite3.connect(sys.argv[1]) as db:
-    db.execute('INSERT INTO runtime_proof VALUES (2)')
-''', str(runtime_db))
+            # SQLite may create a database with mode 0644. In that case the
+            # inherited named developer ACL is masked to read-only. Record
+            # the real behavior rather than chmod'ing it in the application
+            # or silently declaring runtime-created data fully compatible.
+            result = as_user(developer_name, '/usr/bin/python3', '-c', '''
+import os, sqlite3, stat, sys
+path, restricted = sys.argv[1:]
+from pathlib import Path
+with sqlite3.connect(Path(path).as_uri()+'?mode=ro', uri=True) as db:
+    assert db.execute('SELECT id FROM runtime_proof').fetchall() == [(1,)]
+with sqlite3.connect(path) as db:
+    if os.stat(path).st_mode & stat.S_IWGRP:
+        db.execute('INSERT INTO runtime_proof VALUES (2)')
+        print('runtime-db:shared-write')
+    else:
+        try:
+            db.execute('INSERT INTO runtime_proof VALUES (2)')
+        except sqlite3.OperationalError as exc:
+            assert 'readonly' in str(exc).lower(), str(exc)
+        else:
+            raise AssertionError('Restrictive SQLite creation mode was bypassed')
+        print('runtime-db:masked-read-only')
+try:
+    with open(restricted) as stream:
+        stream.read()
+except PermissionError:
+    pass
+else:
+    raise AssertionError('Explicit private mode was bypassed')
+''', str(runtime_db), str(plan.project / 'storage/restricted.txt'), capture_output=True)
+            observed = result.stdout.strip()
             with sqlite3.connect(runtime_db) as conn:
-                assert conn.execute('SELECT id FROM runtime_proof ORDER BY id').fetchall() == [(1,), (2,)]
-            print('PASS: Developer writes runtime-owned nested file and SQLite without runtime groups', index, flush=True)
+                rows = conn.execute('SELECT id FROM runtime_proof ORDER BY id').fetchall()
+                if observed == 'runtime-db:masked-read-only':
+                    assert rows == [(1,)]
+                    print('OBSERVED LIMITATION: runtime-created SQLite ACL mask is read-only for developer', index, flush=True)
+                else:
+                    assert observed == 'runtime-db:shared-write' and rows == [(1,), (2,)]
+                    print('PASS: runtime-created SQLite permits shared write on this build', index, flush=True)
+            print('PASS: Developer writes nested runtime-owned data and pre-provisioned SQLite without runtime groups; private mode respected', index, flush=True)
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
                     str(plan.sockets / 'php.sock'))
         assert set(os.getgrouplist(developer_name, developer.pw_gid)) == expected_groups
