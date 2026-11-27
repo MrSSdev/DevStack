@@ -178,9 +178,13 @@ systemctl start devstack-notifications.service
 [[ "$(systemctl show -p ExecMainStatus --value devstack-notifications.service)" == 0 ]]
 systemctl enable --now devstack-notifications.timer
 curl -fsSk --resolve devstack.test:443:127.0.0.1 https://devstack.test/ | grep -q '<div id="root"></div>'
-systemctl --no-pager is-active devstackd nginx php8.5-fpm
+for service in devstackd nginx php8.5-fpm; do
+  systemctl --no-pager is-active "$service"
+done
 if [[ "$project_services" -eq 1 ]]; then
-  systemctl --no-pager is-active mariadb redis-server
+  for service in mariadb redis-server; do
+    systemctl --no-pager is-active "$service"
+  done
 fi
 printf '\nDevStack installed on WSL. Run windows/sync-hosts.ps1 as Windows Administrator.\n'
 printf 'Protect /var/lib/devstack/ca/rootCA-key.pem and all secret/state files.\n'

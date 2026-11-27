@@ -2,7 +2,7 @@
 
 **Local PHP development environment for Windows 11 and Ubuntu on WSL2.**
 
-Manage development projects, web servers, databases and local HTTPS from one web dashboard. DevStack includes Nginx, PHP-FPM 8.5, MariaDB, Redis and mkcert, with optional Windows widgets for quick access and service management.
+Manage development projects, web servers, databases and local HTTPS from one web dashboard. DevStack uses Nginx, PHP-FPM 8.5 and mkcert, with optional MariaDB and Redis for application projects and optional Windows widgets for quick access and service management. Its own project registry, credentials, preferences and installer state are local JSON files; notification history and service receipts use SQLite. The dashboard, local state and Windows integration do not require a running MariaDB or Redis server.
 
 ## Features
 

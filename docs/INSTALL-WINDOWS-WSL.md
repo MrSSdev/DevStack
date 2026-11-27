@@ -37,13 +37,19 @@ bash scripts/bootstrap-ubuntu.sh
 
 The bootstrap prepares dependencies, builds the frontend, runs checks and installs the local services. The build requires Node.js 20.19+, 22.12+ or 24+ with npm; follow the version check. Choose password authentication for the dashboard.
 
-Check the installed services:
+The default full installation also installs and enables MariaDB and Redis for projects. For a new installation without either server, use `bash scripts/bootstrap-ubuntu.sh --core-only` instead. This leaves any pre-existing optional services unchanged; PHP database/cache extensions remain available for applications. Add or start those servers explicitly when a project needs them.
+
+Check the required services:
 
 ```bash
-systemctl is-active nginx php8.5-fpm mariadb redis-server devstackd
+for unit in nginx php8.5-fpm devstackd devstack-notifications.timer; do
+    systemctl is-active "$unit"
+done
 sudo nginx -t
 sudo php-fpm8.5 -t
 ```
+
+MariaDB and Redis may be stopped or absent without making DevStack unhealthy. On a fresh core-only installation, the empty protected project registry is initialized for the widget bridge. Use the matching service-integration bundle (the v1 reader also supports explicitly missing units).
 
 ## 3. Windows integration
 

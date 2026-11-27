@@ -93,11 +93,20 @@ def parse_request(stream, token, mode):
 def system_info():
     reply = subprocess.run([SYSTEMCTL, 'show', '--no-pager', '--property=Id,LoadState,ActiveState,MemoryCurrent,CPUUsageNSec',
                             *UNITS.values()], capture_output=True, text=True, timeout=2, env=ENV, check=False)
-    if reply.returncode != 0 or len(reply.stdout) > 32768: raise ValueError('units unavailable')
+    if len(reply.stdout) > 32768: raise ValueError('units unavailable')
     units = {}
     for block in reply.stdout.strip().split('\n\n'):
         values = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
         if values.get('Id') in UNITS.values(): units[values['Id']] = values
+    # systemctl can exit nonzero when an optional unit does not exist.
+    # A complete explicit result is still valid; an unavailable bus or
+    # incomplete result must never masquerade as a stopped service.
+    if set(units) != set(UNITS.values()) or any(
+            not row.get('LoadState') or not row.get('ActiveState') for row in units.values()):
+        raise ValueError('units unavailable')
+    if reply.returncode != 0 and not any(row['LoadState'] in
+            ('not-found', 'masked', 'error', 'bad-setting') for row in units.values()):
+        raise ValueError('units unavailable')
     return units
 
 

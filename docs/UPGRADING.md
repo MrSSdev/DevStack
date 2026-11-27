@@ -18,12 +18,24 @@ Use a clean tracked working tree on `main`. The updater checks and builds the so
 Verify the result:
 
 ```bash
-systemctl is-active nginx php8.5-fpm mariadb redis-server devstackd
+for unit in nginx php8.5-fpm devstackd devstack-notifications.timer; do
+    systemctl is-active "$unit"
+done
 sudo nginx -t
 sudo php-fpm8.5 -t
 ```
 
 Refresh https://devstack.test in the browser.
+
+### Optional project database and cache services
+
+The application state remains in the existing protected JSON files and SQLite journals; there is no format migration and no change to existing project databases, certificates or preferences. MariaDB and Redis are optional project services. An ordinary update neither starts, stops, enables, disables nor installs them.
+
+The updater recognizes the exact previous DevStack helper unit, saves a protected copy at `/var/backups/devstack/update-*/devstackd.service.before` and removes its old MariaDB dependency. Custom unit definitions are refused rather than overwritten. Effective dependencies are checked before restarting the helper, including local overrides. This compatible unit correction intentionally survives a previous-code rollback so rollback cannot reintroduce automatic MariaDB startup. The previous unit is retained for manual inspection, not automatic restoration. Restarting an old unit with the obsolete dependency would wake MariaDB.
+
+Operations requiring MariaDB (create/delete of managed MariaDB projects, database connection checks, dump and restore verification) explicitly require an installed, running MariaDB. Start it yourself if needed; a stopped or missing service is not an error for the dashboard, SQLite projects, hosts synchronization or notification history.
+
+There is no need to reinstall the Windows MSIX for this application change. Existing installed v1/v2 bridge contracts and state files are preserved when MariaDB/Redis are installed but stopped. If deploying on a core-only machine or removing the server packages entirely, use a matching updated service-integration bundle: the v1 reader now accepts explicit missing-unit responses while v2 omits unavailable services. Do not treat a missing bus response as a stopped service.
 
 If local Windows notifications are already enabled, the same update also
 refreshes their Windows launcher using the existing opt-in marker. Run
@@ -41,7 +53,7 @@ enabled component.
 
 A normal DevStack update neither installs nor replaces Mailpit. If you want the
 local mailbox, use [the separate one-time installer](LOCAL-MAIL.md). Captured
-messages, project mail settings and the four core services are independent of
+messages, project mail settings and the required web/helper services are independent of
 this optional service. Its first-install script refuses to overwrite an
 existing installation; a future Mailpit version upgrade requires a reviewed
 upgrade procedure.
