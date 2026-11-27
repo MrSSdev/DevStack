@@ -26,6 +26,12 @@ completion or failure. The collector also detects independent service
 failures and recovery.
 Routine refresh, clipboard and form validation messages remain temporary.
 
+### Adding an operation
+
+Register its POST route once in `DevStackNotices::POST_OPERATIONS` in `backend/notifications.php`: category, safe success/error titles, destination and Windows eligibility. Raw request data is never journaled. Return the normal API response through the shared `$respond` boundary in `backend/public/index.php`; it assigns the journal ID automatically. In React, call `runOperation` from `frontend/src/lib/api.ts` with a loading title and optional UI result handler. It owns the toast, exact-ID acknowledgement and terminal presentation. An accepted installer job hands the original loading toast to the existing job observer; systemd acceptance remains informational until the collector imports its result.
+
+Do not create a second journal event or pass a toast ID manually. Use `request` for reads and the explicit `POST_LOCAL` exceptions (authentication, credential reveal, notification maintenance). Installer rejection before an accepted response remains temporary because a failed job can already exist; its durable result comes from the job observer. Validation/authentication failures do not generate operation history. CI compares the actual POST handlers, server policy and frontend local exceptions, and verifies that every registered operation can create a journal event. The runtime rejects an unregistered POST and a raw journaled frontend request. Local UI messages deliberately use the transient toast helpers.
+
 The private SQLite journal is under /var/lib/devstack-web. The timer runs
 a fixed, unprivileged collector in Ubuntu only while the distro is running.
 It reads the existing fixed Mailpit API and a read-only helper snapshot.

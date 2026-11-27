@@ -93,13 +93,27 @@ if (!devstack_is_authenticated()) {
 }
 $_SESSION['last_seen'] = time();
 
+// No authenticated POST is executed until it is classified as a journal
+// operation or an explicit local exception. All responses below pass through
+// one boundary; a new registered operation cannot forget its journal call.
+if ($method === 'POST' && DevStackNotices::postPolicy($path)===null) {
+    devstack_json(404, ['ok' => false, 'error' => 'Nieznana operacja API.']);
+}
+$body ??= [];
+$respond = static function(int $status, array $value, bool $executionFailed = false) use ($method,$path,$body): never {
+    devstack_json($status,$method==='POST'
+        ? devstack_operation_response($path,$body,$status,$value,$executionFailed)
+        : $value);
+};
+
+// Authenticated route dispatch (guarded by notification policy).
 try {
     if ($method === 'GET' && ($path === '/api/ca/info' || $path === '/api/ca')) {
         // The user must already be authenticated; this is the public CA cert,
         // NOT the private signing key. Windows trust is never changed here.
         $ca = devstack_rpc('public_ca_certificate', []);
         if ($path === '/api/ca/info') {
-            devstack_json(200, ['ok' => true, 'result' => ['sha256' => $ca['sha256']]]);
+            $respond(200, ['ok' => true, 'result' => ['sha256' => $ca['sha256']]]);
         }
         $pem = $ca['pem'] ?? null;
         if (!is_string($pem) || strlen($pem) > 16384 ||
@@ -116,13 +130,13 @@ try {
         if (count($body) !== 0) {
             throw new InvalidArgumentException('Ta operacja nie przyjmuje parametrów.');
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('install_wsl_ca', []))]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('install_wsl_ca', [])]);
     }
     if ($method === 'GET' && $path === '/api/services/status') {
         // Authentication and the session timestamp were checked above.
         // The fast read must not hold the PHP session lock across systemd RPC.
         session_write_close();
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('service_status', [])]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('service_status', [])]);
     }
     if ($method === 'GET' && $path === '/api/state') {
         $state=devstack_rpc('status', []);
@@ -131,46 +145,46 @@ try {
             $client=DevStackNotices::client($_SERVER['HTTP_X_DEVSTACK_CLIENT']??null);
             $state['engine_notice']=$notices->observeJob(is_array($state['engine_job']??null)?$state['engine_job']:null,$client);
         } catch (Throwable) { error_log('DevStack notification journal unavailable.'); }
-        devstack_json(200, ['ok' => true, 'result' => $state]);
+        $respond(200, ['ok' => true, 'result' => $state]);
     }
     if ($method === 'POST' && $path === '/api/notifications/poll') {
         $client=DevStackNotices::client($body['client']??null);
         if ($client==='') throw new InvalidArgumentException('Nieprawidłowy klient powiadomień.');
         $store=new DevStackNotices();
-        devstack_json(200,['ok'=>true,'result'=>$store->poll($client,true,$body['opened']??null,$body['retired']??[])]);
+        $respond(200,['ok'=>true,'result'=>$store->poll($client,true,$body['opened']??null,$body['retired']??[])]);
     }
     if ($method === 'POST' && $path === '/api/notifications/leave') {
         $client=DevStackNotices::client($body['client']??null);
         if ($client==='') throw new InvalidArgumentException('Nieprawidłowy klient powiadomień.');
         (new DevStackNotices())->leave($client);
-        devstack_json(200,['ok'=>true,'result'=>[]]);
+        $respond(200,['ok'=>true,'result'=>[]]);
     }
     if ($method === 'POST' && $path === '/api/notifications/ack') {
         (new DevStackNotices())->acknowledge(is_string($body['id']??null)?$body['id']:'',DevStackNotices::client($body['client']??null));
-        devstack_json(200,['ok'=>true,'result'=>[]]);
+        $respond(200,['ok'=>true,'result'=>[]]);
     }
     if ($method === 'POST' && $path === '/api/notifications/manage') {
         $action=$body['action']??null;
         if (!is_string($action)) throw new InvalidArgumentException('Nieznana operacja.');
         (new DevStackNotices())->mutate($action,$body['id']??null);
-        devstack_json(200,['ok'=>true,'result'=>[]]);
+        $respond(200,['ok'=>true,'result'=>[]]);
     }
     if ($method === 'POST' && $path === '/api/notifications/categories') {
         (new DevStackNotices())->setCategories($body['categories']??null);
-        devstack_json(200,['ok'=>true,'result'=>[]]);
+        $respond(200,['ok'=>true,'result'=>[]]);
     }
     if ($method === 'POST' && in_array($path, ['/api/notifications/push-key','/api/notifications/subscribe'], true)) {
-        devstack_json(410,['ok'=>false,'error'=>'Web Push został wycofany. DevStack korzysta z lokalnych powiadomień Windows.']);
+        $respond(410,['ok'=>false,'error'=>'Web Push został wycofany. DevStack korzysta z lokalnych powiadomień Windows.']);
     }
     if ($method === 'POST' && $path === '/api/notifications/unsubscribe') {
         (new DevStackNotices())->unsubscribe();
-        devstack_json(200,['ok'=>true,'result'=>[]]);
+        $respond(200,['ok'=>true,'result'=>[]]);
     }
     // These routes run after the existing session and POST CSRF checks.
     // JSON and attachments retain the ordinary non-frameable policy. Only
     // the dedicated preview response is frameable, with an opaque sandbox.
     if ($method === 'GET' && $path === '/api/mail/messages') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('list', $_GET)]);
+        $respond(200, ['ok' => true, 'result' => devstack_mailpit_request('list', $_GET)]);
     }
     if ($method === 'GET' && preg_match('~^/api/mail/message/([A-Za-z0-9]{22})/preview$~D', $path, $mailMatch)) {
         require_once __DIR__ . '/../mail-preview.php';
@@ -199,7 +213,7 @@ try {
         exit;
     }
     if ($method === 'GET' && preg_match('~^/api/mail/message/([A-Za-z0-9]{22})$~D', $path, $mailMatch)) {
-        devstack_json(200, ['ok' => true, 'result' => devstack_mailpit_request('message', ['id' => $mailMatch[1]])]);
+        $respond(200, ['ok' => true, 'result' => devstack_mailpit_request('message', ['id' => $mailMatch[1]])]);
     }
     if ($method === 'GET' && preg_match('~^/api/mail/message/([A-Za-z0-9]{22})/part/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$~D', $path, $mailMatch)) {
         $attachment = devstack_mailpit_request('attachment', ['id' => $mailMatch[1], 'part' => $mailMatch[2]]);
@@ -211,58 +225,58 @@ try {
     }
     if ($method === 'POST' && $path === '/api/mail/delete') {
         if (count($body) !== 1) throw new InvalidArgumentException('Wybierz jedną wiadomość do usunięcia.');
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_mailpit_request('delete', $body))]);
+        $respond(200, ['ok' => true, 'result' => devstack_mailpit_request('delete', $body)]);
     }
     if ($method === 'POST' && $path === '/api/mail/delete-many') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_mailpit_request('delete-many', $body))]);
+        $respond(200, ['ok' => true, 'result' => devstack_mailpit_request('delete-many', $body)]);
     }
     if ($method === 'POST' && $path === '/api/mail/clear') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_mailpit_request('clear', $body))]);
+        $respond(200, ['ok' => true, 'result' => devstack_mailpit_request('clear', $body)]);
     }
     if ($method === 'POST' && $path === '/api/services/control') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('service_control', $body))]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('service_control', $body)]);
     }
     if ($method === 'POST' && $path === '/api/services/autostart') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('set_service_autostart', $body))]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('set_service_autostart', $body)]);
     }
     if ($method === 'POST' && $path === '/api/widget/services') {
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('set_widget_services', $body))]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('set_widget_services', $body)]);
     }
     if ($method === 'POST' && $path === '/api/preferences') {
         $theme = $body['theme'] ?? null;
         if (!is_string($theme) || !in_array($theme, ['light', 'dark'], true) || count($body) !== 1) {
-            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowa wartość motywu.']);
+            $respond(422, ['ok' => false, 'error' => 'Nieprawidłowa wartość motywu.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('set_preferences', ['theme' => $theme]))]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('set_preferences', ['theme' => $theme])]);
     }
     $engineRoute = preg_match('~^/api/engines/([a-z][a-z0-9-]{1,39})$~D', $path, $engineMatch) === 1;
     if ($method === 'GET' && $engineRoute) {
         if (!devstack_engine_access_allowed()) {
-            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
+            $respond(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_status', ['engine' => $engineMatch[1]])]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_status', ['engine' => $engineMatch[1]])]);
     }
     if ($method === 'POST' && $engineRoute) {
         if (!devstack_engine_access_allowed()) {
-            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
+            $respond(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
         }
         if (count($body) !== 1 || !is_string($body['action'] ?? null) ||
             !in_array($body['action'], ['check', 'install-tool', 'update-tool'], true)) {
-            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowa operacja instalatora.']);
+            $respond(422, ['ok' => false, 'error' => 'Nieprawidłowa operacja instalatora.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('engine_tool_action', [
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('engine_tool_action', [
             'engine' => $engineMatch[1], 'action' => $body['action'],
-        ]))]);
+        ])]);
     }
     if ($method === 'POST' && $path === '/api/projects') {
         $engine = $body['engine'] ?? 'none';
         if (!is_string($engine) || !preg_match('~^[a-z][a-z0-9-]{1,39}$~D', $engine)) {
-            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowy framework.']);
+            $respond(422, ['ok' => false, 'error' => 'Nieprawidłowy framework.']);
         }
         if ($engine !== 'none' && !devstack_engine_access_allowed()) {
-            devstack_json(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
+            $respond(403, ['ok' => false, 'error' => 'Instalatory wymagają logowania lub jednorazowej zgody administratora na pracę bez hasła.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('create', [
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('create', [
             'slug' => $body['slug'] ?? null,
             'name' => $body['name'] ?? null,
             'domain' => $body['domain'] ?? null,
@@ -274,75 +288,71 @@ try {
             'starter_kit' => $body['starter_kit'] ?? 'none',
             'installer_options' => is_array($body['installer_options'] ?? []) && empty($body['installer_options'])
                 ? (object) [] : ($body['installer_options'] ?? (object) []),
-        ]))]);
+        ])]);
     }
     if ($method === 'POST' && $path === '/api/projects/test-db') {
         if (count($body) !== 1 || !is_string($body['slug'] ?? null)) {
-            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowe dane testu MariaDB.']);
+            $respond(422, ['ok' => false, 'error' => 'Nieprawidłowe dane testu MariaDB.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('test_project_database', ['slug' => $body['slug']]))]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('test_project_database', ['slug' => $body['slug']])]);
     }
     if ($method === 'POST' && $path === '/api/projects/delete') {
         if (count($body) !== 3 ||
             !is_string($body['slug'] ?? null) ||
             !is_string($body['confirmation'] ?? null) ||
             !is_bool($body['delete_database'] ?? null)) {
-            devstack_json(422, ['ok' => false, 'error' => 'Nieprawidłowe dane usuwania projektu.']);
+            $respond(422, ['ok' => false, 'error' => 'Nieprawidłowe dane usuwania projektu.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('delete_project', [
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('delete_project', [
             'slug' => $body['slug'],
             'confirmation' => $body['confirmation'],
             'delete_database' => $body['delete_database'],
-        ]))]);
+        ])]);
     }
     if ($method === 'POST' && $path === '/api/reveal') {
         $pw = $body['password'] ?? null;
         if (devstack_password_required() && (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw))) {
-            devstack_json(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu.']);
+            $respond(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu.']);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('reveal', ['slug' => $body['slug'] ?? null])]);
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('reveal', ['slug' => $body['slug'] ?? null])]);
     }
     if ($method === 'POST' && $path === '/api/config/full') {
         if (devstack_password_required() && !devstack_login_limit()) {
-            devstack_json(429, ['ok' => false, 'error' => 'Zbyt wiele prób uwierzytelnienia.']);
+            $respond(429, ['ok' => false, 'error' => 'Zbyt wiele prób uwierzytelnienia.']);
         }
         $pw = $body['password'] ?? null;
         if (devstack_password_required()) {
             if (!is_string($pw) || strlen($pw) > 300 || !devstack_password_valid($pw)) {
                 devstack_login_limit(failure: true);
-                devstack_json(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu, aby zapisać zaawansowaną konfigurację.']);
+                $respond(403, ['ok' => false, 'error' => 'Potwierdź hasło panelu, aby zapisać zaawansowaną konfigurację.']);
             }
             devstack_login_limit(reset: true);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('update_full_config', [
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('update_full_config', [
             'slug' => $body['slug'] ?? null,
             'full_config' => $body['full_config'] ?? null,
-        ]))]);
+        ])]);
     }
     if ($method === 'POST' && $path === '/api/config') {
         if (array_key_exists('rules', $body)) {
             if (count($body) !== 2 || !array_key_exists('slug', $body)) {
                 throw new InvalidArgumentException('Nieprawidłowe pola konfiguracji Nginx.');
             }
-            devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('update_config', [
+            $respond(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
                 'slug' => $body['slug'],
                 'rules' => $body['rules'],
-            ]))]);
+            ])]);
         }
-        devstack_json(200, ['ok' => true, 'result' => devstack_notice_operation($path,$body,devstack_rpc('update_config', [
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('update_config', [
             'slug' => $body['slug'] ?? null,
             'overrides' => $body['overrides'] ?? null,
             'extra_locations' => $body['extra_locations'] ?? '',
-        ]))]);
+        ])]);
     }
 } catch (InvalidArgumentException $e) {
-    devstack_json(422, ['ok' => false, 'error' => $e->getMessage()]);
+    $respond(422, ['ok' => false, 'error' => $e->getMessage()]);
 } catch (Throwable $e) {
-    $notice=[];
-    if ($method==='POST' && !str_starts_with($path,'/api/notifications/') && !str_starts_with($path,'/api/engines/') && !($path==='/api/projects' && ($body['engine']??'none')!=='none')) {
-        $notice=devstack_notice_operation($path,$body??[],[],false);
-    }
     error_log('DevStack error: ' . $e->getMessage());
-    devstack_json(422, ['ok' => false, 'error' => $e->getMessage(), ...$notice]);
+    $respond(422, ['ok' => false, 'error' => $e->getMessage()], true);
 }
-devstack_json(404, ['ok' => false, 'error' => 'Nieznana operacja API.']);
+$respond(404, ['ok' => false, 'error' => 'Nieznana operacja API.']);

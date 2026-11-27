@@ -21,6 +21,58 @@ final class DevStackNotices
 {
     public const CATEGORIES = ['mail', 'project', 'installer', 'service', 'settings'];
     public const LIMIT = 200;
+    // One registration per authenticated POST. Safe fixed metadata, never
+    // raw request bodies. Columns: category, destination, success title,
+    // error title, Windows eligibility, project scope, public RPC message.
+    public const POST_OPERATIONS = [
+        '/api/projects' => ['project', '/#/projects', 'Projekt utworzony', 'Tworzenie projektu', true, 'project', true],
+        '/api/projects/delete' => ['project', '/#/projects', 'Projekt usunięty', 'Usuwanie projektu', true, 'deleted-project', true],
+        '/api/config' => ['project', '/#/projects', 'Zapisano konfigurację Nginx', 'Zapis konfiguracji Nginx', true, 'project', true],
+        '/api/config/full' => ['project', '/#/projects', 'Zapisano konfigurację Nginx', 'Zapis konfiguracji Nginx', true, 'project', true],
+        '/api/projects/test-db' => ['project', '/#/projects', 'Sprawdzono połączenie z bazą', 'Test połączenia z bazą', false, 'project', true],
+        '/api/engines/:engine' => ['installer', '/#/projects', 'Operacja instalatora', 'Operacja instalatora', true, 'project', false],
+        '/api/services/control' => ['service', '/#/dashboard', 'Polecenie usługi przyjęte', 'Sterowanie usługą', true, 'none', false],
+        '/api/services/autostart' => ['settings', '/#/dashboard', 'Zapisano autostart usługi', 'Zapis autostartu usługi', false, 'none', false],
+        '/api/ca/wsl' => ['settings', '/#/settings', 'Certyfikat CA w WSL', 'Kopiowanie certyfikatu CA do WSL', false, 'none', false],
+        '/api/preferences' => ['settings', '/#/settings', 'Zapisano ustawienia', 'Zapis ustawień', false, 'none', false],
+        '/api/widget/services' => ['settings', '/#/settings', 'Zapisano ustawienia', 'Zapis ustawień', false, 'none', false],
+        '/api/mail/delete' => ['mail', '/#/mail', 'Usunięto wiadomości', 'Usuwanie wiadomości', false, 'none', false],
+        '/api/mail/delete-many' => ['mail', '/#/mail', 'Usunięto wiadomości', 'Usuwanie wiadomości', false, 'none', false],
+        '/api/mail/clear' => ['mail', '/#/mail', 'Opróżniono skrzynkę', 'Usuwanie wiadomości', false, 'none', false],
+    ];
+    // Explicit non-journal exceptions, not a prefix-based bypass.
+    public const POST_LOCAL = [
+        '/api/login' => 'Session lifecycle; not a journal operation.',
+        '/api/logout' => 'Session lifecycle; not a journal operation.',
+        '/api/reveal' => 'Sensitive credential disclosure; no persistent event.',
+        '/api/notifications/poll' => 'Read/acknowledgement and presence; avoid recursive events.',
+        '/api/notifications/leave' => 'Presence transport.',
+        '/api/notifications/ack' => 'Direct-toast delivery acknowledgement.',
+        '/api/notifications/manage' => 'Reading/deleting the journal must not create another event.',
+        '/api/notifications/categories' => 'Notification delivery settings; no self-notification.',
+        '/api/notifications/unsubscribe' => 'Legacy subscription cleanup.',
+        '/api/notifications/push-key' => 'Retired transport; returns 410.',
+        '/api/notifications/subscribe' => 'Retired transport; returns 410.',
+    ];
+
+    public static function operationKey(string $path): ?string
+    {
+        if (isset(self::POST_OPERATIONS[$path]) && $path !== '/api/engines/:engine') return $path;
+        if (preg_match('~^/api/engines/[a-z][a-z0-9-]{1,39}$~D', $path)) return '/api/engines/:engine';
+        return null;
+    }
+    public static function postPolicy(string $path): ?string
+    {
+        if (self::operationKey($path)!==null) return 'journal';
+        if (isset(self::POST_LOCAL[$path])) return 'local';
+        return null;
+    }
+    public static function installerOperation(string $path, array $body): bool
+    {
+        return self::operationKey($path)==='/api/engines/:engine' ||
+            ($path==='/api/projects' && ($body['engine']??'none')!=='none');
+    }
+
     private const CLIENT_LEASE_SECONDS = 90;
     // A document ID is never reused after pagehide. Retain a bounded close
     // marker well beyond ordinary in-flight HTTP request lifetimes.
@@ -180,11 +232,15 @@ final class DevStackNotices
     // passwords, configuration, command output, verification URLs or bodies.
     public function operation(string $path, array $body, array $result, string $owner, bool $ok = true): ?string
     {
-        $slug = self::project($body['slug'] ?? null);
-        $category = 'project'; $route = '/#/projects'; $description = $slug;
-        $kind = $ok ? 'success' : 'error'; $push = true;
-        if ($path === '/api/projects' || preg_match('~^/api/engines/[a-z][a-z0-9-]{1,39}$~D', $path)) {
-            $isEngine = str_starts_with($path, '/api/engines/') || ($body['engine'] ?? 'none') !== 'none';
+        $key = self::operationKey($path);
+        if ($key===null) return null;
+        [$category,$route,$successTitle,$errorTitle,$push,$scope,$publicMessage] = self::POST_OPERATIONS[$key];
+        $slug = $scope==='none' ? '' : self::project($body['slug'] ?? null);
+        $description = $slug;
+        $title = $ok ? $successTitle : $errorTitle;
+        $kind = $ok ? 'success' : 'error';
+        if ($key === '/api/projects' || $key === '/api/engines/:engine') {
+            $isEngine = self::installerOperation($path,$body);
             $job = $result['job_id'] ?? null;
             if ($ok && is_string($job) && preg_match('~^[a-f0-9]{32}$~D', $job)) {
                 return $this->atomic(function () use ($job,$slug,$owner) {
@@ -198,52 +254,34 @@ final class DevStackNotices
                     return $id;
                 });
             }
-            $title = $isEngine ? 'Operacja instalatora' : 'Tworzenie projektu';
-            if (!$isEngine && $ok) $title = 'Projekt utworzony';
-            if ($isEngine) $category='installer';
-        } elseif ($path === '/api/projects/delete') {
-            $title = $ok ? 'Projekt usunięty' : 'Usuwanie projektu';
-        } elseif (in_array($path, ['/api/config','/api/config/full'], true)) {
-            $title = $ok ? 'Zapisano konfigurację Nginx' : 'Zapis konfiguracji Nginx';
-        } elseif ($path === '/api/projects/test-db') {
-            $title = $ok ? 'Sprawdzono połączenie z bazą' : 'Test połączenia z bazą';
-            $push = false;
-        } elseif ($path === '/api/services/control') {
-            $category = 'service'; $route = '/#/dashboard';
+            if ($isEngine) {
+                $title='Operacja instalatora';
+                $category='installer';
+            }
+        } elseif ($key === '/api/services/control') {
             $service = $body['service'] ?? null;
             $action = $body['action'] ?? null;
             if (!is_string($service) || !preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$service) ||
                 !in_array($action,['start','stop','restart'],true)) return null;
             $description = $service . ' — ' . ['start'=>'uruchomienie','stop'=>'zatrzymanie','restart'=>'restart'][$action];
-            $title = $ok ? 'Polecenie usługi przyjęte' : 'Sterowanie usługą';
             if ($ok) $kind='info'; // Queue acknowledgement, not a verified systemd result.
-        } elseif ($path === '/api/services/autostart') {
+        } elseif ($key === '/api/services/autostart') {
             $service = $body['service'] ?? null;
             $enabled = $body['enabled'] ?? null;
             if (!is_string($service) || !preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$service) || !is_bool($enabled)) return null;
-            $category='settings'; $route='/#/dashboard'; $push=false;
             $description=$service . ' — ' . ($enabled?'włączenie':'wyłączenie');
-            $title=$ok?'Zapisano autostart usługi':'Zapis autostartu usługi';
-        } elseif ($path === '/api/ca/wsl') {
+        } elseif ($key === '/api/ca/wsl') {
             if ($body !== []) return null;
-            $category='settings'; $route='/#/settings'; $push=false;
-            $title=$ok?'Certyfikat CA w WSL':'Kopiowanie certyfikatu CA do WSL';
             $description=$ok?'Potwierdzono zaufanie do lokalnego CA DevStack.':'';
-        } elseif (in_array($path, ['/api/preferences','/api/widget/services'], true)) {
-            $category='settings'; $route='/#/settings'; $description='';
-            $title=$ok?'Zapisano ustawienia':'Zapis ustawień'; $push=false;
-        } elseif (in_array($path,['/api/mail/delete','/api/mail/delete-many','/api/mail/clear'],true)) {
-            $category='mail'; $route='/#/mail'; $description='';
-            $title=$ok?($path==='/api/mail/clear'?'Opróżniono skrzynkę':'Usunięto wiadomości'):'Usuwanie wiadomości';
-            $push=false;
-        } else return null;
+        }
         if (!$ok) $description .= ($description!==''?' · ':'') . 'Operacja nie powiodła się.';
-        elseif (in_array($path,['/api/projects','/api/projects/delete','/api/config','/api/config/full','/api/projects/test-db'],true)) {
-            // These fixed daemon methods return a public operation message.
+        elseif ($publicMessage) {
+            // Only explicitly allowlisted fixed daemon methods return a
+            // public operation message. The default is fixed metadata only.
             $message=self::clean($result['message']??'',220);
             if ($message!=='') $description .= ($description!==''?' · ':'') . $message;
         }
-        if ($slug!=='' && $path!=='/api/projects/delete') $route='/#/project/'.$slug;
+        if ($slug!=='' && $scope==='project') $route='/#/project/'.$slug;
         return $this->atomic(function () use ($category,$title,$description,$route,$kind,$owner,$push) {
             $id='op-'.bin2hex(random_bytes(16));
             $this->insert($id,$category,$title,$description,$route,$kind,$owner,true,$push);
@@ -525,4 +563,23 @@ function devstack_notice_operation(string $path, array $body, array $result, boo
         error_log('DevStack notification journal unavailable.');
     }
     return $result;
+}
+
+/** Complete authenticated API operations at one response boundary.
+ * Only real execution failures are journaled; authentication and request
+ * validation responses remain transient. Installer failures may already
+ * have a stable job record and are observed by that existing lifecycle.
+ */
+function devstack_operation_response(string $path, array $body, int $status, array $value, bool $executionFailed = false): array
+{
+    if (DevStackNotices::postPolicy($path)!=='journal') return $value;
+    if ($status>=200 && $status<300 && ($value['ok']??false)===true) {
+        $result=$value['result']??null;
+        $recorded=devstack_notice_operation($path,$body,is_array($result)?$result:[]);
+        if (is_array($result)) $value['result']=$recorded;
+        elseif (isset($recorded['notification_id'])) $value['notification_id']=$recorded['notification_id'];
+    } elseif ($executionFailed && !DevStackNotices::installerOperation($path,$body)) {
+        $value += devstack_notice_operation($path,$body,[],false);
+    }
+    return $value;
 }
