@@ -64,7 +64,8 @@ class ProjectHttp:
     def argv(self, mounts: PinnedProject) -> list[str]:
         if mounts.path != self.runtime.project:
             raise ValueError('Project mount authorization mismatch')
-        fpm = fixture_path(self.runtime.sockets, directory=True)
+        source_path = checked_path if self.runtime.registration is not None else fixture_path
+        fpm = source_path(self.runtime.sockets, directory=True)
         config = source_path(self.config, directory=False)
         sockets = source_path(self.sockets, directory=True)
         if self.sockets == self.runtime.sockets:
