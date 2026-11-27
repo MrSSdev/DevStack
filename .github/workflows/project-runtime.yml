@@ -5,7 +5,17 @@ on:
     branches: [main]
     paths:
       - 'daemon/project_runtime.py'
+      - 'daemon/project_http.py'
+      - 'tests/project_http_smoke.py'
       - 'tests/project-runtime-systemd-smoke.py'
+      - '.github/workflows/project-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'daemon/project_runtime.py'
+      - 'daemon/project_http.py'
+      - 'tests/project-runtime-systemd-smoke.py'
+      - 'tests/project_http_smoke.py'
       - '.github/workflows/project-runtime.yml'
   workflow_dispatch:
 
@@ -14,7 +24,7 @@ permissions:
 
 jobs:
   runtime:
-    name: Two real isolated PHP-FPM instances and SQLite
+    name: Two isolated PHP-FPM instances, SQLite and real HTTPS ingress
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -24,8 +34,8 @@ jobs:
       - name: Install runtime dependencies on disposable runner
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap acl libfcgi-bin php8.5-fpm php8.5-sqlite3
+          sudo apt-get install -y --no-install-recommends bubblewrap acl libfcgi-bin php8.5-fpm php8.5-sqlite3 nginx openssl
       - name: Check and exercise prototype
         run: |
-          python3 -m py_compile daemon/project_runtime.py tests/project-runtime-systemd-smoke.py
+          python3 -m py_compile daemon/project_runtime.py daemon/project_http.py tests/project-runtime-systemd-smoke.py tests/project_http_smoke.py
           sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 python3 -I tests/project-runtime-systemd-smoke.py
