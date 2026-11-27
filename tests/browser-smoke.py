@@ -572,7 +572,7 @@ class BrowserAcceptance(unittest.TestCase):
         self.wait_total(1)
         anonymous=self.browser.new_context()
         self.addCleanup(anonymous.close)
-        for path in ['/api/mail/messages','/api/mail/message/'+'A'*22]:
+        for path in ['/api/mail/messages','/api/mail/message/'+'A'*22,'/api/services/status']:
             self.assertEqual(anonymous.request.get(BASE+path).status,401)
         token=anonymous.request.get(BASE+'/api/session').json()['csrf']
         self.assertEqual(anonymous.request.post(BASE+'/api/mail/clear',data={'confirmation':'delete-all'},headers={'Origin':BASE,'X-CSRF-Token':token}).status,401)
@@ -663,6 +663,39 @@ class BrowserAcceptance(unittest.TestCase):
         dialog.get_by_role('button',name='Uruchom',exact=True).click()
         dialog.get_by_role('button',name='Potwierdź',exact=True).click()
         expect(dialog.get_by_text('Działa',exact=True)).to_be_visible(timeout=12000)
+
+    def test_04b_live_external_service_status(self):
+        # Use real systemd, outside the panel RPC, as the Windows bridge does.
+        # A successful command is not evidence that the displayed state changed.
+        requests=[]
+        self.page.on('request',lambda req: requests.append(req.url))
+        self.goto('dashboard')
+        row=self.page.locator('main button[data-service-id="redis"]')
+        expect(row.get_by_text('Działa',exact=True)).to_be_visible()
+        self.page.wait_for_function("""()=>performance.getEntriesByType('resource').some(e=>e.name.endsWith('/api/services/status')&&e.responseEnd>0)""")
+        response=self.context.request.get(BASE+'/api/services/status')
+        self.assertEqual(response.status,200,response.text())
+        self.assertIn('no-store',response.headers['cache-control'])
+        initial=response.json()['result']
+        self.assertEqual(set(initial),{'services','managed_services','service_action_pending','mailpit'})
+        initial_redis=next(r for r in initial['managed_services'] if r['id']=='redis')
+        full_reads=requests.count(BASE+'/api/state')
+        try:
+            subprocess.run(['sudo','systemctl','stop','redis-server.service'],check=True,timeout=20)
+            expect(row.get_by_text('Zatrzymana',exact=True)).to_be_visible(timeout=6000)
+            row.click()
+            dialog=self.page.locator('dialog:modal')
+            expect(dialog.get_by_text('Zatrzymana',exact=True)).to_be_visible()
+            subprocess.run(['sudo','systemctl','start','redis-server.service'],check=True,timeout=20)
+            expect(dialog.get_by_text('Działa',exact=True)).to_be_visible(timeout=6000)
+            dialog.get_by_role('button',name='Zamknij',exact=True).click()
+            expect(row.get_by_text('Działa',exact=True)).to_be_visible()
+            current=self.context.request.get(BASE+'/api/services/status').json()['result']
+            redis=next(r for r in current['managed_services'] if r['id']=='redis')
+            self.assertEqual(redis['autostart'],initial_redis['autostart'])
+            self.assertEqual(requests.count(BASE+'/api/state'),full_reads,'Fast status must not depend on full state refresh')
+        finally:
+            subprocess.run(['sudo','systemctl','start','redis-server.service'],check=True,timeout=20)
 
     def test_07_global_toasts_and_job_presentation(self):
         # Real operations for the shared renderer; separately replay only a

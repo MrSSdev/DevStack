@@ -10,7 +10,7 @@ Manage development projects, web servers, databases and local HTTPS from one web
 - Local HTTPS certificates and automatic synchronization of managed Windows hosts entries.
 - MariaDB databases, per-project accounts and connection tests.
 - Nginx configuration management with syntax validation.
-- Dashboard service status and control, including persistent autostart for optional services. The Autostart badge reflects the boot setting, independently of the running state. Click an optional service to enable or disable its systemd autostart without starting, stopping or restarting it. Nginx and PHP-FPM always start with DevStack and their autostart cannot be disabled from the dashboard.
+- Dashboard service status and control, including persistent autostart for optional services. The visible service views read a lightweight authenticated systemd snapshot approximately every two seconds and immediately on returning focus, independently of the normal full project refresh; the extra status polling pauses when the page is hidden. The Autostart badge reflects the boot setting, independently of the running state. Click an optional service to enable or disable its systemd autostart without starting, stopping or restarting it. Nginx and PHP-FPM always start with DevStack and their autostart cannot be disabled from the dashboard.
 - Optional local [Mailpit inbox](docs/LOCAL-MAIL.md) inside DevStack, with per-project test SMTP configuration.
 - Two Windows 11 widgets: **Ubuntu** for WSL controls and resource readings, **DevStack** for service monitoring, restarts and project shortcuts.
 - Application updates and database backup utilities.

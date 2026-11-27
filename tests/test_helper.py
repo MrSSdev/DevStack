@@ -132,6 +132,23 @@ class ValidationTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     d.get_ui_preferences()
 
+    def test_lightweight_service_status_uses_only_registered_units(self):
+        rows = [{'id':'redis','unit':'redis-server.service','state':'inactive','autostart':False},
+                {'id':'mailpit','unit':'devstack-mailpit.service','state':'active','autostart':True}]
+        with patch.object(d.managed_services,'public_rows',return_value=rows) as read, \
+             patch.object(d.managed_services,'action_pending',return_value=True), \
+             patch.object(d,'public_projects',side_effect=AssertionError('Project scan in fast service read')), \
+             patch.object(d,'get_ui_preferences',side_effect=AssertionError('Preference read in fast service read')), \
+             patch.object(d,'public_engine_job',side_effect=AssertionError('Job read in fast service read')):
+            reply=json.loads(d.handle(b'{"op":"service_status","data":{}}'))
+            self.assertEqual(reply,{'ok':True,'result':{
+                'services':{'redis-server':'inactive','devstack-mailpit':'active'},
+                'managed_services':rows,'service_action_pending':True,'mailpit':'active'}})
+            read.assert_called_once_with()
+            invalid=json.loads(d.handle(b'{"op":"service_status","data":{"service":"sshd"}}'))
+            self.assertFalse(invalid['ok'])
+            read.assert_called_once_with()
+
     def test_status_includes_server_theme(self):
         with patch.object(d.managed_services,'public_rows',return_value=[{'id':'nginx','unit':'nginx.service','state':'active'}]), \
              patch.object(d.managed_services,'action_pending',return_value=False), \

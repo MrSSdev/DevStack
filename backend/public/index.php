@@ -112,6 +112,12 @@ try {
         echo $pem;
         exit;
     }
+    if ($method === 'GET' && $path === '/api/services/status') {
+        // Authentication and the session timestamp were checked above.
+        // The fast read must not hold the PHP session lock across systemd RPC.
+        session_write_close();
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('service_status', [])]);
+    }
     if ($method === 'GET' && $path === '/api/state') {
         $state=devstack_rpc('status', []);
         try {
