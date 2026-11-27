@@ -235,6 +235,13 @@ version alone. No setuid fallback, arbitrary PPA, downgrade or runtime
 override is offered. Reevaluate the approved backend (patched Bubblewrap
 or a tested equivalent) before enabling real agents.
 
+The installed diagnostic requires root-owned, non-group/world-writable
+ancestors of its control files and installed code. GitHub-hosted CI may
+provide a world-writable /opt; the disposable installation test prepares
+that ancestor explicitly. No installer or preflight changes permissions
+of a workstation's /opt automatically. An unsafe ancestor must be reviewed
+by the administrator before relying on the installed code.
+
 Metadata inspection is deliberately not mount authorization. A later
 launcher must retain verified source descriptors or use a protected
 mount lifecycle, enforce project identity at launch, handle directory

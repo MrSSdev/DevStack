@@ -43,6 +43,11 @@ jobs:
           # Only on this disposable hosted runner; never purge workstation data.
           sudo apt-get purge -y mariadb-server mariadb-server-core redis-server
           sudo systemctl daemon-reload
+          # Disposable hosted runner: /opt is precreated world-writable.
+          # Mirror the protected ancestor required by the installed helper.
+          # Never make this an automatic workstation permission change.
+          sudo chmod go-w /opt
+          stat -c '%A %a %U:%G %n' /opt
           mkdir -p "$HOME/projects"
           printf '2\nDISABLE\n' | sudo bash scripts/install.sh --core-only
           sudo bash scripts/install-mailpit.sh
