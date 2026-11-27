@@ -63,13 +63,30 @@ class Component:
     kind: str
     user: str
     endpoint: Path
+    registration: str | None = None
+
+    @property
+    def service_user(self):
+        return 'root' if self.registration is not None else self.user
+
+    @property
+    def runtime_directory(self):
+        if self.registration is None:
+            return None
+        if (self.kind not in ('php', 'http') or not re.fullmatch(r'[0-9a-f]{32}', self.registration)):
+            raise ValueError('Invalid registered pilot component')
+        return 'devstack-pilot-' + self.registration + '-' + self.kind
 
     @property
     def unit(self):
+        if self.registration is not None:
+            return self.runtime_directory + '.service'
         return 'devstack-lifecycle-probe-' + self.user + '-' + self.kind + '.service'
 
     @property
     def description(self):
+        if self.registration is not None:
+            return 'DevStack registered pilot ' + self.registration + ' ' + self.kind
         return 'DevStack disposable runtime ' + self.user + ' ' + self.kind
 
 
@@ -84,7 +101,7 @@ def parse_snapshot(result, component):
         return 'absent'
     if (result.returncode != 0 or values.get('LoadState') != 'loaded'
             or values.get('Transient') != 'yes'
-            or values.get('User') != component.user
+            or values.get('User') != component.service_user
             or values.get('Description') != component.description):
         raise LifecycleError('Unowned or unreadable unit: ' + component.unit)
     state = values.get('ActiveState')
@@ -145,13 +162,20 @@ def start_component(component, argv):
         if time.monotonic() >= deadline:
             raise LifecycleError('Transient unit not collected')
         time.sleep(0.1)
+    if component.registration is not None and os.path.lexists(Path('/run') / component.runtime_directory):
+        raise LifecycleError('Unexpected existing pilot runtime directory')
     if socket_probe(component, cleanup=True):
         raise LifecycleError('Endpoint already accepts connections')
+    profile = (['--property=RuntimeMaxSec=180s'] if component.registration is None else [
+        '--property=PrivateMounts=yes',
+        '--property=RuntimeDirectory=' + component.runtime_directory,
+        '--property=RuntimeDirectoryMode=0711',
+    ])
     result = run([SYSTEMD_RUN, '--quiet', '--collect', '--service-type=exec',
         '--unit=' + component.unit, '--description=' + component.description,
-        '--uid=' + component.user, *RUNTIME_SECURITY_PROPERTIES,
+        '--uid=' + component.service_user, *RUNTIME_SECURITY_PROPERTIES,
         '--property=KillMode=control-group', '--property=UMask=0007',
-        '--property=TimeoutStopSec=5s', '--property=RuntimeMaxSec=180s',
+        '--property=TimeoutStopSec=5s', *profile,
         *argv], timeout=15)
     if result.returncode != 0:
         raise LifecycleError('Cannot start ' + component.kind)
