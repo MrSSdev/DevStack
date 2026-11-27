@@ -38,8 +38,16 @@ ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'}
 
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, text=True, timeout=90, env=ENV,
-                          capture_output=True, **kwargs).stdout
+    result = subprocess.run(args, check=False, text=True, timeout=90, env=ENV,
+                            capture_output=True, **kwargs)
+    if result.returncode:
+        # This is a disposable synthetic project; its output contains no
+        # workstation credentials. Keep the failing command's diagnostics.
+        print('Fixture command failed:', args, 'exit=', result.returncode, flush=True)
+        print(result.stderr[-4000:], file=sys.stderr, flush=True)
+        print(result.stdout[-2000:], flush=True)
+        result.check_returncode()
+    return result.stdout
 
 
 def as_user(user, *args, **kwargs):
@@ -102,7 +110,15 @@ def main():
     try:
         run('/usr/sbin/useradd', '--create-home', '--user-group', '--shell', '/bin/bash', USER)
         developer = pwd.getpwnam(USER)
-        INSTALLED.parent.mkdir(parents=True)
+        # Match the actual installer, rather than inheriting the runner's
+        # umask or a default ACL on /opt for newly staged control directories.
+        for directory in (INSTALLED.parent.parent, INSTALLED.parent):
+            directory.mkdir(mode=0o755)
+            directory.chmod(0o755)
+        for directory in (*reversed(INSTALLED.parents),):
+            info = directory.lstat()
+            print('Pilot control directory:', directory, 'uid=', info.st_uid,
+                  'mode=', oct(stat.S_IMODE(info.st_mode)), flush=True)
         for name in MODULES:
             target = INSTALLED.parent / name
             shutil.copyfile(ROOT / 'daemon' / name, target)
