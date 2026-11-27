@@ -23,3 +23,7 @@ If you need to establish trust before opening the dashboard, run the reviewed `w
 The MSIX code-signing certificate belongs in TrustedPeople and is handled separately by the widget installer.
 
 See [security](../SECURITY.md).
+
+## WSL developer trust (independent of Windows)
+
+In DevStack Settings → Bezpieczeństwo, use **Skopiuj do WSL** below the existing Windows CA instructions. This trusts the same public CA in the configured Ubuntu developer's NSS database (Chromium, Playwright). DevStack Tools performs this automatically when installed alongside a compatible DevStack core. The Windows procedure above is unchanged. No CA key or system-wide Linux trust store is modified. If NSS tools are missing on an upgraded installation, run `sudo apt-get install -y libnss3-tools` and retry. Restart the browser session after import. A certificate with the same managed nickname but different content is never silently replaced.

@@ -331,6 +331,19 @@ class BrowserAcceptance(unittest.TestCase):
         long_slug='long-'+'a'*35
         response=self.post('/api/projects',dict(slug=long_slug,name='A'*70,domain=long_slug+'.test',webroot='public',database=False,https=False,local_mail=False,engine='none',starter_kit='none',installer_options={}))
         self.assertEqual(response.status,200,response.text())
+        # This second layout fixture was created outside the browser UI.
+        # Its PHP-FPM pool is activated by a deferred reload. A background
+        # /api/state poll can be interrupted by that reload, and the next
+        # regular poll is not guaranteed to finish before the first layout
+        # assertion. Observe the actual pool readiness, then load the real
+        # project list afresh rather than rely on the 30-second polling phase.
+        pool = pathlib.Path('/run/php') / ('devstack-' + long_slug + '.sock')
+        deadline = time.monotonic() + 30
+        while not pool.is_socket() and time.monotonic() < deadline:
+            time.sleep(.2)
+        self.assertTrue(pool.is_socket(), 'Long-name fixture PHP-FPM pool did not become ready')
+        self.goto('projects')
+        expect(self.page.locator('main button').filter(has_text='A'*70)).to_be_visible()
         send(HTML_SUBJECT, HTML)
         self.wait_total(1)
         self.dismiss_visible_toasts()
@@ -403,6 +416,29 @@ class BrowserAcceptance(unittest.TestCase):
                                 self.shot(prefix+'settings-'+label)
         self.goto('dashboard');self.page.reload()
         expect(self.page.locator('html')).to_have_class(re.compile(r'\bdark\b'))
+
+    def test_01b_wsl_ca_button_installs_only_public_ca(self):
+        # The existing browser fixture already trusts the CA under another
+        # nickname. Exercise the real authenticated button and fixed helper,
+        # without touching the Windows download or duplicating the CA.
+        self.goto('settings')
+        self.page.get_by_role('navigation', name='Kategorie ustawień').get_by_role('button', name='Bezpieczeństwo', exact=True).click()
+        expect(self.page.get_by_role('button', name='Pobierz publiczny certyfikat CA (.cer)')).to_be_visible()
+        before = self.context.request.get(BASE + '/api/ca').body()
+        fingerprint = self.context.request.get(BASE + '/api/ca/info').json()['result']['sha256']
+        rejected = self.post('/api/ca/wsl', {'path': '/var/lib/devstack/ca/rootCA-key.pem'})
+        self.assertEqual(rejected.status, 422)
+        no_csrf = self.context.request.post(BASE + '/api/ca/wsl', data={})
+        self.assertEqual(no_csrf.status, 403)
+        button = self.page.get_by_role('button', name='Skopiuj do WSL', exact=True)
+        expect(button).to_be_enabled()
+        with self.page.expect_response(lambda r: r.url.endswith('/api/ca/wsl') and r.request.method == 'POST') as pending:
+            button.click()
+        result = pending.value
+        self.assertEqual(result.status, 200, result.text())
+        self.assertEqual(result.json()['result']['sha256'], fingerprint)
+        expect(self.page.get_by_text(re.compile('Certyfikat CA DevStack jest (juz )?zaufany w WSL\\.'))).to_be_visible()
+        self.assertEqual(self.context.request.get(BASE + '/api/ca').body(), before)
 
     def test_02_mail_rendering_download_search_pagination_and_deletion(self):
         for i in range(42):send(f'Pagination fixture {i:02}')

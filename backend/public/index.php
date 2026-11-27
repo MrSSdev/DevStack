@@ -112,6 +112,12 @@ try {
         echo $pem;
         exit;
     }
+    if ($method === 'POST' && $path === '/api/ca/wsl') {
+        if (count($body) !== 0) {
+            throw new InvalidArgumentException('Ta operacja nie przyjmuje parametrów.');
+        }
+        devstack_json(200, ['ok' => true, 'result' => devstack_rpc('install_wsl_ca', [])]);
+    }
     if ($method === 'GET' && $path === '/api/services/status') {
         // Authentication and the session timestamp were checked above.
         // The fast read must not hold the PHP session lock across systemd RPC.

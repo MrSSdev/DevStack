@@ -173,6 +173,7 @@ export function App() {
   const [testingDb,setTestingDb]=useState(false)
   const [caFingerprint,setCaFingerprint]=useState('')
   const [caInfoError,setCaInfoError]=useState(false)
+  const [copyingWslCa,setCopyingWslCa]=useState(false)
 
   function navigateNotice(route:string){
     if(!isNoticeRoute(route))return
@@ -531,6 +532,15 @@ export function App() {
       if(!answer.job_id){setRulesDraft(null);setSelected(payload.slug);setView('project');notify(answer.message,pending)}
     }catch(e){setAwaitingEngineJob('');fail(e,pending)}finally{setBusy(false)}
   }
+  async function copyWslCa(){
+    if(copyingWslCa||!caFingerprint||caInfoError)return
+    setCopyingWslCa(true)
+    const pending=beginNotice('Certyfikat CA w WSL','Dodawanie zaufania do lokalnego CA…')
+    try{
+      const answer=await request<{message:string}>('POST','/api/ca/wsl',csrf,{})
+      notify(answer.message,pending)
+    }catch(e){fail(e,pending)}finally{setCopyingWslCa(false)}
+  }
   async function testDatabase(){
     if(!current || !current.database || busy || testingDb)return
     setTestingDb(true)
@@ -702,6 +712,12 @@ export function App() {
             <li>Uruchom ponownie przeglądarkę lub odśwież stronę po imporcie.</li>
           </ol>
           <p className="text-xs text-muted-foreground">Gdy przeglądarka blokuje otwarcie strony z powodu brakującego CA, użyj wstępnego skryptu <code>windows/setup-windows.ps1</code> zgodnie z instrukcją instalacji. DevStack nie pobiera i nigdy nie udostępnia prywatnego klucza CA.</p>
+          <div className="space-y-2 border-t pt-3">
+            <h3 className="font-medium">Certyfikat CA w WSL</h3>
+            <p className="text-muted-foreground">Dodaj zaufanie do tego samego publicznego CA w magazynie NSS użytkownika Ubuntu, używanym m.in. przez Chromium i Playwright. Nie zmienia certyfikatów Windows ani systemowego magazynu CA.</p>
+            <Button type="button" variant="outline" disabled={copyingWslCa||!caFingerprint||caInfoError} onClick={()=>void copyWslCa()}><Copy/>{copyingWslCa?'Kopiowanie…':'Skopiuj do WSL'}</Button>
+            <p className="text-xs text-muted-foreground">Jeśli brakuje narzędzia NSS, wykonaj w Ubuntu <code>sudo apt-get install -y libnss3-tools</code> i ponów operację. Uruchom ponownie przeglądarkę lub zamknij sesję Playwright po imporcie.</p>
+          </div>
         </CardContent></Card></div></section>
       </div>}
       <footer className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground"><span>DevStack · 0.1.0</span><span>PHP 8.5 · localhost</span></footer>
