@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import pwd
 import re
 import stat
 import sys
@@ -20,12 +19,6 @@ def main():
             or project.name not in ('project-a', 'project-b')):
         raise ValueError('Expected protected disposable fixture')
     slot = project.name[-1]
-    account = pwd.getpwuid(os.geteuid())
-    if (not re.fullmatch(r'dsrt-' + slot + r'-[a-f0-9]{10}', account.pw_name)
-            or account.pw_shell != '/usr/sbin/nologin'
-            or account.pw_gid != os.getegid()
-            or set(os.getgroups()) - {account.pw_gid}):
-        raise ValueError('Unexpected runtime identity')
     base = project.parent
     info = base.lstat()
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
@@ -38,7 +31,7 @@ def main():
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
         raise ValueError('Unprotected launcher directory')
     for name in ('project_runtime_launch.py', 'project_runtime.py',
-                 'project_http.py', 'project_mounts.py'):
+                 'project_http.py', 'project_mounts.py', 'project_runtime_identity.py'):
         info = (launcher / name).lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
             raise ValueError('Unprotected launcher file')
@@ -46,6 +39,9 @@ def main():
     from project_runtime import RuntimePlan
     from project_http import ProjectHttp
     from project_mounts import PinnedProject, exec_pinned
+    from project_runtime_identity import verify_binding
+
+    verify_binding(base, slot, current=True)
 
     config = base / ('config-' + slot)
     runtime = RuntimePlan(project, config / 'fpm.conf', base / ('sockets-' + slot))

@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_runtime import RuntimePlan, fpm_config
 from project_http_smoke import exercise_http
+from project_runtime_identity import IdentityError, provision_fixture, verify_binding
 
 PHP = r'''<?php
 header('Content-Type: application/json');
@@ -203,9 +204,9 @@ def main():
             or os.getenv('DEVSTACK_RUNTIME_CI') != '1'):
         raise SystemExit('Only for the disposable CI runner, not a workstation.')
     token = secrets.token_hex(5)
-    users = ['dsrt-a-' + token, 'dsrt-b-' + token]
+    project_ids = [secrets.token_hex(16), secrets.token_hex(16)]
+    users = []
     developer_name = 'dsrt-dev-' + token
-    units = ['devstack-runtime-probe-' + name for name in users]
     created = []
     attempted = []
     base = Path(tempfile.mkdtemp(prefix='devstack-runtime-probe-', dir='/var/lib'))
@@ -221,7 +222,7 @@ def main():
         launcher.mkdir(mode=0o755)
         source = Path(__file__).resolve().parents[1] / 'daemon'
         for name in ('project_runtime_launch.py', 'project_runtime.py',
-                     'project_http.py', 'project_mounts.py'):
+                     'project_http.py', 'project_mounts.py', 'project_runtime_identity.py'):
             destination = launcher / name
             destination.write_bytes((source / name).read_bytes())
             destination.chmod(0o644)
@@ -229,10 +230,48 @@ def main():
         with socket.create_connection(('127.0.0.1', port), timeout=1):
             conn, _ = listener.accept()
             conn.close()
-        for user in users:
-            run('useradd', '--system', '--user-group', '--no-create-home',
-                '--shell', '/usr/sbin/nologin', user)
-            created.append(user)
+        for slot, project_id in zip(('a', 'b'), project_ids):
+            binding = provision_fixture(base, slot, project_id)
+            users.append(binding['account'])
+            created.append(binding['account'])
+        units = ['devstack-runtime-probe-' + name for name in users]
+        for slot, project_id, user in zip(('a', 'b'), project_ids, users):
+            record = verify_binding(base, slot, expected_user=user)
+            assert record['project_id'] == project_id
+        try:
+            verify_binding(base, 'a', expected_user=users[1])
+        except IdentityError:
+            pass
+        else:
+            raise AssertionError('Sibling identity was accepted')
+        # A retained record must not authorize a recycled or altered UID.
+        path = base / 'identity-a.json'
+        original = path.read_text()
+        changed = json.loads(original)
+        changed['uid'] = pwd.getpwnam(users[1]).pw_uid
+        try:
+            path.write_text(json.dumps(changed))
+            try:
+                verify_binding(base, 'a')
+            except IdentityError:
+                pass
+            else:
+                raise AssertionError('Mismatched UID was accepted')
+        finally:
+            path.write_text(original)
+        print('PASS: Durable registration-account binding and mismatched UID refusal', flush=True)
+        # Exercise the actual staged launcher with the sibling's real UID.
+        # It must refuse at the identity gate, before attempting any mounts.
+        try:
+            as_user(users[1], '/usr/bin/python3', '-I',
+                    str(launcher / 'project_runtime_launch.py'),
+                    'php', str(base / 'project-a'), capture_output=True)
+        except subprocess.CalledProcessError as exc:
+            assert exc.returncode == 2, exc.returncode
+            assert 'Fixture source launch refused: IdentityError' in exc.stderr
+        else:
+            raise AssertionError('Sibling runtime launcher accepted')
+        print('PASS: Real launcher denies a different project identity', flush=True)
         # A new disposable developer account has exactly the intended project
         # memberships from its creation; never mutate the CI runner account.
         run('useradd', '--system', '--user-group', '--no-create-home',
@@ -310,6 +349,8 @@ with sqlite3.connect(sys.argv[1]) as db:
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
                     str(plan.sockets / 'php.sock'))
         print('PASS: Separate identities, sockets and developer access')
+        for slot, user in zip(('a', 'b'), users):
+            verify_binding(base, slot, expected_user=user)
         # Hand off the same fixture data to the real pair lifecycle. Never
         # run a legacy/direct FPM instance alongside the new pair.
         for index, unit in enumerate(units):
