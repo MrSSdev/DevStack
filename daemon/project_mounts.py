@@ -12,6 +12,8 @@ import re
 import stat
 
 DIR_FLAGS = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+SHARED_DATA = ('storage', 'bootstrap/cache', 'database')
+DATA_FLAGS = os.ST_NOSUID | os.ST_NODEV | os.ST_NOEXEC
 
 
 def mount_id(fd):
@@ -132,6 +134,86 @@ class PinnedProject:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def data_root(relative):
+    parts = components(relative)
+    for root in SHARED_DATA:
+        prefix = components(root)
+        if parts[:len(prefix)] == prefix:
+            return root, '/'.join(parts[len(prefix):])
+    return None
+
+
+def view_name(relative):
+    if relative not in SHARED_DATA:
+        raise ValueError('Not an approved shared data root')
+    return relative.replace('/', '-')
+
+
+def verify_data_view(source_fd, view_fd, runtime):
+    source, view = os.fstat(source_fd), os.fstat(view_fd)
+    if (not os.path.samestat(source, view)
+            or (source.st_uid, source.st_gid) == runtime
+            or (view.st_uid, view.st_gid) != runtime
+            or mount_id(source_fd) == mount_id(view_fd)
+            or os.fstatvfs(view_fd).f_flag & DATA_FLAGS != DATA_FLAGS):
+        raise ValueError('Mapped data identity or mount flags mismatch')
+
+
+class MappedProject(PinnedProject):
+    """Fixed fixture mode: never fall back to the original writable path.
+
+    The controller publishes exactly the shared roots in a protected sibling
+    directory. This launcher runs under the verified runtime UID, and pins
+    the mapped root before selecting a nested read-only HTTP source.
+    """
+    def __init__(self, path, identity):
+        super().__init__(path)
+        if self.path.name not in ('project-a', 'project-b'):
+            raise ValueError('Expected fixed fixture slot')
+        self.holder = self.path.parent / ('mapped-' + self.path.name[-1])
+        self.identity = identity
+
+    def bind(self, relative, *, writable=False, optional=False):
+        if self.root is None:
+            raise RuntimeError('Project not pinned')
+        selection = data_root(relative)
+        if selection is None:
+            if writable:
+                raise ValueError('Writable source is not an approved data root')
+            return super().bind(relative, optional=optional)
+        root, suffix = selection
+        source_fd = holder_fd = view_fd = selected_fd = None
+        try:
+            # Even an optional mapped root is mandatory in this fixture
+            # profile. Only a nested published-storage directory may be absent.
+            source_fd = open_directory(self.root, root, self.device)
+            holder_fd = os.open(self.holder, DIR_FLAGS)
+            info = os.fstat(holder_fd)
+            if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o711:
+                raise ValueError('Unprotected mapped data directory')
+            view_fd = os.open(view_name(root), DIR_FLAGS, dir_fd=holder_fd)
+            if mount_id(holder_fd) == mount_id(view_fd):
+                raise ValueError('Mapped data was not published')
+            verify_data_view(source_fd, view_fd,
+                             (self.identity['uid'], self.identity['gid']))
+            reject_nested_mounts(self.holder / view_name(root))
+            try:
+                selected_fd = open_directory(view_fd, suffix, mount_id(view_fd))
+            except FileNotFoundError:
+                if optional and suffix:
+                    return []
+                raise
+            self.fds.append(selected_fd)
+            result = ['--bind-fd' if writable else '--ro-bind-fd',
+                      str(selected_fd), str(self.path / relative)]
+            selected_fd = None
+            return result
+        finally:
+            for fd in (selected_fd, view_fd, holder_fd, source_fd):
+                if fd is not None:
+                    os.close(fd)
 
 
 def exec_pinned(argv, mounts):
