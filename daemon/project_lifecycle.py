@@ -18,12 +18,12 @@ import subprocess
 import time
 
 from project_http import ProjectHttp
+from project_runtime_identity import USER, verify_binding
 
 SYSTEMCTL = '/usr/bin/systemctl'
 SYSTEMD_RUN = '/usr/bin/systemd-run'
 ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'SYSTEMD_COLORS': '0',
        'SYSTEMD_PAGER': ''}
-USER = re.compile(r'dsrt-([ab])-[a-f0-9]{10}\Z')
 BASE = re.compile(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}\Z')
 STOPPED = {'absent', 'inactive', 'failed'}
 LIVE = {'active', 'activating', 'deactivating', 'reloading', 'refreshing'}
@@ -203,11 +203,9 @@ class RuntimePair:
             if (not stat.S_ISDIR(s.st_mode) or s.st_uid != 0
                     or directory.resolve(strict=True) != directory):
                 raise ValueError('Unexpected fixture socket directory')
-        identity = pwd.getpwnam(user)
-        if (identity.pw_uid == 0 or identity.pw_gid == 0
-                or identity.pw_shell != '/usr/sbin/nologin'
-                or os.getgrouplist(user, identity.pw_gid) != [identity.pw_gid]):
-            raise ValueError('Expected isolated non-root account')
+        self.identity = verify_binding(base, slot, expected_user=user)
+        self.base = base
+        self.slot = slot
         self.plan = plan
         self.php = Component('php', user, plan.runtime.sockets / 'php.sock')
         self.http = Component('http', user, plan.sockets / 'http.sock')
@@ -230,6 +228,10 @@ class RuntimePair:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise LifecycleError('Project lifecycle operation already in progress') from None
+            # Recheck the durable binding on every lifecycle operation. A
+            # matching login name alone cannot authorize a reused account.
+            if verify_binding(self.base, self.slot) != self.identity:
+                raise LifecycleError('Runtime identity binding changed')
             yield
         finally:
             os.close(fd)

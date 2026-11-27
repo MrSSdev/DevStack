@@ -557,3 +557,53 @@ as Codex can be installed and verified in their own integration stage,
 not as a prerequisite to developing project isolation. Until their
 individual acceptance passes, they must not be granted isolated-project
 access based solely on a successful PHP sandbox test.
+
+
+## Runtime account binding and concurrent agents (E1.3g)
+
+The selected architecture separates three identities:
+
+- The application runtime has one dedicated, non-login OS principal per
+  project registration. PHP/HTTP do not run as the developer or an AI agent.
+- An agent has a logical identity and independently revocable assignments.
+  Operations execute in a project- and session-scoped worker or a verified
+  native sandbox. Do not equate the agent's identity with a shared Linux
+  account that can access all of its assigned projects at once.
+- A model is an inference provider. Model changes do not change project
+  grants; no per-model Linux user or direct filesystem access is required.
+
+Multiple agents (including orchestrator/delegate sessions) may be assigned
+to one project concurrently while the developer works normally in the IDE.
+An assignment is many-to-many, not an exclusive project owner or a global
+active-agent switch. Use separate session state, cancellation and scoped
+tool/browser credentials. Check grants on every tool operation and terminate
+or drain affected workers on revocation; other assignments and the application
+must remain available. An orchestrator cannot delegate more permissions
+than it has. Distinguish application writable data from code-edit privileges.
+Use optional Git worktrees or explicit coordination for concurrent edits;
+a shared checkout does not prevent write conflicts or guarantee transactional
+edits. Separate worktrees require their own authorized path and Git metadata
+handling; do not silently expose the developer's entire home or all worktrees.
+Preserve the normal trusted developer workflow, paths, installer and IDE.
+Do not require the developer to switch Linux users or run the native model
+in WSL. These are acceptance requirements, not implemented agent adapters.
+
+The current increment binds the two existing disposable runtime fixture
+accounts to independent 128-bit registration IDs. A protected allocation
+journal reserves the slot before account creation, records the full ID and
+observed UID/GID, and remains blocked if incomplete. The fixed account
+name is derived from the ID, not the slug or model. Existing names/groups
+are never adopted. Check the actual passwd/group identity, locked password
+as administrator, non-login shell, home, comment and absence of unrelated
+supplementary groups; verify the binding on each lifecycle operation and
+again under the actual runtime credentials before mounting. Tests exercise
+these principals through the existing real PHP/HTTPS/SQLite lifecycle, and
+reject altered numeric identity and wrong project association.
+
+This is still disposable CI allocation only, not a production account
+management endpoint or automatic migration. Root-controlled publication,
+safe project ACLs/hardlinks, legacy enrollment, durable crash recovery,
+UID/GID retirement/non-reuse, transactional activation and real tool/agent
+acceptance remain required. Do not delete and reuse a production UID/GID
+while files, ACLs, grants or processes might retain it. Do not automatically
+create accounts for legacy projects or enable real isolation on upgrade.
