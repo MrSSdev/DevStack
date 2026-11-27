@@ -131,7 +131,7 @@ def start(unit, user, plan):
         '--property=UMask=0007',
         '--property=TimeoutStopSec=5s',
         '--property=RuntimeMaxSec=180s',
-        *plan.argv())
+        *plan.launch_argv())
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if (plan.sockets / 'php.sock').is_socket():

@@ -268,8 +268,9 @@ class RuntimePair:
             return state
         if state != 'stopped':
             raise LifecycleError('Degraded project; stop explicitly before starting')
-        # Validate both argument plans before changing process state.
-        args = (self.plan.runtime.argv(), self.plan.argv())
+        # Launch fixed helpers; project sources are pinned only after the
+        # runtime identity has been applied by systemd.
+        args = (self.plan.runtime.launch_argv(), self.plan.launch_argv())
         component = self.php
         try:
             start_component(component, args[0])

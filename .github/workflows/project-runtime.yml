@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - 'daemon/project_runtime.py'
+      - 'daemon/project_mounts.py'
+      - 'daemon/project_runtime_launch.py'
+      - 'tests/test_project_mounts.py'
+      - 'tests/project-mount-fd-smoke.py'
       - 'daemon/project_http.py'
       - 'daemon/project_lifecycle.py'
       - 'tests/test_project_lifecycle.py'
@@ -15,6 +19,10 @@ on:
     branches: [main]
     paths:
       - 'daemon/project_runtime.py'
+      - 'daemon/project_mounts.py'
+      - 'daemon/project_runtime_launch.py'
+      - 'tests/test_project_mounts.py'
+      - 'tests/project-mount-fd-smoke.py'
       - 'daemon/project_http.py'
       - 'daemon/project_lifecycle.py'
       - 'tests/test_project_lifecycle.py'
@@ -42,5 +50,8 @@ jobs:
       - name: Check and exercise prototype
         run: |
           python3 -m py_compile daemon/project_runtime.py daemon/project_http.py daemon/project_lifecycle.py tests/project-runtime-systemd-smoke.py tests/project_http_smoke.py
+          python3 -m py_compile daemon/project_mounts.py daemon/project_runtime_launch.py tests/project-mount-fd-smoke.py tests/test_project_mounts.py
           python3 -m unittest discover -s tests -p test_project_lifecycle.py -v
+          python3 -m unittest discover -s tests -p test_project_mounts.py -v
+          python3 -I tests/project-mount-fd-smoke.py
           sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 python3 -I tests/project-runtime-systemd-smoke.py

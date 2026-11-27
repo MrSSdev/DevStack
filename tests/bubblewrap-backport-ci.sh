@@ -123,6 +123,7 @@ test -z "$(getcap /usr/bin/bwrap)"
 test "$(/usr/bin/bwrap --version)" = 'bubblewrap 0.13.1'
 cd "$root"
 bash tests/project-sandbox-probe.sh
+python3 -I tests/project-mount-fd-smoke.py
 sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 \
     python3 -I tests/project-runtime-systemd-smoke.py
 

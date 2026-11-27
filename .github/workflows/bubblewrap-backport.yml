@@ -5,6 +5,15 @@ on:
     branches: [main]
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
+      - 'daemon/project_mounts.py'
+      - 'daemon/project_runtime_launch.py'
+      - 'daemon/project_runtime.py'
+      - 'daemon/project_http.py'
+      - 'daemon/project_lifecycle.py'
+      - 'tests/test_project_mounts.py'
+      - 'tests/project-mount-fd-smoke.py'
+      - 'tests/project-runtime-systemd-smoke.py'
+      - 'tests/project_http_smoke.py'
       - 'tests/bubblewrap_backport_compat.py'
       - 'tests/test_bubblewrap_backport_compat.py'
       - '.github/workflows/bubblewrap-backport.yml'
@@ -13,6 +22,15 @@ on:
     branches: [main]
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
+      - 'daemon/project_mounts.py'
+      - 'daemon/project_runtime_launch.py'
+      - 'daemon/project_runtime.py'
+      - 'daemon/project_http.py'
+      - 'daemon/project_lifecycle.py'
+      - 'tests/test_project_mounts.py'
+      - 'tests/project-mount-fd-smoke.py'
+      - 'tests/project-runtime-systemd-smoke.py'
+      - 'tests/project_http_smoke.py'
       - 'tests/bubblewrap_backport_compat.py'
       - 'tests/test_bubblewrap_backport_compat.py'
       - '.github/workflows/bubblewrap-backport.yml'

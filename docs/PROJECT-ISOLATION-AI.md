@@ -478,3 +478,32 @@ workstation where native features cannot be reproduced on CI.
 
 Then integrate one local agent end to end; add further native application
 adapters and multi-agent delegation only after that boundary works.
+
+## Descriptor-pinned project runtime sources (E1.3e)
+
+The runtime pair now selects project directory sources as its own non-root
+identity inside a fixed launcher, using no-follow directory descriptors and
+Bubblewrap's `--bind-fd` / `--ro-bind-fd` (available since 0.10.0).
+The project, its approved writable subdirectories, public and published
+storage are not reopened by pathname for the bind operation. Directory
+selection rejects symlinks, invalid components and unexpected mount IDs;
+existing nested mounts are rejected by a mountinfo snapshot. A real fixture
+renames the selected directory and replaces the old pathname with a symlink
+before launching Bubblewrap. The write must reach the original directory,
+not the replacement; source descriptors must not reach the application.
+The existing FPM/HTTPS/lifecycle smoke exercises the fixed launcher on both
+isolated accounts, and the backport workflow repeats this with 0.13.1.
+
+This increment still accepts only disposable fixture paths and accounts.
+It is not a production grant, persistent mount publication or a general
+command executor. The source selector alone does not solve pre-existing
+hardlinks, concurrent privileged mount/rename operations, parent/child
+source coherence during enrollment, root-controlled socket publication,
+or migration of an existing developer-owned project. Production activation
+remains gated. Do not mount arbitrary directories or pass arbitrary commands
+from an API. The preferred next step is a root-protected enrolled-project
+layout with durable identity and stable publication, with the trusted
+administrator coordinating source changes and the actual application/browser
+compatibility tests before enabling a real project.
+
+Reference: [Bubblewrap release history](https://github.com/containers/bubblewrap/releases/tag/v0.10.0).
