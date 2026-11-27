@@ -1,0 +1,35 @@
+name: DevStack project isolation probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/project-sandbox-probe.sh'
+      - '.github/workflows/project-isolation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tests/project-sandbox-probe.sh'
+      - '.github/workflows/project-isolation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bubblewrap:
+    name: Unprivileged namespace and fixture isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install distribution Bubblewrap on disposable runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+      - name: Check script and run as ordinary user
+        run: |
+          bash -n tests/project-sandbox-probe.sh
+          bash tests/project-sandbox-probe.sh

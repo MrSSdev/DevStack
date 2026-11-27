@@ -50,8 +50,8 @@ mechanism must not be bypassable by the native agent or its child processes.
   It cannot erase data already copied. A manual external app session is not
   automatically controlled by the panel.
 - Prefer lightweight native enforcement when sufficient; evaluate stronger
-  isolation based on concrete threat and test results. No sandbox
-  implementation or runtime identity has been selected yet.
+  isolation based on concrete threat and test results. Bubblewrap is the selected candidate for isolated Linux tool execution;
+  its production policy and the project runtime identity are not implemented.
 
 ## Runtime capability checks
 
@@ -68,6 +68,21 @@ probe, not permission to retry without it or relax host-wide security.
 The probe does not establish a production sandbox: inherited descriptors,
 IPC, subprocess lifecycle, kernel attack surface, WSL interoperability
 and selectively brokered networking remain separate acceptance concerns.
+
+The repository contains a standalone capability check:
+
+~~~bash
+bash tests/project-sandbox-probe.sh
+~~~
+
+Run it as an ordinary user, never as root. It does not accept a project
+path or arbitrary commands. It creates and removes two temporary fixtures,
+tests both read/write and read-only mounts, verifies namespace separation,
+and fails if the required protection is unavailable. The dedicated GitHub
+Actions workflow installs the distribution package on a disposable runner,
+without disabling AppArmor or changing global namespace policy. CI and
+workstation results are distinct. The expanded automated probe is not a
+production launcher and is not installed or exposed through the manager.
 
 Do not reuse the interactive developer identity as the project PHP runtime
 or as an unrestricted tool executor. Evaluate distinct non-administrative
