@@ -78,6 +78,15 @@ class ProjectAccessTests(unittest.TestCase):
         self.assertNotIn('u:1000:', readonly[1][1])
         self.assertIn('u:900:r-x', readonly[1][1])
 
+    def test_mapped_data_keeps_original_owner_permissions(self):
+        for relative in (('storage',), ('storage', 'nested'),
+                         ('bootstrap', 'cache'), ('database', 'fixture.sqlite')):
+            self.assertEqual(acl_plan(self.project.stat(), relative, 1000, 900,
+                                      mapped_data=True), ())
+        self.assertEqual(acl_plan(self.file.stat(), ('source.php',), 1000, 900,
+                                  mapped_data=True),
+                         acl_plan(self.file.stat(), ('source.php',), 1000, 900))
+
 
 if __name__ == '__main__':
     unittest.main()

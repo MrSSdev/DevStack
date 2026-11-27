@@ -114,8 +114,8 @@ def permission(bits):
                    for char, mask in zip('rwx', (4, 2, 1)))
 
 
-def acl_plan(info, relative, developer_uid, runtime_uid):
-    if stat.S_ISLNK(info.st_mode):
+def acl_plan(info, relative, developer_uid, runtime_uid, *, mapped_data=False):
+    if stat.S_ISLNK(info.st_mode) or (mapped_data and writable(relative)):
         return ()
     directory = stat.S_ISDIR(info.st_mode)
     owner = permission((info.st_mode >> 6) & 7)
@@ -159,7 +159,8 @@ class LinuxACL:
             self.lib.acl_free(acl)
 
 
-def prepare_tree(root, developer_uid, developer_gid, runtime_uid, device, mount_id):
+def prepare_tree(root, developer_uid, developer_gid, runtime_uid, device, mount_id,
+                 *, mapped_data=False):
     if (developer_uid != os.geteuid() or developer_gid != os.getegid()
             or developer_uid == 0 or developer_gid == 0
             or type(runtime_uid) is not int or not 0 < runtime_uid < 2**32-1
@@ -174,7 +175,7 @@ def prepare_tree(root, developer_uid, developer_gid, runtime_uid, device, mount_
             raise AccessError('Tree changed during permission preparation')
         seen.add(relative)
         if relative:
-            for kind, text in acl_plan(info, relative, developer_uid, runtime_uid):
+            for kind, text in acl_plan(info, relative, developer_uid, runtime_uid, mapped_data=mapped_data):
                 acl.apply(fd, kind, text)
     if seen != set(snapshot):
         raise AccessError('Tree changed during permission preparation')
@@ -184,13 +185,14 @@ def prepare_tree(root, developer_uid, developer_gid, runtime_uid, device, mount_
     if snapshot[()] != fingerprint(info):
         raise AccessError('Project root changed during preparation')
     # Set default ACL first, then expose traversal through the access ACL.
-    for kind, text in reversed(acl_plan(info, (), developer_uid, runtime_uid)):
+    for kind, text in reversed(acl_plan(info, (), developer_uid, runtime_uid, mapped_data=mapped_data)):
         acl.apply(root, kind, text)
     return len(snapshot)
 
 
 def main():
-    if len(sys.argv) != 2 or not sys.flags.isolated or os.geteuid() == 0:
+    if (len(sys.argv) not in (2, 3) or sys.argv[2:] not in ([], ['idmapped'])
+            or not sys.flags.isolated or os.geteuid() == 0):
         raise AccessError('Expected fixed non-root fixture worker')
     project = Path(sys.argv[1])
     base = project.parent
@@ -223,7 +225,8 @@ def main():
     record = verify_binding(base, project.name[-1])
     with PinnedProject(project) as pinned:
         prepare_tree(pinned.root, developer.pw_uid, developer.pw_gid,
-                     record['uid'], pinned.device, mount_id)
+                     record['uid'], pinned.device, mount_id,
+                     mapped_data=sys.argv[2:] == ['idmapped'])
     print('PASS: Non-root ACL preparation of private fixture')
 
 

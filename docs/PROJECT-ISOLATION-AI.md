@@ -742,3 +742,53 @@ recovery, and integration of mapped writable directories into the
 real FPM/HTTP pair remain required before activating project
 isolation. Existing ACL/FPM mode-limit assertions stay in place
 until that integration passes.
+
+
+### ID-mapped data integrated with the FPM/HTTP fixture lifecycle (E1.3k)
+
+The existing two-project systemd/FPM/HTTPS test now exercises an additional
+explicit `idmapped` profile on a fresh pair of disposable projects. The
+original ACL-only profile (including its creation-mode limitation) remains
+in the suite. This is not a switch for installed projects.
+
+- The developer-owned source tree keeps the existing read-only runtime ACLs
+  for code. In the new profile the three existing, explicitly selected data
+  roots (`storage`, `bootstrap/cache`, `database`) retain their original
+  private owner permissions, rather than receiving runtime write ACLs.
+- `FixtureDataViews` publishes detached ID-mapped mounts under a fixed
+  root-protected fixture sibling before either runtime unit starts. PID 1
+  must see these mounts; unlike the previous CLI-only test, they are
+  attached in the disposable runner's service mount namespace, under a
+  dedicated bind holder made private before attaching the data. This is
+  limited to the CI fixture and explicitly refuses WSL. The controller
+  validates the registration/runtime binding, source metadata (including
+  mount identity, owner, hardlinks and special entries) and publication
+  identities. This scan assumes a quiescent controlled fixture.
+- The non-root launchers pin the selected mapped descriptors, verify the
+  original inode, mapped UID/GID and nosuid,nodev,noexec, and do not fall
+  back to original writable directories if a mapped root is absent.
+  PHP retains the existing absolute project paths and read-only code;
+  HTTP uses only the approved published-storage subtree, read-only,
+  through the same mapped storage view.
+- `RuntimePair` starts with data publication, then PHP and HTTP. On stop
+  or startup failure it verifies both processes/listeners stopped before
+  unmounting only the recorded publications. A missing, foreign, or
+  inconsistent publication is degraded, not a successful start/stop.
+  No lazy detach and no recursive removal of mounted fixture data.
+  Restart re-publishes the same data without changing physical ownership.
+
+The expanded HTTPS smoke is required to exercise real FPM-created SQLite,
+mode 0600 and nested files, actual developer transactions without ACL repair,
+FPM read-back while running and after restart, static assets and FPM-created
+published files, mount flags inside FPM, sibling denial, a partial publication
+failure and a real HTTP startup failure with rollback. It must leave the
+original data intact after both projects stop. Existing CI and backport
+workflows run the same suite.
+
+The publication references are deliberately in-memory and fixture-only.
+Persistent production enrollment/publication records, reconciliation after
+daemon/WSL restart, protection against concurrent hostile editors,
+arbitrary framework layouts and actual existing project activation remain
+separate gates. The installer/updater and deployed project RPCs are unchanged.
+Existing MariaDB project accounts/grants, optional Redis, shared Mailpit
+mailbox, panel, PWA, widgets and Windows integration remain unchanged.

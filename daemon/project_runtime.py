@@ -10,13 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from project_mounts import PinnedProject
+from project_mounts import PinnedProject, SHARED_DATA as WRITABLE
 
 FPM = '/usr/sbin/php-fpm8.5'
 PHP_CONFIG = Path('/etc/php/8.5')
 SOCKET = '/run/project-fpm/php.sock'
 RUNTIME_CONFIG = '/run/project-config/fpm.conf'
-WRITABLE = ('storage', 'bootstrap/cache', 'database')
 SAFE_PATH = re.compile(r'/[A-Za-z0-9._/-]+\Z')
 
 
@@ -34,9 +33,10 @@ class RuntimePlan:
     project: Path
     config: Path
     sockets: Path
+    mapped_data: bool = False
 
     def launch_argv(self) -> list[str]:
-        return fixture_launch_argv(self.project, 'php')
+        return fixture_launch_argv(self.project, 'php', self.mapped_data)
 
     def argv(self, mounts: PinnedProject) -> list[str]:
         if mounts.path != self.project:
@@ -90,7 +90,7 @@ class RuntimePlan:
         return args
 
 
-def fixture_launch_argv(project: Path, component: str) -> list[str]:
+def fixture_launch_argv(project: Path, component: str, mapped_data: bool = False) -> list[str]:
     if (component not in ('php', 'http')
             or project.parent.parent != Path('/var/lib')
             or not re.fullmatch(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}', project.parent.name)
@@ -98,7 +98,7 @@ def fixture_launch_argv(project: Path, component: str) -> list[str]:
         raise ValueError('Expected a protected disposable fixture')
     return ['/usr/bin/python3', '-I',
             str(project.parent / 'launcher/project_runtime_launch.py'),
-            component, str(project)]
+            component, str(project)] + (['idmapped'] if mapped_data else [])
 
 
 def fpm_config() -> str:
