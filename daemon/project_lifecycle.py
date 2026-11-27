@@ -18,6 +18,7 @@ import subprocess
 import time
 
 from project_http import ProjectHttp
+from project_data_views import FixtureDataViews
 from project_runtime_identity import USER, verify_binding
 
 SYSTEMCTL = '/usr/bin/systemctl'
@@ -220,6 +221,8 @@ class RuntimePair:
         self.php = Component('php', user, plan.runtime.sockets / 'php.sock')
         self.http = Component('http', user, plan.sockets / 'http.sock')
         self.lockfile = config / 'lifecycle.lock'
+        self.data = (FixtureDataViews(plan.runtime.project, self.identity)
+                     if plan.runtime.mapped_data else None)
 
     @property
     def units(self):
@@ -246,13 +249,23 @@ class RuntimePair:
         finally:
             os.close(fd)
 
-    def _status(self):
+    def _component_status(self):
         states = [unit_state(c) for c in (self.php, self.http)]
         endpoints = [socket_probe(c) for c in (self.php, self.http)]
         if all(s == 'active' for s in states) and all(endpoints):
             return 'running'
         if all(s in STOPPED for s in states) and not any(endpoints):
             return 'stopped'
+        return 'degraded'
+
+    def _status(self):
+        state = self._component_status()
+        if self.data is None:
+            return state
+        data_state = self.data.state()
+        if ((state == 'stopped' and data_state == 'absent')
+                or (state == 'running' and data_state == 'ready')):
+            return state
         return 'degraded'
 
     def status(self):
@@ -268,10 +281,14 @@ class RuntimePair:
         for component in (self.http, self.php):
             try:
                 stop_component(component)
-            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
                 errors.append(exc)
-        if errors or self._status() != 'stopped':
+        if errors or self._component_status() != 'stopped':
             raise LifecycleError('Project stop could not be confirmed')
+        if self.data is not None:
+            self.data.remove()
+        if self._status() != 'stopped':
+            raise LifecycleError('Project data cleanup could not be confirmed')
         return 'stopped'
 
     def _start(self):
@@ -283,20 +300,23 @@ class RuntimePair:
         # Launch fixed helpers; project sources are pinned only after the
         # runtime identity has been applied by systemd.
         args = (self.plan.runtime.launch_argv(), self.plan.launch_argv())
-        component = self.php
+        phase = 'data'
         try:
-            start_component(component, args[0])
-            component = self.http
-            start_component(component, args[1])
+            if self.data is not None:
+                self.data.publish()
+            phase = 'php'
+            start_component(self.php, args[0])
+            phase = 'http'
+            start_component(self.http, args[1])
             if self._status() != 'running':
                 raise LifecycleError('Project readiness not confirmed')
             return 'running'
-        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             try:
                 rolled_back = self._stop() == 'stopped'
-            except (OSError, RuntimeError, subprocess.SubprocessError):
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                 rolled_back = False
-            raise StartError(component.kind, rolled_back) from exc
+            raise StartError(phase, rolled_back) from exc
 
     def start(self):
         with self.locked():
