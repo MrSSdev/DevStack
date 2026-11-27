@@ -26,13 +26,17 @@ mkdir "$work/source" "$work/lists" "$work/cache" "$work/rollback" "$work/unpacke
 # sources, never from tenacious or another release.
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-    ubuntu-keyring build-essential debhelper devscripts fakeroot \
+    ubuntu-keyring debian-keyring distro-info-data libdistro-info-perl \
+    build-essential debhelper devscripts fakeroot \
     bash-completion docbook-xml docbook-xsl iproute2 libcap-dev libcap2-bin \
     libipc-run-perl libselinux-dev meson perl pkgconf python3 xsltproc \
     bubblewrap php8.5-fpm php8.5-sqlite3 nginx libfcgi-bin acl curl
 old_version="$(dpkg-query -W -f='${Version}' bubblewrap)"
 old_arch="$(dpkg-query -W -f='${Architecture}' bubblewrap)"
 dpkg --compare-versions "$version" gt "$old_version"
+# Debian backport ordering: newer than the installed LTS package, but
+# lower than the original source revision. dch needs an explicit -b.
+dpkg --compare-versions "$version" lt "$source_version"
 (cd "$work/rollback" && apt-get download "bubblewrap=$old_version")
 # The hosted LTS archive can select an optimized amd64v3 package variant.
 # Validate the actual downloaded file rather than assume its filename.
@@ -80,8 +84,13 @@ sha256sum bubblewrap_0.13.1-1.dsc bubblewrap_0.13.1.orig.tar.xz \
 dpkg-source -x bubblewrap_0.13.1-1.dsc "$work/build"
 cd "$work/build"
 export DEBFULLNAME='DevStack CI' DEBEMAIL='ci@example.invalid'
-dch --force-distribution --distribution resolute --newversion "$version" \
+dch --force-bad-version --distribution resolute --newversion "$version" \
     'Test-only rebuild of authenticated Ubuntu source for Ubuntu 26.04 LTS.'
+test "$(dpkg-parsechangelog -SVersion)" = "$version"
+test "$(dpkg-parsechangelog -SDistribution)" = resolute
+# The source is authenticated by APT's signed index and checksums; the
+# Debian keyring additionally allows dpkg-source to check the uploader's
+# signature when the matching key is available. No trust bypass is used.
 dpkg-checkbuilddeps
 # Full package build, including the upstream/package test suite; no nocheck.
 DEB_BUILD_OPTIONS=parallel=2 dpkg-buildpackage -us -uc -b -j2

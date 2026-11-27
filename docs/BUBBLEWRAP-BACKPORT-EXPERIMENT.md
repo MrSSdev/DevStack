@@ -9,6 +9,14 @@ Binary dependencies come only from the original LTS runner. The upstream
 orig archive must also match the release SHA-256. No newer distribution
 binary is installed and no persistent repository is added.
 
+The local backport version is checked to be newer than the installed LTS
+package and lower than the original source revision, using Debian version
+ordering. The explicit dch --force-bad-version flag permits only this
+intentional changelog version ordering; it does not skip build tests or
+signature/checksum checks. The authenticated APT source index is the
+required archive trust chain, independently of whether dpkg-source has
+the Debian uploader key for the inline .dsc signature.
+
 The locally versioned package 0.13.1-1~ubuntu26.04.1+devstack1 is built as
 an ordinary user, tested with the existing namespace and full isolated
 FPM/HTTPS/lifecycle fixtures after APT installation on the disposable runner,
