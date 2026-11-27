@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
-from project_mounts import PinnedProject, components, decode_mount_path
+from project_mounts import (PinnedProject, MappedProject, components,
+                            data_root, decode_mount_path, view_name)
 
 
 class SourceTests(unittest.TestCase):
@@ -65,6 +66,27 @@ class SourceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 with PinnedProject(self.project):
                     pass
+
+    def test_mapped_profile_never_falls_back_to_original_data(self):
+        project = self.base / 'project-a'
+        project.mkdir()
+        (project / 'storage').mkdir()
+        identity = {'uid': 61000, 'gid': 61000}
+        with MappedProject(project, identity) as mounts:
+            with self.assertRaises(FileNotFoundError):
+                mounts.bind('storage', writable=True, optional=True)
+            with self.assertRaises(FileNotFoundError):
+                mounts.bind('storage/app/public', optional=True)
+            with self.assertRaises(ValueError):
+                mounts.bind('', writable=True)
+            args = mounts.bind('')
+            self.assertEqual(args[0], '--ro-bind-fd')
+        self.assertEqual(data_root('storage/app/public'), ('storage', 'app/public'))
+        self.assertEqual(data_root('bootstrap/cache'), ('bootstrap/cache', ''))
+        self.assertIsNone(data_root('storage-private'))
+        self.assertEqual(view_name('bootstrap/cache'), 'bootstrap-cache')
+        with self.assertRaises(ValueError):
+            view_name('storage/app/public')
 
 
 if __name__ == '__main__':
