@@ -83,6 +83,102 @@ sha256sum bubblewrap_0.13.1-1.dsc bubblewrap_0.13.1.orig.tar.xz \
     bubblewrap_0.13.1-1.debian.tar.xz > "$work/source-sha256.txt"
 dpkg-source -x bubblewrap_0.13.1-1.dsc "$work/build"
 cd "$work/build"
+# The upstream Debian packaging was moved to compat 14 after the LTS
+# toolchain was frozen. Adapt packaging only, not Bubblewrap source or
+# security options. Compat 13 requires explicit dependency substvars.
+cp debian/control "$work/control.original"
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+path = Path('debian/control')
+original = path.read_text()
+if original.count('debhelper-compat (= 14)') != 1:
+    raise SystemExit('Unexpected source packaging; review the compat change')
+sections = re.split(r'\n[ \t]*\n', original.rstrip())
+if len(sections) != 2 or not sections[0].startswith('Source: bubblewrap\n'):
+    raise SystemExit('Unexpected control stanza layout')
+if not re.search(r'^Package: bubblewrap='DevStack CI' DEBEMAIL='ci@example.invalid'
+dch --force-bad-version --distribution resolute --newversion "$version" \
+    'Test-only rebuild for Ubuntu 26.04 LTS; adapt Debian packaging to debhelper compat 13.'
+test "$(dpkg-parsechangelog -SVersion)" = "$version"
+test "$(dpkg-parsechangelog -SDistribution)" = resolute
+# The source is authenticated by APT's signed index and checksums; the
+# Debian keyring additionally allows dpkg-source to check the uploader's
+# signature when the matching key is available. No trust bypass is used.
+dpkg-checkbuilddeps
+# Full package build, including the upstream/package test suite; no nocheck.
+DEB_BUILD_OPTIONS=parallel=2 dpkg-buildpackage -us -uc -b -j2
+
+candidate="$work/bubblewrap_${version}_amd64.deb"
+test -f "$candidate"
+test "$(dpkg-deb -f "$candidate" Package)" = bubblewrap
+test "$(dpkg-deb -f "$candidate" Version)" = "$version"
+test "$(dpkg-deb -f "$candidate" Architecture)" = amd64
+# Ensure the older helper still generates normal runtime library dependencies.
+dpkg-deb -f "$candidate" Depends Pre-Depends
+dpkg-deb -f "$candidate" Depends | grep -Eq '(^|, )libc6( |,|$)'
+dpkg-deb -x "$candidate" "$work/unpacked"
+test -f "$work/unpacked/usr/bin/bwrap"
+test ! -L "$work/unpacked/usr/bin/bwrap"
+test "$(stat -c '%a' "$work/unpacked/usr/bin/bwrap")" = 755
+
+# APT-managed install and rollback on the disposable runner only.
+# Fail if this would remove another package.
+sudo apt-get --simulate --no-remove install "$candidate"
+sudo apt-get -y --no-remove install "$candidate"
+test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$version"
+test "$(stat -c '%a %u %g' /usr/bin/bwrap)" = '755 0 0'
+test -z "$(getcap /usr/bin/bwrap)"
+test "$(/usr/bin/bwrap --version)" = 'bubblewrap 0.13.1'
+cd "$root"
+bash tests/project-sandbox-probe.sh
+sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 \
+    python3 -I tests/project-runtime-systemd-smoke.py
+
+sudo apt-get -y --allow-downgrades --no-remove install "$original"
+test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$old_version"
+echo 'PASS: Installed candidate, isolated runtime, APT rollback'
+
+# Publish evidence only after every check. A PR artifact is not a trusted
+# workstation release. Final approval requires review + a main workflow
+# run and target WSL/official tool compatibility checks.
+out="$root/bubblewrap-backport-ci-output"
+mkdir "$out"
+cp "$candidate" "$out/"
+cp "$work/source-sha256.txt" "$work/packaging-compat.diff" "$out/"
+cp "$work/source/bubblewrap_0.13.1-1.dsc" "$out/"
+cp "$work/"*.buildinfo "$work/"*.changes "$out/"
+printf 'source=%s\ncandidate=%s\nrollback=%s\nsuite=resolute\narch=amd64\ncommit=%s\n' \
+    "$source_version" "$version" "$old_version" "$GITHUB_SHA" > "$out/provenance.txt"
+(cd "$out" && sha256sum -- *.deb *.dsc *.buildinfo *.changes *.txt *.diff > SHA256SUMS)
+, sections[1], re.M):
+    raise SystemExit('Unexpected binary package')
+sections[0] = sections[0].replace('debhelper-compat (= 14)', 'debhelper-compat (= 13)')
+
+def add_substvars(stanza, field, variables):
+    pattern = re.compile(r'^' + re.escape(field) + r':([^\n]*(?:\n[ \t]+[^\n]*)*)', re.M)
+    found = list(pattern.finditer(stanza))
+    if len(found) > 1:
+        raise SystemExit('Duplicate control field: ' + field)
+    if not found:
+        return stanza.replace('Package: bubblewrap\n', 'Package: bubblewrap\n' +
+                              field + ': ' + ', '.join(variables) + '\n', 1)
+    match = found[0]
+    old = match.group(1).strip()
+    missing = [v for v in variables if v not in old]
+    if not missing:
+        return stanza
+    value = ', '.join(missing) + (', ' + old if old else '')
+    return stanza[:match.start()] + field + ': ' + value + stanza[match.end():]
+
+sections[1] = add_substvars(sections[1], 'Depends',
+                            ['${shlibs:Depends}', '${misc:Depends}'])
+sections[1] = add_substvars(sections[1], 'Pre-Depends', ['${misc:Pre-Depends}'])
+path.write_text('\n\n'.join(sections) + '\n')
+PY
+diff -u "$work/control.original" debian/control > "$work/packaging-compat.diff" || test "$?" -eq 1
+cat "$work/packaging-compat.diff"
 export DEBFULLNAME='DevStack CI' DEBEMAIL='ci@example.invalid'
 dch --force-bad-version --distribution resolute --newversion "$version" \
     'Test-only rebuild of authenticated Ubuntu source for Ubuntu 26.04 LTS.'

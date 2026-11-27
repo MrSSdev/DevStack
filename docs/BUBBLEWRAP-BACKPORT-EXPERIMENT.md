@@ -17,6 +17,16 @@ signature/checksum checks. The authenticated APT source index is the
 required archive trust chain, independently of whether dpkg-source has
 the Debian uploader key for the inline .dsc signature.
 
+Ubuntu 26.04 ships debhelper 13.31; the newer source packaging requests
+compat 14. The experiment adapts only debian/control to compat 13 and
+explicitly restores the dependency substitution variables required by the
+older helper. It checks the expected single-binary source layout, records
+the actual packaging diff in the artifact, verifies generated libc6
+dependencies and still runs dpkg-checkbuilddeps and the full test suite.
+No Bubblewrap C source, namespace flags, system security settings or
+test exclusions are changed. See the [Debian compat checklist](https://manpages.debian.org/unstable/debhelper/debhelper-compat-upgrade-checklist.7.en.html)
+and [Debian packaging reference](https://manpages.debian.org/unstable/debhelper/debhelper.7.en.html).
+
 The locally versioned package 0.13.1-1~ubuntu26.04.1+devstack1 is built as
 an ordinary user, tested with the existing namespace and full isolated
 FPM/HTTPS/lifecycle fixtures after APT installation on the disposable runner,
