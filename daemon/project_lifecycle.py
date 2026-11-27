@@ -101,7 +101,7 @@ p, cleanup = sys.argv[1:]
 try:
     mode = os.lstat(p).st_mode
 except FileNotFoundError:
-    raise SystemExit(1)
+    raise SystemExit(10)
 if not stat.S_ISSOCK(mode):
     raise SystemExit(2)
 with socket.socket(socket.AF_UNIX) as s:
@@ -114,14 +114,16 @@ with socket.socket(socket.AF_UNIX) as s:
                 os.unlink(p)
             except FileNotFoundError:
                 pass
-        raise SystemExit(1)
+        raise SystemExit(10)
 raise SystemExit(0)
 '''
     result = run(['/usr/bin/setpriv', '--reuid=' + str(account.pw_uid),
                   '--regid=' + str(account.pw_gid), '--init-groups',
                   '--no-new-privs', '--', '/usr/bin/python3', '-I', '-c',
                   program, str(component.endpoint), '1' if cleanup else '0'])
-    if result.returncode not in (0, 1):
+    # Exit 10 is reserved for a verified missing/refused endpoint. Python
+    # exceptions and setpriv failures (often exit 1) are not absence.
+    if result.returncode not in (0, 10):
         raise LifecycleError('Cannot verify private endpoint: ' + component.kind)
     return result.returncode == 0
 

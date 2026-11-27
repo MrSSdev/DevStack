@@ -45,3 +45,18 @@ class SnapshotTests(unittest.TestCase):
             with self.assertRaises(LifecycleError):
                 stop_component(self.component)
             run.assert_not_called()
+
+
+    def test_probe_errors_are_not_absence(self):
+        from project_lifecycle import socket_probe
+        from types import SimpleNamespace
+        with patch('project_lifecycle.pwd.getpwnam',
+                   return_value=SimpleNamespace(pw_uid=33, pw_gid=33)), \
+             patch('project_lifecycle.run') as run:
+            for code, expected in ((0, True), (10, False)):
+                run.return_value = subprocess.CompletedProcess([], code, stdout='', stderr='')
+                self.assertIs(socket_probe(self.component), expected)
+            for code in (1, 2, 126, 127, -9):
+                run.return_value = subprocess.CompletedProcess([], code, stdout='', stderr='')
+                with self.assertRaises(LifecycleError):
+                    socket_probe(self.component)
