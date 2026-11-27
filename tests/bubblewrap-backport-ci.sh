@@ -126,6 +126,9 @@ bash tests/project-sandbox-probe.sh
 python3 -I tests/project-mount-fd-smoke.py
 sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 \
     python3 -I tests/project-runtime-systemd-smoke.py
+# Exercise the installed administrator entry point against a real registered
+# home-directory project with the reviewed package, before rollback.
+sudo env GITHUB_ACTIONS=true python3 -I tests/project-registered-pilot-smoke.py
 
 sudo apt-get -y --allow-downgrades --no-remove install "$original"
 test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$old_version"
