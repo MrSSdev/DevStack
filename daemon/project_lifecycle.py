@@ -25,6 +25,16 @@ SYSTEMD_RUN = '/usr/bin/systemd-run'
 ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'SYSTEMD_COLORS': '0',
        'SYSTEMD_PAGER': ''}
 BASE = re.compile(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}\Z')
+# Apply the accepted WSL socket/syscall profile to the managed runtime
+# services, not to the developer, gateway, Windows agent or model.
+RUNTIME_SECURITY_PROPERTIES = (
+    '--property=NoNewPrivileges=yes',
+    '--property=SystemCallArchitectures=native',
+    '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK',
+    '--property=SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register',
+    '--property=SystemCallErrorNumber=ENOSYS',
+)
+
 STOPPED = {'absent', 'inactive', 'failed'}
 LIVE = {'active', 'activating', 'deactivating', 'reloading', 'refreshing'}
 
@@ -138,7 +148,7 @@ def start_component(component, argv):
         raise LifecycleError('Endpoint already accepts connections')
     result = run([SYSTEMD_RUN, '--quiet', '--collect', '--service-type=exec',
         '--unit=' + component.unit, '--description=' + component.description,
-        '--uid=' + component.user, '--property=NoNewPrivileges=yes',
+        '--uid=' + component.user, *RUNTIME_SECURITY_PROPERTIES,
         '--property=KillMode=control-group', '--property=UMask=0007',
         '--property=TimeoutStopSec=5s', '--property=RuntimeMaxSec=180s',
         *argv], timeout=15)
