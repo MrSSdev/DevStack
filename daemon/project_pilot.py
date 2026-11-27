@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import pwd
-import re
 import stat
 import subprocess
 import sys
@@ -115,9 +114,9 @@ def runtime_dir(project_id, kind):
 def plan_for(spec, project_id):
     project = Path('/home') / spec['developer'] / 'projects' / spec['slug']
     php, http = (runtime_dir(project_id, k) for k in ('php', 'http'))
-    return ProjectHttp(RuntimePlan(project, php / 'fpm.conf', php / 'sockets',
+    return ProjectHttp(RuntimePlan(project, php / 'config/fpm.conf', php / 'sockets',
                                    mapped_data=True, registration=project_id),
-                       http / 'nginx.conf', http / 'sockets')
+                       http / 'config/nginx.conf', http / 'sockets')
 
 
 class RegisteredPair(RuntimePair):
@@ -204,6 +203,8 @@ def launch(project_id, kind):
                   'u:' + identity['account'] + ':rwx,u:www-data:--x', str(sockets))
     mount_command('/usr/bin/setfacl', '-d', '-m',
                   'u:www-data:rwX,g::---,o::---,m::rwx', str(sockets))
+    active.config.parent.mkdir(mode=0o755)
+    active.config.parent.chmod(0o755)
     active.config.write_text(fpm_config() if kind == 'php' else plan.nginx_config(),
                              encoding='utf-8')
     active.config.chmod(0o644)
