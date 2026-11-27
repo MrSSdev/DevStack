@@ -125,6 +125,32 @@ class EngineJobTests(unittest.TestCase):
                 reserve.assert_not_called()
                 self.assertFalse((base / "job.json").exists())
 
+    def test_stopped_mariadb_rejects_installer_before_job_or_reservation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            tool = {"composer":True, "installed":"5.33.0",
+                    "starter_kits":[{"id":"none","label":"Blade"}],
+                    "installer_options":[]}
+            with patch.object(d, "ENGINE_JOB_FILE", base/"job.json"), \
+                 patch.object(d, "ENGINE_DB_FILE", base/"reservation.json"), \
+                 patch.object(d, "STATE_FILE", base/"projects.json"), \
+                 patch.object(d, "config", return_value={"projects_dir":str(base)}), \
+                 patch.object(d, "require_engine_auth"), \
+                 patch.object(d, "engine_tool_status", return_value=tool), \
+                 patch.object(d, "site_path", return_value=base/"site.conf"), \
+                 patch.object(d, "site_link_path", return_value=base/"link.conf"), \
+                 patch.object(d, "pool_path", return_value=base/"pool.conf"), \
+                 patch.object(d, "require_mariadb_available", side_effect=d.InputError("MariaDB unavailable")), \
+                 patch.object(d, "reserve_engine_database") as reserve, \
+                 patch.object(d, "start_engine_phase") as start:
+                with self.assertRaisesRegex(d.InputError,"MariaDB"):
+                    d.create({"slug":"demo","name":"Demo","domain":"demo.test",
+                              "database":True,"https":True,"engine":"laravel",
+                              "starter_kit":"none","installer_options":{}})
+                reserve.assert_not_called()
+                start.assert_not_called()
+                self.assertEqual(list(base.iterdir()), [])
+
     def test_frontend_failure_code_is_allowlisted(self):
         import json
         unit = "devstack-engine-" + "a"*32 + "-scaffold"

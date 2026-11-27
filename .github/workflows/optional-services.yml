@@ -1,0 +1,66 @@
+name: DevStack optional project services
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'daemon/**'
+      - 'backend/**'
+      - 'scripts/**'
+      - 'framework-installers/**'
+      - 'windows/widgets/services/**'
+      - 'tests/optional-services-systemd-smoke.py'
+      - '.github/workflows/optional-services.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  optional-services:
+    name: Core-only install and upgrade with project services stopped
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: composer
+          extensions: mbstring, bcmath, intl, curl, dom, zip, pdo_sqlite, sqlite3, pdo_mysql, fileinfo
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Fresh installation without either optional server
+        run: |
+          sudo add-apt-repository -y ppa:ondrej/php
+          # Only on this disposable hosted runner; never purge workstation data.
+          sudo apt-get purge -y mariadb-server mariadb-server-core redis-server
+          sudo systemctl daemon-reload
+          mkdir -p "$HOME/projects"
+          printf '2\nDISABLE\n' | sudo bash scripts/install.sh --core-only
+          sudo bash scripts/install-mailpit.sh
+          sudo env GITHUB_ACTIONS=true python3 tests/optional-services-systemd-smoke.py missing
+      - name: Explicitly add project services and the official installer
+        run: |
+          sudo apt-get install -y mariadb-server redis-server
+          sudo systemctl enable --now mariadb redis-server
+          composer global require laravel/installer:^5.33 --no-interaction --no-progress
+          git config --global user.name 'DevStack CI'
+          git config --global user.email 'ci@example.invalid'
+          sudo php /opt/devstack/scripts/configure-auth.php --allow-local-installers --i-understand-local-risk
+          mkdir -p "$HOME/projects/devstack-source"
+          cp -a backend daemon framework-installers scripts "$HOME/projects/devstack-source/"
+      - name: Real stopped-service upgrade, rollback and Laravel SQLite
+        run: sudo env GITHUB_ACTIONS=true python3 tests/optional-services-systemd-smoke.py upgrade
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          sudo journalctl -u devstackd -u nginx -u php8.5-fpm -u devstack-notifications.service -u mariadb -u redis-server --no-pager -n 100
+          sudo tail -80 /var/log/nginx/error.log
