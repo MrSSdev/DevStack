@@ -120,7 +120,11 @@ bootstrap/cache and database when present. Only the installed PHP
 configuration needed for the interpreter is mounted, not the shared
 FPM pool directory. Each instance has its own FastCGI socket directory;
 Nginx's identity receives an explicit socket ACL, not membership in a
-project runtime group. No project receives the manager identity.
+project runtime group. Writable directories use a dedicated
+project group with setgid/default group permissions; only the trusted
+developer is a member of multiple project groups. Verify runtime-created
+files are editable from a fresh developer session. Group changes may
+require re-login; no such change is applied to an installed workstation. No project receives the manager identity.
 Test both separate account DAC and the mount/network boundary using
 two real FPM processes, FastCGI requests, SQLite writes, developer access
 and independent stop. The initial prototype denies all host networking,

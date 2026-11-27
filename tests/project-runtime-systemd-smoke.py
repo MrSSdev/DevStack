@@ -82,10 +82,14 @@ def fixture(base, name, account, developer, other, port):
     run('setfacl', '-P', '-R', '-m', 'u:' + account + ':rX', str(root))
     for relative in ('storage', 'bootstrap/cache', 'database'):
         path = root / relative
-        run('setfacl', '-m', 'u:' + account + ':rwx', str(path))
-        run('setfacl', '-m',
-            'd:u:' + developer.pw_name + ':rwx,d:u:' + account + ':rwx,d:g::---,d:o::---,d:m::rwx',
-            str(path))
+        # Only the project runtime group is mapped into its user namespace.
+        # Share writable application data through that dedicated group,
+        # not through the broad developer group or an unmapped named ACL.
+        identity = pwd.getpwnam(account)
+        os.chown(path, developer.pw_uid, identity.pw_gid)
+        run('setfacl', '-m', 'g::rwx,u:' + account + ':rwx', str(path))
+        run('setfacl', '-m', 'd:u::rwx,d:g::rwx,d:o::---', str(path))
+        path.chmod(0o2770)
     run('setfacl', '-m', 'u:' + account + ':rw', str(db))
     config_dir = base / ('config-' + name)
     config_dir.mkdir(mode=0o755)
@@ -209,6 +213,7 @@ def main():
             run('useradd', '--system', '--user-group', '--no-create-home',
                 '--shell', '/usr/sbin/nologin', user)
             created.append(user)
+            run('usermod', '-a', '-G', user, developer.pw_name)
         identities = [pwd.getpwnam(user) for user in users]
         assert identities[0].pw_uid != identities[1].pw_uid
         for user, identity in zip(users, identities):
@@ -231,8 +236,13 @@ def main():
         verify(plans[0], 'a', identities[0], host_net, 2)
         for index, plan in enumerate(plans):
             assert (plan.project / 'storage/runtime.txt').read_text() == 'runtime'
-            as_user(developer.pw_name, '/usr/bin/test', '-w',
-                    str(plan.project / 'storage/runtime.txt'))
+            output = plan.project / 'storage/runtime.txt'
+            assert output.stat().st_gid == identities[index].pw_gid
+            run('getfacl', '-p', str(output))
+            as_user(developer.pw_name, '/usr/bin/test', '-w', str(output))
+            as_user(developer.pw_name, '/usr/bin/python3', '-c',
+                    'import sys; open(sys.argv[1], "a").write("-developer")', str(output))
+            assert output.read_text() == 'runtime-developer'
             as_user(developer.pw_name, '/usr/bin/test', '-w',
                     str(plan.project / 'database/fixture.sqlite'))
             as_user(users[1 - index], '/usr/bin/test', '!', '-w',
@@ -258,6 +268,8 @@ def main():
         # Do not delete fixture data or accounts if stopping a unit failed.
         shutil.rmtree(base)
         for user in reversed(created):
+            if pwd.getpwnam(user).pw_gid in os.getgrouplist(developer.pw_name, developer.pw_gid):
+                run('gpasswd', '-d', developer.pw_name, user)
             run('userdel', user)
     print('=== PHP RUNTIME PROTOTYPE PASSED ===')
 
