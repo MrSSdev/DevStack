@@ -291,6 +291,23 @@ else:
     print('PASS: Ingress fails closed and other project remains available', flush=True)
     if mapped_data:
         assert a.data.state() == 'absent' and b.data.state() == 'ready'
+        # An unknown publication directory is not adopted or removed.
+        foreign = a.data.root
+        foreign.mkdir(mode=0o711)
+        try:
+            assert a.status() == 'degraded'
+            for action in (a.start, a.stop):
+                try:
+                    action()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError('Unknown publication accepted')
+                assert foreign.is_dir()
+        finally:
+            foreign.rmdir()
+        assert a.status() == 'stopped'
+        print('PASS: Unknown publication refused without deleting it', flush=True)
         # Force failure after two known data views were published. The
         # fixture is stopped and controlled by the test. Restore its owner
         # before any new execution; never modify a registered project.
