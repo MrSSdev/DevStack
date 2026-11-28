@@ -113,12 +113,26 @@ sys.stdin.buffer.read(1)
             raise IdmapError('Mapping namespace was not separated')
         uid_map = f'{mapping.developer_uid} {mapping.runtime_uid} 1\n'
         gid_map = f'{mapping.developer_gid} {mapping.runtime_gid} 1\n'
-        (proc / 'setgroups').write_text('deny\n')
-        (proc / 'uid_map').write_text(uid_map)
-        (proc / 'gid_map').write_text(gid_map)
-        for name, expected in (('uid_map', uid_map), ('gid_map', gid_map)):
+        # Each proc mapping is a write-once kernel interface. Write exactly
+        # one unbuffered payload, distinguish open from write failures, and
+        # confirm the setgroups policy as well as both ID maps.
+        for name, expected in (('setgroups', 'deny\n'), ('uid_map', uid_map),
+                               ('gid_map', gid_map)):
+            try:
+                map_fd = os.open(proc / name, os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            except OSError as exc:
+                raise IdmapError(f'Cannot open namespace {name}: errno={exc.errno}') from exc
+            try:
+                try:
+                    written = os.write(map_fd, expected.encode('ascii'))
+                except OSError as exc:
+                    raise IdmapError(f'Cannot write namespace {name}: errno={exc.errno}') from exc
+                if written != len(expected):
+                    raise IdmapError('Incomplete namespace ' + name)
+            finally:
+                os.close(map_fd)
             if (proc / name).read_text().split() != expected.split():
-                raise IdmapError('Unexpected namespace ID mapping')
+                raise IdmapError('Unexpected namespace ' + name)
         fd = os.open(proc / 'ns/user', os.O_RDONLY | os.O_CLOEXEC)
         yield fd
     finally:
