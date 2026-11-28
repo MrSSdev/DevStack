@@ -153,6 +153,13 @@ def protected(info):
     require(info.st_uid == 0 and not info.st_mode & 0o022)
 
 
+def protected_symlink(parent, name):
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    # Linux symlinks report mode 0777. The containing directory protects the
+    # name and we verify both ownership and the separately opened target.
+    require(stat.S_ISLNK(info.st_mode) and info.st_uid == 0)
+
+
 def directory(path, parent=None):
     fd = os.open(path, DIRECTORY, dir_fd=parent)
     try:
@@ -242,7 +249,7 @@ def discover_one(extension_id, base, marker):
                 current = os.readlink('current', dir_fd=parent)
             except FileNotFoundError:
                 return {'state': 'absent'}
-            protected(os.stat('current', dir_fd=parent, follow_symlinks=False))
+            protected_symlink(parent, 'current')
             match(RELEASE, current)
             released = directory('releases', parent)
             try:
@@ -253,7 +260,7 @@ def discover_one(extension_id, base, marker):
                     except FileNotFoundError:
                         return {'state': 'legacy'}
                     require(os.readlink('skills', dir_fd=parent) == 'current/skills')
-                    protected(os.stat('skills', dir_fd=parent, follow_symlinks=False))
+                    protected_symlink(parent, 'skills')
                     return {**read_release(release, extension_id), 'publication': current}
                 finally:
                     os.close(release)
