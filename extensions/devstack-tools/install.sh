@@ -39,7 +39,7 @@ fi
 mail_files=(mail/cli.py mail/contract.py mail/mailpit.py mail/message.py)
 skill_files=(skills/devstack-tools/SKILL.md skills/devstack-tools/references/mail.md
   skills/devstack-playwright/SKILL.md skills/devstack-mail/SKILL.md)
-files=(package.json manifest.json install.sh publish.sh update.sh uninstall.sh rollback.sh smoke.cjs
+files=(package.json manifest.json project-cards.json install.sh publish.sh update.sh uninstall.sh rollback.sh smoke.cjs
   bin/playwright bin/playwright-cli bin/devstack-mail "${mail_files[@]}" "${skill_files[@]}")
 for file in "${files[@]}"; do
   [[ -f "$src/$file" && ! -L "$src/$file" ]] || { echo "Missing/unsafe source: $file" >&2; exit 1; }
@@ -54,7 +54,7 @@ trap 'rm -rf -- "$stage"' EXIT
 payload="$stage/payload"
 mkdir -p "$payload/playwright" "$payload/browsers" "$payload/bin" "$payload/mail"
 cp -- "$src/package.json" "$payload/playwright/package.json"
-cp -- "$src/smoke.cjs" "$src/manifest.json" "$payload/"
+cp -- "$src/smoke.cjs" "$src/manifest.json" "$src/project-cards.json" "$payload/"
 cp -- "$src/bin/playwright" "$src/bin/playwright-cli" "$src/bin/devstack-mail" "$payload/bin/"
 for file in "${mail_files[@]}" "${skill_files[@]}"; do
   install -D -m 0644 -- "$src/$file" "$payload/$file"

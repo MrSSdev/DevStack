@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from extension_manifest import REGISTRY, discover, pin_publications, skills_target
+from extension_manifest import ID, REGISTRY, discover, pin_publications, skills_target
 
 PROJECT_ID = re.compile(r'[0-9a-f]{32}\Z')
 MAILPIT_VERSION = pathlib.Path('/opt/devstack-mailpit/VERSION')
@@ -62,6 +62,27 @@ def selection_facts(project, mailpit):
     if mailpit:
         facts.append('mailpit_installed')
     return facts
+
+
+def project_cards(extension, facts):
+    return [card for card in extension.get('project_cards', []) if set(card['requires']) <= set(facts)]
+
+
+def project_instruction_state(project_id, project, row, extension, facts, global_automatic):
+    wanted = desired_instructions(extension, facts) if project.get('engine_status', 'ready') == 'ready' else {}
+    names = {item['id'] for item in extension['instructions']} | set(extension['legacy'])
+    results = {name: value for name, value in row.get('results', {}).items() if name in names}
+    manual = [name for name in row.get('manual', []) if name in names]
+    automatic = row.get('automatic', True)
+    pending = bool(row.get('pending'))
+    return {
+        'id': project_id, 'automatic': automatic, 'pending': pending,
+        'status': 'pending' if pending else row.get('status', 'pending'),
+        'last_sync': row.get('last_sync'), 'event': row.get('event'),
+        'wanted': wanted, 'results': results, 'manual': manual, 'conflicts': row.get('conflicts', []),
+        'migratable': bool(automatic and global_automatic and wanted and
+                           set(manual).intersection(extension['legacy'], row.get('legacy_receipts', {}))),
+    }
 
 
 def run_worker(core, batch):
@@ -463,19 +484,72 @@ class Manager:
             (dict(automation_state[event], event=event) for event in rule['events'] if event in automation_state),
             key=lambda run: run['at'], default=None,
         )} for rule in extension['automations']]
-        return {**extension, 'tools': tools, 'instructions': instructions, 'automations': rules,
+        public = {key: value for key, value in extension.items() if key not in {'legacy_text', 'project_cards'}}
+        return {**public, 'tools': tools, 'instructions': instructions, 'automations': rules,
                 'automatic': state['settings'].get(extension_id, True),
                 'lifecycle': state['extensions'].get(extension_id, {}), 'worker_error': self.error}
 
+    def card_for(self, extension, card_id, project):
+        if isinstance(card_id, str) and ID.fullmatch(card_id):
+            facts = selection_facts(project, installed_service('mailpit'))
+            for card in project_cards(extension, facts):
+                if card['id'] == card_id:
+                    return card
+        raise ValueError('Karta rozszerzenia jest niedostępna dla tego projektu.')
+
     def preview(self, data):
         extension_id, name = data.get('extension'), data.get('instruction')
-        if set(data) != {'extension', 'instruction'} or not isinstance(extension_id, str) or extension_id not in REGISTRY:
+        allowed = ({'extension', 'instruction'}, {'extension', 'instruction', 'project', 'card'})
+        if set(data) not in allowed or not isinstance(extension_id, str) or extension_id not in REGISTRY or not isinstance(name, str):
             raise ValueError('Nieznana instrukcja.')
         extension = discover()[extension_id]
+        if 'project' in data:
+            project_id = data['project']
+            lookup = registered(self.core)
+            if not isinstance(project_id, str) or project_id not in lookup:
+                raise ValueError('Projekt nie jest już zarejestrowany.')
+            _, project = lookup[project_id]
+            card = self.card_for(extension, data['card'], project)
+            if not any(section['kind'] == 'instructions' for section in card['sections']):
+                raise ValueError('Karta nie udostępnia instrukcji.')
+            row = self.load()['projects'].get(project_id, {}).get('extensions', {}).get(extension_id, {})
+            visible = desired_instructions(extension, selection_facts(project, installed_service('mailpit')))
+            if name not in visible and name not in row.get('manual', []) and row.get('results', {}).get(name) not in {'linked', 'conflict', 'error'}:
+                raise ValueError('Instrukcja jest niedostępna dla tego projektu.')
         for item in extension.get('instructions', []):
             if item['id'] == name:
                 return {'text': item['text'], 'build': extension['build']}
+        if 'project' in data and name in extension.get('legacy_text', {}):
+            return {'text': extension['legacy_text'][name], 'build': extension['build']}
         raise ValueError('Instrukcja niedostępna w aktywnym wydaniu.')
+
+    def project_cards(self, data):
+        if set(data) != {'slug'} or not isinstance(data['slug'], str) or not self.core.SLUG.fullmatch(data['slug']):
+            raise ValueError('Nieprawidłowy projekt.')
+        for project_id, (slug, project) in registered(self.core).items():
+            if slug == data['slug']:
+                break
+        else:
+            return {'extensions': []}
+        state = self.load()
+        rows = state['projects'].get(project_id, {}).get('extensions', {})
+        facts = selection_facts(project, installed_service('mailpit'))
+        found = []
+        for extension_id, extension in discover().items():
+            if extension['state'] != 'active':
+                continue
+            cards = project_cards(extension, facts)
+            if not cards:
+                continue
+            global_automatic = state['settings'].get(extension_id, True)
+            project_state = project_instruction_state(project_id, project, rows.get(extension_id, {}), extension, facts, global_automatic)
+            found.append({
+                'id': extension_id, 'build': extension['build'], 'cards': cards, 'automatic': global_automatic,
+                'project': {**project_state, 'slug': slug, 'name': project.get('name', slug)},
+                'instructions': [{'id': item['id'], 'name': item['name']} for item in extension['instructions']]
+                                + [{'id': name, 'name': extension['name'] + ' (starsza instrukcja)'} for name in extension['legacy']],
+            })
+        return {'extensions': found}
 
     def projects(self, data):
         extension_id, offset = data.get('extension'), data.get('offset')
@@ -490,6 +564,8 @@ class Manager:
         page = ordered[offset:offset + 16]
         frameworks = self.core.project_frameworks([slug for _, (slug, _) in page])
         projects = []
+        mailpit = installed_service('mailpit')
+        global_automatic = state['settings'].get(extension_id, True)
         for key, (slug, project) in page:
             row = state['projects'].get(key, {}).get('extensions', {}).get(extension_id, {})
             detected = frameworks.get(slug, {})
@@ -499,15 +575,11 @@ class Manager:
                 ('Poczta lokalna', project.get('local_mail')),
             ] if present]
             projects.append({
-                'id': key, 'slug': slug, 'name': project.get('name', slug),
+                **project_instruction_state(key, project, row, extension, selection_facts(project, mailpit), global_automatic),
+                'slug': slug, 'name': project.get('name', slug),
                 'technologies': ['PHP'] + ([detected['name'] + (' ' + detected['version'] if detected['version'] else '')] if detected
                                           else ['Laravel'] if project.get('engine') == 'laravel' else []),
-                'services': service_names, 'automatic': row.get('automatic', True),
-                'status': 'pending' if row.get('pending') else row.get('status', 'pending'),
-                'last_sync': row.get('last_sync'), 'event': row.get('event'),
-                'wanted': row.get('wanted', {}), 'results': row.get('results', {}),
-                'manual': row.get('manual', []), 'conflicts': row.get('conflicts', []),
-                'migratable': any(name in row.get('manual', []) for name in extension['legacy']),
+                'services': service_names,
             })
         return {'projects': projects, 'next': offset + len(page) if offset + len(page) < len(ordered) else None}
 
@@ -530,6 +602,8 @@ class Manager:
         if not isinstance(extension_id, str) or extension_id not in REGISTRY or not isinstance(action, str) or action not in WRITE_OPERATIONS:
             raise ValueError('Nieznana operacja rozszerzenia.')
         expected = {'extension', 'action'} | ({'project'} if 'project' in data else set())
+        if 'card' in data:
+            expected.add('card')
         if action == 'set_automatic':
             expected.add('enabled')
         if set(data) != expected or action == 'set_automatic' and type(data['enabled']) is not bool:
@@ -537,17 +611,21 @@ class Manager:
         lookup = registered(self.core)
         if 'project' in data and (not isinstance(project_id, str) or project_id not in lookup):
             raise ValueError('Projekt nie jest już zarejestrowany.')
-        if action == 'migrate' and not project_id:
-            raise ValueError('Wskaż projekt do migracji instrukcji.')
+        if ('card' in data or action == 'migrate') and not project_id:
+            raise ValueError('Wskaż aktualny projekt.')
         extension = discover()[extension_id]
         if extension['state'] != 'active' or action not in extension['operations']:
             raise ValueError('Operacja niedostępna dla aktywnego wydania.')
+        if 'card' in data:
+            card = self.card_for(extension, data['card'], lookup[project_id][1])
+            if not any(action in section['operations'] for section in card['sections']):
+                raise ValueError('Karta nie udostępnia tej operacji.')
         if action == 'sync' and extension_id not in allows({extension_id: extension}, 'manual'):
             raise ValueError('Rozszerzenie nie obsługuje ręcznej synchronizacji.')
         state = self.load()
         if action == 'set_automatic' and project_id is None:
             state['settings'][extension_id] = data['enabled']
-        for key, (slug, _) in lookup.items():
+        for key, (slug, project) in lookup.items():
             if project_id and key != project_id:
                 continue
             parent = state['projects'].setdefault(key, {'slug': slug, 'identity': None, 'fingerprint': None, 'extensions': {}})
@@ -555,8 +633,9 @@ class Manager:
             if action == 'set_automatic' and project_id:
                 row['automatic'] = data['enabled']
             if action == 'migrate':
-                if (not row['automatic'] or not state['settings'].get(extension_id, True) or
-                        not set(row.get('manual', [])).intersection(extension['legacy'])):
+                facts = selection_facts(project, installed_service('mailpit'))
+                project_state = project_instruction_state(key, project, row, extension, facts, state['settings'].get(extension_id, True))
+                if not project_state['migratable']:
                     raise ValueError('Włącz zarządzanie i sprawdź ręczne dowiązanie przed migracją.')
                 row['migrate'] = {name: receipt for name, receipt in row.get('legacy_receipts', {}).items()
                                   if name in extension['legacy']}

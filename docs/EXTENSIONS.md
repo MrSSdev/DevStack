@@ -52,6 +52,34 @@ Changes that use existing components, rules, tools, and formats are delivered
 by the extension alone. New renderer kinds, trusted probes, operations or
 distribution formats require an accompanying Core capability and tests.
 
+## Project cards
+
+An active release may include a protected `project-cards.json` next to
+`manifest.json`. It extends contract 1 without changing the base manifest.
+The companion file is included in the Tools BUILD and validated before
+publication by compatible Core. An older release without it still supplies
+its global view. A malformed or unavailable companion hides its project cards
+while Core continues to serve the project and the base manifest.
+
+The top-level object has `contract: 1` and a `cards` array. Each card declares
+a stable `id`, plain `title`, a known `icon`, sort `order`, `slot`,
+`requires` applicability facts and ordered `sections`. Core places
+`project-details` cards near the project header. `project-mail` places a
+section alongside the project's local-mail setting. An empty slot occupies
+no space. A section declares its `id`, accessible `label`, typed `kind`, and
+an `operations` subset of those permitted by the extension's base manifest.
+Contract 1 currently renders `instructions` sections. Additional section
+kinds and locations require an explicit Core implementation. [Tools example](../extensions/devstack-tools/project-cards.json)
+
+Cards reuse the instruction registry, queue, notifications and controls in the
+global Projects view. The initial display is a compact title with controls and
+a list of instruction names with status icons. Details such as selection
+reasons and timestamps are available on demand. Preview and mutations are
+bound to the active card, its supported capabilities and the current project
+registration ID. The project API checks these again after a rollback or a
+project's re-registration. Card metadata never declares paths, endpoints or
+executable code.
+
 ## Eligibility and project lifecycle
 
 The format is independent of the client. Contract 1's adapter recognizes

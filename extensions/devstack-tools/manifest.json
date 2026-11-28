@@ -2,7 +2,7 @@
   "id": "devstack-tools",
   "name": "DevStack Tools",
   "description": "Wspólne narzędzia do testowania aplikacji i lokalnej poczty.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "contract": 1,
   "core_contract": 1,
   "menu": {

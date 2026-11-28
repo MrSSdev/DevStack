@@ -18,6 +18,8 @@ RELEASE = re.compile(r'releases/release-[0-9A-Za-z]{8}\Z')
 # come from a project, an HTTP request, or a release's manifest.
 REGISTRY = {'devstack-tools': (pathlib.Path('/opt/devstack-tools'), 'devstack-tools-v1')}
 BLOCKS = {'overview', 'instructions', 'projects', 'automations'}
+PROJECT_SLOTS = {'project-details', 'project-mail'}
+PROJECT_SECTIONS = {'instructions'}
 ICONS = {'wrench', 'package', 'book'}
 OPERATIONS = {'sync', 'set_automatic', 'migrate'}
 EVENTS = {'startup', 'project_created', 'framework_ready', 'project_changed',
@@ -144,6 +146,40 @@ def validate(raw, extension_id):
     return raw
 
 
+def validate_project_cards(raw, manifest):
+    obj(raw, 'contract cards')
+    require(type(raw['contract']) is int and raw['contract'] == CONTRACT)
+    for card in keyed(raw['cards'], 'id title icon slot order requires sections', 4):
+        plain(card['title'], 60)
+        require(isinstance(card['icon'], str) and card['icon'] in ICONS)
+        require(isinstance(card['slot'], str) and card['slot'] in PROJECT_SLOTS)
+        require(type(card['order']) is int and 0 <= card['order'] <= 10000)
+        choices(card['requires'], REQUIREMENTS)
+        sections = keyed(card['sections'], 'id label kind operations', len(PROJECT_SECTIONS))
+        require(bool(sections))
+        for section in sections:
+            plain(section['label'], 60)
+            require(isinstance(section['kind'], str) and section['kind'] in PROJECT_SECTIONS)
+            require(section['kind'] != 'instructions' or bool(manifest['instructions']))
+            choices(section['operations'], set(manifest['operations']))
+            if 'sync' in section['operations']:
+                require(any('manual' in rule['events'] for rule in manifest['automations']))
+        require(len({section['kind'] for section in sections}) == len(sections))
+    return raw['cards']
+
+
+def read_project_cards(fd, manifest, *, strict):
+    try:
+        text = read(fd, 'project-cards.json', 8192)
+        return validate_project_cards(json.loads(text, object_pairs_hook=unique_object), manifest)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, RecursionError):
+        if strict:
+            raise
+        return []
+
+
 def path_parts(path):
     parts = plain(path, 250).split('/')
     require(len(parts) <= 8 and all(PATH_PART.fullmatch(p) and p not in {'.', '..'} for p in parts))
@@ -215,7 +251,7 @@ def chromium_ready(fd):
         return False
 
 
-def read_release(fd, extension_id):
+def read_release(fd, extension_id, *, strict_cards=False):
     build = read(fd, 'BUILD', 65).strip()
     match(re.compile(r'[0-9a-f]{64}\Z'), build)
     raw = json.loads(read(fd, 'manifest.json', 32768), object_pairs_hook=unique_object)
@@ -225,8 +261,11 @@ def read_release(fd, extension_id):
         text = read(fd, 'skills/' + item['id'] + '/SKILL.md', 24576)
         require(text.startswith('---\n') and ('\nname: ' + item['id'] + '\n') in text[:1000])
         instructions.append({**item, 'text': text, 'version': manifest['version']})
+    legacy_text = {}
     for name in manifest['legacy']:
-        require(read(fd, 'skills/' + name + '/SKILL.md', 24576).startswith('---\n'))
+        text = read(fd, 'skills/' + name + '/SKILL.md', 24576)
+        require(text.startswith('---\n'))
+        legacy_text[name] = text
     tools = []
     for tool in manifest['tools']:
         installed = True
@@ -237,7 +276,8 @@ def read_release(fd, extension_id):
                 installed = False
         ready = installed and (tool['readiness'] != 'chromium' or chromium_ready(fd))
         tools.append({**tool, 'installed': installed, 'runtime_ready': ready})
-    return {**manifest, 'build': build, 'state': 'active', 'instructions': instructions, 'tools': tools}
+    return {**manifest, 'build': build, 'state': 'active', 'instructions': instructions, 'tools': tools,
+            'legacy_text': legacy_text, 'project_cards': read_project_cards(fd, manifest, strict=strict_cards)}
 
 
 def discover_one(extension_id, base, marker):
@@ -324,7 +364,7 @@ if __name__ == '__main__':
             raise InvalidManifest('Oczekiwano identyfikatora i katalogu wydania.')
         candidate = directory(sys.argv[2])
         try:
-            details = read_release(candidate, sys.argv[1])
+            details = read_release(candidate, sys.argv[1], strict_cards=True)
             require(all(tool['runtime_ready'] for tool in details['tools']))
         finally:
             os.close(candidate)

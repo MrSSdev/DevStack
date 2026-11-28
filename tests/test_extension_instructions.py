@@ -18,6 +18,7 @@ import extension_manifest as contract
 
 TOOLS = ROOT / 'extensions/devstack-tools'
 MANIFEST = json.loads((TOOLS / 'manifest.json').read_text())
+CARDS = json.loads((TOOLS / 'project-cards.json').read_text())
 TARGET = '/opt/devstack-tools/skills/devstack-playwright'
 LEGACY = '/opt/devstack-tools/skills/devstack-tools'
 
@@ -42,6 +43,23 @@ class ContractTests(unittest.TestCase):
                 with self.assertRaises(exception):
                     contract.validate(invalid, 'devstack-tools')
 
+    def test_cards_validate_capabilities_conditions_and_placement(self):
+        self.assertEqual(contract.validate_project_cards(CARDS, MANIFEST)[0]['slot'], 'project-details')
+        for mutant in (
+            lambda raw: raw.update(contract=True),
+            lambda raw: raw['cards'][0].update(slot='somewhere'),
+            lambda raw: raw['cards'][0].update(requires=['/path']),
+            lambda raw: raw['cards'][0]['sections'][0].update(kind='html'),
+            lambda raw: raw['cards'][0]['sections'][0].update(operations=['execute']),
+            lambda raw: raw['cards'][0]['sections'][0].update(endpoint='/api'),
+            lambda raw: raw['cards'].append(copy.deepcopy(raw['cards'][0])),
+        ):
+            with self.subTest(mutant=mutant):
+                invalid = copy.deepcopy(CARDS)
+                mutant(invalid)
+                with self.assertRaises(contract.InvalidManifest):
+                    contract.validate_project_cards(invalid, MANIFEST)
+
     @unittest.skipUnless(os.geteuid() == 0, 'Protected release fixture needs a disposable root')
     def test_protected_active_snapshot_and_symlink_escape(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -55,7 +73,23 @@ class ContractTests(unittest.TestCase):
             (base / 'skills').symlink_to('current/skills')
             (base / '.managed').write_text('devstack-tools-v1\n')
             (base / '.lock').touch()
-            self.assertEqual(contract.discover_one('devstack-tools', base, 'devstack-tools-v1')['state'], 'active')
+            def active():
+                return contract.discover_one('devstack-tools', base, 'devstack-tools-v1')
+
+            self.assertEqual(active()['state'], 'active')
+            self.assertEqual(active()['project_cards'], [])
+            sidecar = release / 'project-cards.json'
+            sidecar.write_text(json.dumps(CARDS))
+            self.assertEqual(active()['project_cards'], CARDS['cards'])
+            sidecar.unlink()
+            sidecar.symlink_to(TOOLS / 'project-cards.json')
+            self.assertEqual(active()['project_cards'], [])
+            self.assertEqual(active()['state'], 'active')
+            with contract.ExitStack() as stack:
+                fd = contract.directory(release)
+                stack.callback(os.close, fd)
+                with self.assertRaises(OSError):
+                    contract.read_release(fd, 'devstack-tools', strict_cards=True)
             (release / 'manifest.json').unlink()
             (release / 'manifest.json').symlink_to(TOOLS / 'manifest.json')
             with self.assertRaises(OSError):
@@ -158,6 +192,55 @@ class WorkerTests(unittest.TestCase):
 
 
 class ManagerTests(unittest.TestCase):
+    def test_project_card_reads_and_operations_bind_to_current_registration(self):
+        project_id = 'b' * 32
+        old_id = 'a' * 32
+        project = {'path': '/projects/webapp', 'domain': 'webapp.test', 'webroot': 'public'}
+        state = instructions.new_state()
+        row = {'status': 'manual', 'automatic': True, 'links': {}, 'manual': ['devstack-tools'], 'legacy_receipts': {'devstack-tools': [1, 2, 3]}}
+        state['projects'][project_id] = {'extensions': {'devstack-tools': row}}
+        core = SimpleNamespace(SLUG=re.compile(r'webapp'))
+        manager = instructions.Manager(core)
+        extension = {
+            **MANIFEST, 'state': 'active', 'build': 'c' * 64, 'project_cards': CARDS['cards'],
+            'tools': [{**tool, 'installed': True} for tool in MANIFEST['tools']],
+            'legacy_text': {'devstack-tools': 'legacy text'},
+            'instructions': [{**item, 'text': item['id']} for item in MANIFEST['instructions']],
+        }
+        mail_card = {**CARDS['cards'][0], 'id': 'mail-context', 'requires': ['local_mail'], 'slot': 'project-mail'}
+        other = {**extension, 'project_cards': [mail_card]}
+        operation = {'extension': 'devstack-tools', 'card': 'tools', 'project': project_id, 'action': 'sync'}
+        scoped = {'extension': 'devstack-tools', 'card': 'tools', 'project': project_id}
+        with patch.object(instructions, 'registered', return_value={project_id: ('webapp', project)}), \
+             patch.object(instructions, 'discover', return_value={'devstack-tools': extension, 'another': other}), \
+             patch.object(instructions, 'installed_service', return_value=True), \
+             patch.object(manager, 'load', return_value=state), patch.object(manager, 'save'):
+            shown = manager.project_cards({'slug': 'webapp'})['extensions']
+            self.assertEqual([item['id'] for item in shown], ['devstack-tools'])
+            self.assertTrue(shown[0]['project']['migratable'])
+            self.assertEqual(set(shown[0]['project']['wanted']), {'devstack-playwright'})
+            self.assertEqual(manager.preview({**scoped, 'instruction': 'devstack-tools'})['text'], 'legacy text')
+            with self.assertRaises(ValueError):
+                manager.preview({**scoped, 'instruction': 'devstack-mail'})
+            for invalid in ({**operation, 'project': old_id}, {**operation, 'card': 'missing'},
+                            {**operation, 'action': 'execute'}, {**operation, 'command': 'echo'}):
+                with self.assertRaises(ValueError):
+                    manager.operate(invalid)
+            manager.operate(operation)
+            self.assertTrue(row['pending'])
+            project['local_mail'] = True
+            shown = manager.project_cards({'slug': 'webapp'})['extensions']
+            self.assertEqual([item['id'] for item in shown], ['devstack-tools', 'another'])
+            self.assertEqual(shown[1]['cards'][0]['slot'], 'project-mail')
+            self.assertEqual(set(shown[0]['project']['wanted']), {'devstack-playwright', 'devstack-mail'})
+            state['settings']['devstack-tools'] = False
+            shown = manager.project_cards({'slug': 'webapp'})['extensions'][0]
+            self.assertTrue(shown['project']['automatic'])
+            self.assertFalse(shown['automatic'])
+            self.assertFalse(shown['project']['migratable'])
+            with self.assertRaises(ValueError):
+                manager.operate({**operation, 'action': 'migrate'})
+
     def test_events_crash_recovery_settings_and_retired_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

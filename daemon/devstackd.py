@@ -2056,6 +2056,10 @@ def extension_projects(data):
     return instruction_manager().projects(data)
 
 
+def extension_project_cards(data):
+    return instruction_manager().project_cards(data)
+
+
 def extension_summary(data):
     return instruction_manager().summary(data)
 
@@ -2067,6 +2071,7 @@ def extension_operation(data):
 OPS = {'extension_navigation': extension_navigation, 'extension_detail': extension_detail,
        'extension_preview': extension_preview, 'extension_projects': extension_projects,
        'extension_operation': extension_operation, 'extension_summary': extension_summary,
+       'extension_project_cards': extension_project_cards,
        'notification_snapshot': notification_snapshot, 'show_windows_notification': show_windows_notification,
        'status': status, 'service_status': managed_service_status, 'create': create, 'reveal': reveal,
        'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
