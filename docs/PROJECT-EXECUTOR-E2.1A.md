@@ -53,8 +53,8 @@ test entry points. [Issue #51](https://github.com/MrSSdev/DevStack/issues/51)
   writes. It checks `git status --porcelain --untracked-files=no` and
   `git diff --no-ext-diff --no-textconv` for the tracked proof file.
   The controlled tools exercise PHP CLI and SQLite, a locally installed
-  npm dependency, Composer autoload for a local package with plugins and
-  scripts disabled, and Laravel's `artisan --version` with preinstalled
+  npm dependency, `composer --version` and autoloading a preinstalled
+  local Composer package, and Laravel's `artisan --version` with preinstalled
   vendor dependencies when included. PHP uses read-only system timezone data
   and a fixed set of distribution extensions from a private INI directory.
   No package download or remote Git
@@ -120,7 +120,7 @@ Bubblewrap package. Verify its version and provenance against the existing
 [backend procedure](BUBBLEWRAP-BACKPORT-EXPERIMENT.md). The local smoke
 does not configure APT or replace packages. Prepare distro binaries
 `python3`, `git`, `nodejs`, `npm`, `composer`, `php8.5-cli`,
-`php8.5-sqlite3`, `php8.5-mbstring`, `php8.5-xml`, `sudo`, and their
+`php8.5-sqlite3`, `php8.5-intl`, `php8.5-mbstring`, `php8.5-xml`, `sudo`, and their
 normal system dependencies in the spare
 distribution. Store the checkout on the Linux filesystem.
 

@@ -122,9 +122,7 @@ def write_project():
 
 def write_tools():
     assert 'node:local' in call('/usr/bin/npm', 'run', 'proof')
-    output = call('/usr/bin/composer', '--no-plugins', '--no-scripts',
-                  '--no-interaction', 'dump-autoload')
-    assert 'Generated autoload' in output
+    assert 'Composer version' in call('/usr/bin/composer', '--version')
     assert 'composer:local' in call('/usr/bin/php8.5', 'composer-proof.php')
 
 

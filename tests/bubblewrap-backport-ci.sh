@@ -132,7 +132,7 @@ sudo env GITHUB_ACTIONS=true python3 -I tests/project-registered-pilot-smoke.py
 
 # Prove the Linux boundary independently from the full Laravel/browser
 # regression. Recheck with the trusted, preinstalled vendor copy below.
-sudo apt-get install -y --no-install-recommends nodejs npm composer php8.5-mbstring php8.5-xml
+sudo apt-get install -y --no-install-recommends nodejs npm composer php8.5-intl php8.5-mbstring php8.5-xml
 sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
     python3 -I tests/project-executor-systemd-smoke.py --ci
 bash tests/project-activation-ci.sh

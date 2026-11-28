@@ -52,7 +52,7 @@ from project_runtime_identity import PROJECT_ID, verify_binding
 
 WORKSPACE = '/workspace'
 PHP_MODULES = ('pdo', 'pdo_sqlite', 'sqlite3', 'ctype', 'dom', 'fileinfo',
-               'iconv', 'mbstring', 'phar', 'posix', 'simplexml', 'tokenizer',
+               'iconv', 'intl', 'mbstring', 'phar', 'posix', 'simplexml', 'tokenizer',
                'xml', 'xmlreader', 'xmlwriter')
 TOOLS = frozenset({'/usr/bin/python3', '/usr/bin/php8.5', '/usr/bin/git',
                    '/usr/bin/node', '/usr/bin/npm', '/usr/bin/composer', '/usr/bin/sh'})
