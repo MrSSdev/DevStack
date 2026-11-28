@@ -48,7 +48,9 @@ def native_notification_fixture():
     mount = Path('/mnt/c')
     launcher = mount / 'DevStack/LocalNotifications/DevStack.Notifications.exe'
     output = launcher.with_name('ci-notification-events.jsonl')
-    if marker.exists() or marker.is_symlink() or mount.exists() or mount.is_symlink():
+    opt_in = ('sudo', '/bin/bash', str(SRC.parents[1] / 'scripts/enable-windows-local-notifications.sh'))
+    status = subprocess.check_output([*opt_in, '--status'], text=True, timeout=10).strip()
+    if status != 'disabled' or mount.exists() or mount.is_symlink():
         raise RuntimeError('Native notification fixture requires an unused marker and mount.')
     command('sudo', 'install', '-d', '-m', '0755', str(mount), str(mount / 'DevStack'), str(launcher.parent))
     try:
@@ -65,9 +67,7 @@ with Path('ci-notification-events.jsonl').open('a') as f:
         subprocess.run(['sudo', 'tee', str(launcher)], input=script, text=True, stdout=subprocess.DEVNULL, check=True)
         command('sudo', 'chmod', '0755', str(launcher))
         command('sudo', 'install', '-o', str(os.getuid()), '-m', '0600', '/dev/null', str(output))
-        subprocess.run(['sudo', 'tee', str(marker)], input=str(launcher) + '\n', text=True,
-                       stdout=subprocess.DEVNULL, check=True)
-        command('sudo', 'chmod', '0644', str(marker))
+        command(*opt_in)
         yield output
     finally:
         command('sudo', 'rm', '-f', str(marker), str(launcher), str(output))
@@ -545,7 +545,7 @@ def exercise(browser):
     expect(page.get_by_role('region', name='DevStack Tools')).to_have_count(0)
     page.goto(ORIGIN + EXTENSION)
     refresh()
-    expect(menu).to_have_count(0)
+    expect(page.get_by_role('navigation', name='Rozszerzenia')).to_have_count(0)
     expect(page.get_by_text('Rozszerzenie nie jest zainstalowane.')).to_be_visible(timeout=20000)
     wait_for(lambda: not (local / MAIL).is_symlink(), 'uninstall did not detach managed instructions')
     assert personal.read_text() == 'fixture from developer'
