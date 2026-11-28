@@ -68,7 +68,7 @@ def checked_call(function, *args):
     result = function(*args)
     if result < 0:
         number = ctypes.get_errno()
-        raise OSError(number, os.strerror(number))
+        raise OSError(number, function.__name__ + ': ' + os.strerror(number))
     return result
 
 
