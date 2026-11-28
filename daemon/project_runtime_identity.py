@@ -218,7 +218,8 @@ def _provision(base, slot, project_id):
                  | os.O_CLOEXEC, 0o600)
     write_record(fd, pending)
     sync_directory(base)
-    result = subprocess.run(['/usr/sbin/useradd', '--system', '--user-group',
+    fixture_options = ['--no-log-init'] if slot in EXECUTOR_SLOTS else []
+    result = subprocess.run(['/usr/sbin/useradd', '--system', '--user-group', *fixture_options,
                              '--no-create-home', '--home-dir', HOME,
                              '--shell', SHELL, '--comment', comment(project_id, slot),
                              '--', name], env=ENV, capture_output=True,
