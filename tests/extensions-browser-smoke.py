@@ -220,6 +220,9 @@ def exercise(browser):
     contextual_legacy = contextual / 'devstack-tools'
     contextual_legacy.symlink_to(TOOLS / 'skills/devstack-tools')
     register(CONTEXT, False)
+    # This fixture was registered via the API outside the browser.
+    with page.expect_response(lambda response: response.url.endswith('/api/state') and response.ok):
+        refresh()
     card = show_project(CONTEXT)
     legacy_button = card.get_by_role('button', name=re.compile('starsza instrukcja.*Podłączono ręcznie'))
     expect(legacy_button).to_be_visible()
