@@ -51,8 +51,8 @@ class ProjectExecutorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp).resolve()
             child = project / 'child'
-            child.mkdir()
-            (child / 'original').touch()
+            child.mkdir(mode=0o700)
+            (child / 'original').touch(mode=0o600)
             with PinnedProject(project) as pinned:
                 validate_tree(pinned, mapping)
                 invalid = child / 'unwanted'
