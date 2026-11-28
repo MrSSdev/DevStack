@@ -129,6 +129,7 @@ sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 \
 # Exercise the installed administrator entry point against a real registered
 # home-directory project with the reviewed package, before rollback.
 sudo env GITHUB_ACTIONS=true python3 -I tests/project-registered-pilot-smoke.py
+bash tests/project-activation-ci.sh
 
 sudo apt-get -y --allow-downgrades --no-remove install "$original"
 test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$old_version"

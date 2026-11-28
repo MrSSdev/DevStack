@@ -113,6 +113,7 @@ class ProjectHttp:
         root {public};
         index index.php index.html;
         autoindex off;
+        absolute_redirect off;
         disable_symlinks on;
         location = /index.php {{
             fastcgi_pass unix:/run/project-fpm/php.sock;

@@ -73,7 +73,7 @@ install -m 0644 -o root -g root "$SRC/daemon/devstackd.py" /opt/devstack/daemon/
 install -m 0644 -o root -g root "$SRC/daemon/wsl_ca.py" /opt/devstack/daemon/wsl_ca.py
 install -m 0644 -o root -g root "$SRC/daemon/project_frameworks.py" /opt/devstack/daemon/project_frameworks.py
 install -m 0644 -o root -g root "$SRC/daemon/project_isolation_preflight.py" /opt/devstack/daemon/project_isolation_preflight.py
-# Installed but inactive: registered administrator-only isolation preview.
+# Installed without activation: administrator-controlled registered isolation.
 for item in project_pilot.py project_runtime_identity.py project_idmap.py project_mounts.py project_access.py project_data_views.py project_runtime.py project_http.py project_lifecycle.py; do
   [[ -f "$SRC/daemon/$item" && ! -L "$SRC/daemon/$item" ]]
   install -m 0644 -o root -g root "$SRC/daemon/$item" "/opt/devstack/daemon/$item"

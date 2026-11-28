@@ -865,3 +865,62 @@ and the existing project lifecycle. Do not silently fall back to shared
 unrestricted PHP for agent-modified code. Agent authorization is a later,
 separate boundary. This preview intentionally does not introduce a mount
 broker, new service catalog or automatic migrations.
+
+### Registered isolated HTTPS and optional Mailpit (E1.3m)
+
+An administrator can opt an eligible registration into isolated HTTPS after
+installing or updating DevStack. Use a standard HTTPS project with a `public`
+webroot, the conventional writable `storage`, `bootstrap/cache`, and `database`
+directories, and SQLite. Projects with managed MariaDB, custom Nginx rules,
+an unrecognized configuration or an invalid registration are refused. The
+reviewed Bubblewrap version floor and the existing filesystem prerequisites
+apply. Agent authorization remains a separate future step.
+
+```bash
+sudo python3 -I /opt/devstack/daemon/project_pilot.py activate <slug>
+sudo python3 -I /opt/devstack/daemon/project_pilot.py status <slug>
+sudo python3 -I /opt/devstack/daemon/project_pilot.py restart <slug>
+sudo python3 -I /opt/devstack/daemon/project_pilot.py deactivate <slug>
+```
+
+The generated vhost retains the existing domain, certificate and listener.
+The host Nginx forwards to the registration's private Unix socket and
+replaces client forwarding headers. Static and published storage files are
+served inside the HTTP sandbox. The shared FPM pool is retired on cutover.
+A stopped or failed isolated runtime returns a gateway error. An explicit
+`stop` keeps the isolated route and activation intent. Daemon startup
+reconciles that intent and can start the runtime again when WSL boots.
+Deactivation restores the canonical ordinary vhost and pool when the project
+has no agent grants. The panel displays the generated vhost read-only while
+isolation is active. Managed deletion stops the runtime and retains the
+developer's files. Re-creation has a new registration and starts in
+ordinary mode.
+
+The existing `local_mail` project opt-in enables SMTP access on activation.
+Systemd's socket activation helper and socket proxy connect the sandbox's
+loopback SMTP port to a single registration-private Unix socket and onward
+to `127.0.0.1:1025` on the host. The host-side relay runs as the unprivileged
+runtime identity and ends with the FPM unit. The Mailpit service is started
+and stopped independently. Laravel keeps its existing SMTP settings and PHP
+`mail()` uses the existing Mailpit binary when installed. Mailpit's UI and API
+remain accessible via the existing host workflow. The isolated runtime has
+no supported connection to the host HTTP API, MariaDB, Redis or other
+host-network endpoints. There is no additional package or TCP listener on
+the host.
+
+The automated acceptance test runs through the existing Bubblewrap backport
+workflow and its installed-project tests. The isolated application test
+uses the official Laravel Livewire starter kit, Chromium, built Flux/Vite
+assets, a Livewire POST, session cookies, a storage upload and SQLite
+writes. Live Vite HMR, remote dependencies, additional writable paths and
+agent access remain outside this activation profile.
+
+For ASUS acceptance, use the registered SQLite project with the intended
+local-mail setting and a clean canonical vhost. With trusted HTTPS and the
+normal developer login, verify the Laravel page, a Livewire interaction,
+published storage, SQLite and the normal CLI/build/test workflow. Send a
+unique mail through the application and verify it in the existing DevStack
+mail view, including the usual Windows notification if enabled. Restart
+the isolated runtime, then verify recovery after the next normal WSL boot.
+Repeat the application check after deactivation if you want to restore
+ordinary routing.

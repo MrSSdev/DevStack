@@ -76,6 +76,20 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(d.InputError):
             d.update_config({'slug':'alpha','rules':'','overrides':''})
 
+    def test_isolated_nginx_has_only_the_registration_upstream(self):
+        key = 'a' * 32
+        root = Path('/home/developer/projects/alpha/public')
+        text = d.nginx_conf('alpha', 'alpha.test', root, True, isolation_id=key)
+        self.assertIn(f'proxy_pass http://unix:/run/devstack-pilot-{key}-http/sockets/http.sock;', text)
+        self.assertIn('proxy_ignore_headers X-Accel-Redirect;', text)
+        self.assertIn('proxy_set_header X-Forwarded-For $remote_addr;', text)
+        self.assertNotIn('fastcgi_pass', text)
+        self.assertNotIn(str(root), text)
+        for ssl, rules, identity in ((False, '', key), (True, 'client_max_body_size 30m;', key),
+                                     (True, '', '../arbitrary')):
+            with self.subTest(ssl=ssl, rules=rules, identity=identity), self.assertRaises(d.InputError):
+                d.nginx_conf('alpha', 'alpha.test', root, ssl, rules, isolation_id=identity)
+
     def test_framework_reader_uses_only_developer_credentials_and_known_results(self):
         from types import SimpleNamespace
         account = SimpleNamespace(pw_uid=1001, pw_gid=1001)

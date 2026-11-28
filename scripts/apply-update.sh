@@ -69,11 +69,20 @@ backup_dir="$(mktemp -d /var/backups/devstack/update-XXXXXXXX)"
 stage_dir="$(mktemp -d /opt/.devstack-stage.XXXXXXXX)"
 prior_dir="$stage_dir.previous"
 old_moved=0
+helper_stopped=0
 notice_units_created=0
 core_unit_changed=0
 unit_tmp=''
 notice_timer_was_active=0
 if systemctl is-active --quiet devstack-notifications.timer; then notice_timer_was_active=1; fi
+
+# Serialize code-directory swaps with the installed CLI and registry writer.
+project_lock=/var/lib/devstack/project-operations.lock
+if [[ -L "$project_lock" || ( -e "$project_lock" && ! -f "$project_lock" ) ]]; then
+  echo 'Unsafe project operations lock.' >&2
+  exit 1
+fi
+exec {project_lock_fd}<>"$project_lock"
 
 rollback() {
   local status="$1"
@@ -91,17 +100,22 @@ rollback() {
   fi
   if [[ "$old_moved" -eq 1 && -d "$prior_dir" ]]; then
     echo 'UPDATE FAILED — restoring previous installed application...' >&2
-    if [[ -e /opt/devstack ]]; then
-      mv -- /opt/devstack "$stage_dir.failed"
+    # A starting Python helper can recreate the old directory while
+    # writing its import cache if it runs between the two renames.
+    systemctl stop devstackd
+    flock -x "$project_lock_fd"
+    if [[ ! -e /opt/devstack ]] || mv -T -- /opt/devstack "$stage_dir.failed"; then
+      if mv -T -- "$prior_dir" /opt/devstack; then
+        helper_stopped=1
+      fi
     fi
-    mv -- "$prior_dir" /opt/devstack
-    if ! systemctl restart devstackd || ! systemctl reload php8.5-fpm; then
-      echo 'CRITICAL: previous-code service restart failed; inspect the protected backup.' >&2
-    fi
-    if [[ "$notice_timer_was_active" -eq 1 ]]; then systemctl start devstack-notifications.timer; fi
-    if [[ ! -d /opt/devstack ]]; then
+    flock -u "$project_lock_fd"
+    if [[ -d "$prior_dir" ]]; then
       echo 'CRITICAL: automatic rollback failed; restore from protected backup!' >&2
     fi
+  fi
+  if [[ "$helper_stopped" -eq 1 ]] && { ! systemctl restart devstackd || ! systemctl reload php8.5-fpm; }; then
+    echo 'CRITICAL: previous-code service restart failed; inspect the protected backup.' >&2
   fi
   if [[ "$notice_timer_was_active" -eq 1 ]]; then systemctl start devstack-notifications.timer; fi
   if [[ -d "$stage_dir" ]]; then rm -rf -- "$stage_dir"; fi
@@ -229,10 +243,15 @@ install -d -m 0700 -o devstackweb -g devstackweb /var/lib/devstack-web
 # Create a missing session directory as the web account, not as root.
 runuser -u devstackweb -- mkdir -p -m 0700 /var/lib/devstack-web/sessions
 
+systemctl stop devstackd
+helper_stopped=1
+flock -x "$project_lock_fd"
 old_moved=1
-mv -- /opt/devstack "$prior_dir"
-mv -- "$stage_dir" /opt/devstack
+mv -T -- /opt/devstack "$prior_dir"
+mv -T -- "$stage_dir" /opt/devstack
+flock -u "$project_lock_fd"
 systemctl restart devstackd
+helper_stopped=0
 systemctl reload php8.5-fpm
 
 for service in devstackd nginx php8.5-fpm; do
