@@ -142,7 +142,8 @@ def exercise(browser):
     page.keyboard.press('Enter')
     page.get_by_role('button', name='Podgląd instrukcji').first.click()
     expect(page.locator('pre')).to_contain_text('name: devstack-playwright')
-    expect(page.get_by_text(LOCAL, exact=False).first).to_be_visible()
+    catalogue = page.get_by_role('region', name='Instrukcje')
+    expect(catalogue.get_by_text(re.compile(r'Projekty \(1\).*' + LOCAL)).first).to_be_visible()
 
     section_menu.get_by_role('button', name='Projekty').click()
     plain_card = page.locator('[data-slot=card]').filter(has=page.get_by_role('link', name=PLAIN, exact=True))
@@ -233,7 +234,9 @@ def exercise(browser):
     expect(menu.get_by_role('button', name='Tools')).to_be_visible()
 
     command('sudo', 'systemctl', 'restart', 'devstackd')
-    wait_for(lambda: (local / MAIL).is_symlink(), 'managed instruction lost after Core restart')
+    wait_for(lambda: context.request.get(ORIGIN + '/api/extensions', timeout=3000).ok,
+             'Core API did not recover after restart')
+    assert (local / MAIL).is_symlink(), 'managed instruction lost after Core restart'
     delete(LOCAL)
     wait_for(lambda: not (local / MAIL).is_symlink(), 'deleted project instructions not cleaned')
     assert (PROJECTS / LOCAL).exists()
