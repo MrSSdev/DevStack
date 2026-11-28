@@ -60,12 +60,30 @@ def exercise(browser):
         assert response.ok, response.text()
         return response.json()['result']
 
+    def settle_php():
+        # The ordinary installer and deletion API schedule PHP-FPM reloads
+        # after the response. Let them finish before another mutation or UI check.
+        def idle():
+            output = subprocess.check_output([
+                'systemctl', 'list-units', '--all', '--plain', '--no-legend', '--no-pager', 'devstack-fpm-reload-*',
+            ], text=True, timeout=5)
+            for line in output.splitlines():
+                fields = line.split()
+                if len(fields) >= 4 and fields[0].startswith('devstack-fpm-reload-') and (
+                    fields[2] in {'activating', 'reloading', 'deactivating'} or fields[3] in {'waiting', 'running'}
+                ):
+                    return False
+            return context.request.get(ORIGIN + '/api/session', timeout=3000).ok
+        wait_for(idle, 'PHP-FPM did not settle after the scheduled reload')
+
     def register(slug, mail):
         post('projects', dict(slug=slug, name=slug, domain=slug + '.test', webroot='public', database=False,
                               https=False, local_mail=mail, engine='none', starter_kit='none', installer_options={}))
+        settle_php()
 
     def delete(slug):
         post('projects/delete', {'slug': slug, 'confirmation': slug, 'delete_database': False})
+        settle_php()
 
     def detail(path=''):
         response = context.request.get(ORIGIN + '/api/extensions/devstack-tools' + path)
