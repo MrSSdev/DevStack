@@ -10,7 +10,18 @@ first="$(readlink -f "$base/current")"
 [[ ! -w $first/playwright/package.json && ! -w $first/browsers ]]
 [[ "$(stat -c %u "$first")" == 0 ]]
 "$base/bin/playwright" --version | grep -Fx 'Version 1.65.1'
+"$base/bin/devstack-mail" --version | grep -Fx 'devstack-mail 1.0.0'
+"$base/bin/devstack-mail" --help | grep -F 'Read local developer mail'
+[[ ! -w $first/mail/mailpit.py ]]
+(
+  flock -x 8
+  rc=0
+  output="$("$base/bin/devstack-mail" status)" || rc=$?
+  [[ $rc -eq 7 && "$output" == *'"code":"tools_unavailable"'* ]]
+) 8<"$base/.lock"
 bash "$src/install.sh"
+[[ "$(readlink -f "$base/current")" == "$first" ]]
+bash "$src/update.sh"
 [[ "$(readlink -f "$base/current")" == "$first" ]]
 work="$(mktemp -d)"
 stage=''
@@ -21,6 +32,13 @@ cleanup() {
 }
 trap cleanup EXIT
 cd "$work"
+mkdir -p .agents/skills
+project_skill="$work/.agents/skills/devstack-tools"
+ln -sT "$base/skills/devstack-tools" "$project_skill"
+[[ "$(readlink -f "$project_skill/SKILL.md")" == "$first/skills/devstack-tools/SKILL.md" ]]
+grep -Fx 'name: devstack-tools' "$project_skill/SKILL.md"
+grep -F 'references/mail.md' "$project_skill/SKILL.md"
+[[ -r $project_skill/references/mail.md && ! -w $project_skill/references/mail.md ]]
 cat > playwright.config.cjs <<'JS'
 const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
@@ -58,19 +76,44 @@ chmod -R u+rwX "$stage/payload"
 cp "$stage/payload/smoke.cjs" "$stage/smoke-original.cjs"
 printf '%s\n' 'process.exit(42);' > "$stage/payload/smoke.cjs"
 node_bin="$(readlink -f -- "$(command -v node)")"
+mv "$stage/payload/mail/mailpit.py" "$stage/mailpit.py"
+if sudo -- /bin/bash "$src/publish.sh" publish "$stage" "$node_bin"; then
+  echo 'A candidate missing the mail adapter unexpectedly became active' >&2
+  exit 1
+fi
+[[ "$(readlink -f "$base/current")" == "$first" ]]
+mv "$stage/mailpit.py" "$stage/payload/mail/mailpit.py"
+skill_ref=skills/devstack-tools/references/mail.md
+mv "$stage/payload/$skill_ref" "$stage/mail.md"
+if sudo -- /bin/bash "$src/publish.sh" publish "$stage" "$node_bin"; then
+  echo 'A candidate missing the skill reference unexpectedly became active' >&2
+  exit 1
+fi
+[[ "$(readlink -f "$project_skill/SKILL.md")" == "$first/skills/devstack-tools/SKILL.md" ]]
+mv "$stage/mail.md" "$stage/payload/$skill_ref"
 if sudo -- /bin/bash "$src/publish.sh" publish "$stage" "$node_bin"; then
   echo 'A failed candidate unexpectedly became active' >&2
   exit 1
 fi
 [[ "$(readlink -f "$base/current")" == "$first" ]]
 cp "$stage/smoke-original.cjs" "$stage/payload/smoke.cjs"
+printf '\nUpdated skill fixture.\n' >> "$stage/payload/$skill_ref"
 sudo -- /bin/bash "$src/publish.sh" publish "$stage" "$node_bin"
 second="$(readlink -f "$base/current")"
 [[ $second != "$first" && ! -e $first ]]
 [[ "$(find "$base/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]]
+"$base/bin/devstack-mail" --version | grep -Fx 'devstack-mail 1.0.0'
+[[ "$(readlink -f "$project_skill/SKILL.md")" == "$second/skills/devstack-tools/SKILL.md" ]]
+grep -Fx 'Updated skill fixture.' "$project_skill/references/mail.md"
+mkdir -p "$work/new-project/.agents/skills"
+new_project_skill="$work/new-project/.agents/skills/devstack-tools"
+ln -sT "$base/skills/devstack-tools" "$new_project_skill"
+[[ "$(readlink -f "$new_project_skill/SKILL.md")" == "$second/skills/devstack-tools/SKILL.md" ]]
+cmp "$project_skill/references/mail.md" "$new_project_skill/references/mail.md"
 # The exact npm registry lock, with integrity, is retained by the install.
 cat "$second/playwright/package-lock.json"
 cd "$src"
 bash "$src/uninstall.sh" --confirm
 [[ ! -e $base ]]
-echo 'PASS: shared runner and CLI, read-only tools, no-op update, failed-candidate rollback, replacement and uninstall.'
+[[ -L $project_skill && ! -e $project_skill ]]
+echo 'PASS: shared Playwright and Mail commands, project skill discovery path, no-op update, failed-candidate rollback, replacement and uninstall.'

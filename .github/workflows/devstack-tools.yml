@@ -41,3 +41,25 @@ jobs:
           bash scripts/security-scan.sh
       - name: Real installation and lifecycle
         run: bash extensions/devstack-tools/tests/installed-smoke.sh
+  mail:
+    name: DevStack Mail unit tests and real read-only Mailpit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      DEVSTACK_MAIL_TEST_DISPOSABLE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: CLI, MIME and transport unit tests
+        run: python3 -m unittest discover -s extensions/devstack-tools/tests -p 'test_*.py' -v
+      - name: Exercise a separate disposable mailbox
+        run: |
+          fixture=extensions/devstack-tools/tests/mailpit-smoke.py
+          python3 -IB "$fixture" missing
+          sudo bash scripts/install-mailpit.sh
+          test "$(cat /opt/devstack-mailpit/VERSION)" = v1.34.0
+          python3 -IB "$fixture" ready
+          sudo systemctl stop devstack-mailpit.service
+          python3 -IB "$fixture" stopped
+          test "$(systemctl is-active devstack-mailpit.service || true)" = inactive

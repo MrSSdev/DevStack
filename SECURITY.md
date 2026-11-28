@@ -79,6 +79,30 @@ message opening to a sender or tracker. No referrer is sent. External
 stylesheets, fonts, scripts and non-HTTP(S) links remain blocked; ordinary
 attachment downloads retain their attachment disposition.
 
+### DevStack Mail CLI
+
+`devstack-mail` is for the trusted developer and their tests. It reads the
+shared mailbox through the fixed loopback API of DevStack-managed Mailpit
+v1.34.0. The adapter uses only the readiness check, the bounded message
+list, and the raw MIME endpoint for a validated message ID. In this Mailpit
+version the JSON message-detail endpoint marks a message read. Raw MIME
+retrieval preserves the read flag and leaves the panel and notification
+journal alone. The CLI has no operations for mailbox changes and uses no
+environment proxies, redirects or supplied request destinations.
+
+Text, HTML and extracted links are data. The tool neither renders HTML nor
+opens URLs, and error diagnostics exclude message content. JSON output can
+contain reset tokens and verification links. Keep command output out of
+shared logs, Playwright traces and committed artifacts. An origin filter
+does not verify the sender or make returned content trustworthy.
+
+Recipient addresses, subject lines, origins and project names are selectors
+available to the caller. They confer no authority. Keep the direct Mailpit
+API and this developer adapter outside managed agent sandboxes. Future
+access requires per-operation authorization tied to a trusted project
+registration and the agent session. See [DevStack Tools](extensions/devstack-tools/README.md)
+and the [AI integration plan](docs/PROJECT-ISOLATION-AI.md).
+
 ### Notification journal and PWA
 
 The authenticated, CSRF-protected notification API stores bounded events

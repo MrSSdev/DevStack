@@ -51,7 +51,7 @@ if [[ -e $base/current || -L $base/current ]]; then
   [[ $previous =~ ^/opt/devstack-tools/releases/release-[a-zA-Z0-9]{8}$ && -d $previous && ! -L $previous ]] ||
     die 'Unsafe current release.'
 fi
-for name in bin playwright browsers; do
+for name in bin playwright browsers skills; do
   if [[ -e $base/$name || -L $base/$name ]]; then
     [[ -L $base/$name && "$(readlink -- "$base/$name")" == "current/$name" ]] ||
       die "Unmanaged path: $name"
@@ -100,17 +100,30 @@ find -P "$incoming" -type f -exec chmod a-s,a-t,u=rwX,go=rX {} +
 find -P "$incoming" -type d -exec chmod 0755 {} +
 [[ -z "$(find -P "$incoming" ! -user root -print -quit)" ]] ||
   die 'Release ownership is not root.'
-for file in BUILD smoke.cjs bin/playwright bin/playwright-cli playwright/package.json \
+[[ -d $incoming/mail && ! -L $incoming/mail && -x $incoming/bin/devstack-mail ]] ||
+  die 'Invalid DevStack Mail installation.'
+for directory in skills skills/devstack-tools skills/devstack-tools/references; do
+  [[ -d $incoming/$directory && ! -L $incoming/$directory ]] ||
+    die "Missing or unsafe skill directory: $directory"
+done
+for file in BUILD smoke.cjs bin/playwright bin/playwright-cli bin/devstack-mail \
+  mail/cli.py mail/contract.py mail/mailpit.py mail/message.py playwright/package.json \
+  skills/devstack-tools/SKILL.md skills/devstack-tools/references/mail.md \
   playwright/package-lock.json playwright/node_modules/@playwright/test/cli.js; do
   [[ -f $incoming/$file && ! -L $incoming/$file ]] || die "Missing release file: $file"
 done
 [[ "$(cat "$incoming/BUILD")" =~ ^[0-9a-f]{64}$ ]] || die 'Invalid build identifier.'
+# Verify the relocated Python entry point and its imports without contacting
+# Mailpit. The optional mail service need not be installed or started.
+runuser -u "$owner" -- env -i HOME="$home" PATH=/usr/bin:/bin \
+  /usr/bin/python3 -IB "$incoming/mail/cli.py" --version |
+  grep -Ex 'devstack-mail [0-9]+\.[0-9]+\.[0-9]+'
 # Smoke the relocated candidate as the developer, not root. Preserve the old
 # active symlink unless this browser actually starts and closes successfully.
 runuser -u "$owner" -- env -i HOME="$home" PATH=/usr/local/bin:/usr/bin:/bin \
   PLAYWRIGHT_BROWSERS_PATH="$incoming/browsers" \
   "$node_bin" "$incoming/smoke.cjs"
-for name in bin playwright browsers; do
+for name in bin playwright browsers skills; do
   if [[ ! -L $base/$name ]]; then ln -s "current/$name" "$base/$name"; fi
 done
 # Atomic activation on the same filesystem. The lock protects launchers.
