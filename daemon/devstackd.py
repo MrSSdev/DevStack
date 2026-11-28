@@ -1924,8 +1924,13 @@ def notification_snapshot(_: dict[str, Any]) -> dict[str, Any]:
         # A receipt-store fault must not suppress ordinary service monitoring.
         print('DevStack service completion receipts unavailable', file=sys.stderr)
         completions = []
+    try:
+        instructions = instruction_manager().completion_results()
+    except Exception:
+        print('DevStack instruction completion receipts unavailable', file=sys.stderr)
+        instructions = []
     return {'engine_job': public_engine_job(), 'services': managed_services.public_rows(),
-            'service_results': completions}
+            'service_results': completions, 'instruction_results': instructions}
 
 
 def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:

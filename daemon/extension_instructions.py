@@ -22,6 +22,10 @@ MAILPIT_UNIT = pathlib.Path('/etc/systemd/system/devstack-mailpit.service')
 STATUSES = {'linked', 'detached', 'manual', 'conflict', 'error'}
 WORKER_STATES = {'complete', 'error', 'unsafe_directory', 'directory_changed', 'missing'}
 WRITE_OPERATIONS = {'sync', 'set_automatic', 'migrate'}
+OPERATION_LIMIT = 64
+OPERATION_TIMEOUT = 3600
+RESULT_LIMIT = 64
+RESULT_TTL = 30 * 86400
 
 
 def now():
@@ -125,6 +129,14 @@ def run_worker(core, batch):
                 value not in STATUSES for value in values.values()
             ):
                 raise ValueError('Invalid instruction link status.')
+        if report['state'] == 'complete':
+            links, prepared = set(report.get('links', {})), set(report.get('prepared', {}))
+            if links & prepared or links | prepared != set(batch[key]['links']):
+                raise ValueError('Incomplete successful instruction response.')
+        migrated = report.get('migrated', [])
+        allowed_migrations = {name for name, details in batch[key]['legacy'].items() if details['migrate']}
+        if not isinstance(migrated, list) or any(not isinstance(name, str) or name not in allowed_migrations for name in migrated):
+            raise ValueError('Invalid instruction migration result.')
         for field, allowed in (('prepared', 'links'), ('legacy_receipts', 'legacy')):
             receipts = report.get(field, {})
             if not isinstance(receipts, dict) or not set(receipts) <= set(batch[key][allowed]):
@@ -135,8 +147,75 @@ def run_worker(core, batch):
     return result
 
 
+def finish_target(state, row, outcome):
+    operation = state['operations'].get(row.pop('operation', None))
+    if operation is not None:
+        operation['remaining'] -= 1
+        counts = operation['outcomes']
+        counts[outcome] = counts.get(outcome, 0) + 1
+
+
+def cancel_unworkable_targets(state, projects, extensions, stamp):
+    if not state['operations']:
+        return
+    for key, project_row in state['projects'].items():
+        for extension_id, row in project_row['extensions'].items():
+            operation = state['operations'].get(row.get('operation'))
+            if operation is None:
+                continue
+            release = extensions.get(extension_id, {})
+            outcome = None
+            if key not in projects:
+                outcome = 'removed'
+            elif release.get('state') != 'active' or release.get('publication', release.get('build')) != operation['publication']:
+                outcome = 'unavailable'
+            elif projects[key][1].get('engine_status') == 'failed':
+                outcome = 'error'
+            elif stamp - operation['queued'] >= OPERATION_TIMEOUT:
+                outcome = 'expired'
+            if outcome is not None:
+                finish_target(state, row, outcome)
+                row.pop('pending', None)
+                row.pop('migrate', None)
+
+
+def instruction_outcome(operation, status, plan, report, manual):
+    if status not in {'synced', 'disabled', 'manual', 'conflict'}:
+        return 'error'
+    if status == 'conflict':
+        return 'conflict'
+    if operation['action'] == 'migrate':
+        if any(name in manual for name in plan['migration']):
+            return 'conflict'
+        if set(plan['migration']) - set(report.get('migrated', [])):
+            # A disappeared legacy link is not evidence that we removed it.
+            return 'unchanged'
+    if manual:
+        return 'manual'
+    if operation['action'] == 'set_automatic':
+        if operation['enabled'] and not plan['enabled']:
+            return 'inactive'
+        if not operation['changed']:
+            return 'unchanged'
+    return 'done'
+
+
+def finalize_operations(state, stamp):
+    for key, operation in list(state['operations'].items()):
+        if operation['remaining']:
+            continue
+        fields = ('extension', 'slug', 'name', 'action', 'enabled', 'outcomes')
+        state['results'][key] = {**{name: operation[name] for name in fields}, 'stamp': stamp}
+        del state['operations'][key]
+    state['results'] = dict(sorted(
+        ((key, value) for key, value in state['results'].items() if stamp - value['stamp'] <= RESULT_TTL),
+        key=lambda item: (item[1]['stamp'], item[0]),
+    )[-RESULT_LIMIT:])
+
+
 def new_state():
-    return {'schema': 1, 'settings': {}, 'projects': {}, 'extensions': {}, 'automations': {}}
+    return {'schema': 1, 'settings': {}, 'projects': {}, 'extensions': {}, 'automations': {},
+            'operations': {}, 'results': {}}
 
 
 def registered(core, *, identities=False):
@@ -216,10 +295,19 @@ class Manager:
             return new_state()
         if data.get('schema') != 1:
             raise RuntimeError('Nieobsługiwana wersja rejestru instrukcji.')
+        data.setdefault('operations', {})
+        data.setdefault('results', {})
         return data
 
     def save(self, data):
         self.core.write_json_atomic(self.path, data)
+
+    def completion_results(self):
+        cutoff = int(time.time()) - RESULT_TTL
+        return [
+            {'id': key, **result} for key, result in self.load()['results'].items()
+            if result['stamp'] >= cutoff
+        ]
 
     def tick(self):
         clock = time.monotonic()
@@ -248,9 +336,11 @@ class Manager:
             return
         state = self.load()
         active = any(info['state'] == 'active' for info in extensions.values())
-        if not active and not state['projects'] and not state['extensions']:
+        if not active and not state['projects'] and not state['extensions'] and not state['operations']:
             return
         projects = registered(self.core, identities=active)
+        stamp = int(time.time())
+        cancel_unworkable_targets(state, projects, extensions, stamp)
         mailpit = installed_service('mailpit')
         if clock >= self.next_audit:
             self.next_audit = clock + 30
@@ -364,7 +454,7 @@ class Manager:
                     'enabled': enabled, 'collision': collision,
                     'installed': info['state'] == 'active',
                     'legacy': info.get('legacy', []), 'names': list(current['links']), 'inspect': names,
-                    'event': reason,
+                    'event': reason, 'migration': list(current.get('migrate', {})),
                 }
             if not ready:
                 continue
@@ -377,6 +467,7 @@ class Manager:
                 self.dirty = True
                 break
         if not batch:
+            finalize_operations(state, stamp)
             if state != self.load():
                 self.save(state)
             return
@@ -437,9 +528,12 @@ class Manager:
                 status = ('error' if report['state'] == 'complete' else report['state']) if not success else (
                     'conflict' if conflicts else 'manual' if 'manual' in manual.values() else
                     'synced' if plan['enabled'] else 'disabled')
+                manual_names = sorted(name for name, result in results.items() | manual.items() if result == 'manual')
+                operation = state['operations'].get(current.get('operation'))
+                if operation is not None:
+                    finish_target(state, current, instruction_outcome(operation, status, plan, report, manual_names))
                 current.update(status=status, last_sync=now(), event=plan['event'], results=results,
-                               manual=sorted(name for name, result in results.items() | manual.items() if result == 'manual'),
-                               conflicts=conflicts,
+                               manual=manual_names, conflicts=conflicts,
                                legacy_receipts={name: value for name, value in report.get('legacy_receipts', {}).items()
                                                 if name in plan['legacy']})
             if key not in projects and not row['extensions']:
@@ -447,6 +541,9 @@ class Manager:
         for (extension_id, event), outcome in outcomes.items():
             latest = state['automations'].setdefault(extension_id, {})
             latest[event] = {**outcome, 'at': now()}
+        # Commit receipts with the reconciled state. If this write fails,
+        # neither the result nor a finished operation is visible to the collector.
+        finalize_operations(state, int(time.time()))
         self.save(state)
 
     def navigation(self, data):
@@ -623,7 +720,20 @@ class Manager:
         if action == 'sync' and extension_id not in allows({extension_id: extension}, 'manual'):
             raise ValueError('Rozszerzenie nie obsługuje ręcznej synchronizacji.')
         state = self.load()
+        if len(state['operations']) >= OPERATION_LIMIT:
+            raise ValueError('Za dużo oczekujących zleceń synchronizacji.')
+        slug, project = lookup[project_id] if project_id else ('', {})
+        name = project.get('name')
+        if not isinstance(name, str) or not name:
+            name = slug
+        receipt = secrets.token_hex(16)
+        operation = {
+            'extension': extension_id, 'publication': extension.get('publication', extension['build']),
+            'slug': slug, 'name': name[:70], 'action': action, 'enabled': data.get('enabled'),
+            'changed': False, 'queued': int(time.time()), 'remaining': 0, 'outcomes': {},
+        }
         if action == 'set_automatic' and project_id is None:
+            operation['changed'] = state['settings'].get(extension_id, True) != data['enabled']
             state['settings'][extension_id] = data['enabled']
         for key, (slug, project) in lookup.items():
             if project_id and key != project_id:
@@ -631,6 +741,7 @@ class Manager:
             parent = state['projects'].setdefault(key, {'slug': slug, 'identity': None, 'fingerprint': None, 'extensions': {}})
             row = parent['extensions'].setdefault(extension_id, {'links': {}, 'automatic': True, 'wanted': {}, 'status': 'pending'})
             if action == 'set_automatic' and project_id:
+                operation['changed'] = row['automatic'] != data['enabled']
                 row['automatic'] = data['enabled']
             if action == 'migrate':
                 facts = selection_facts(project, installed_service('mailpit'))
@@ -639,7 +750,14 @@ class Manager:
                     raise ValueError('Włącz zarządzanie i sprawdź ręczne dowiązanie przed migracją.')
                 row['migrate'] = {name: receipt for name, receipt in row.get('legacy_receipts', {}).items()
                                   if name in extension['legacy']}
+            elif row.get('operation'):
+                row.pop('migrate', None)
+            finish_target(state, row, 'superseded')
+            row['operation'] = receipt
             row['pending'] = True
+            operation['remaining'] += 1
+        state['operations'][receipt] = operation
         self.save(state)
         self.dirty = True
-        return {'message': 'Zapisano zlecenie synchronizacji instrukcji.'}
+        return {'receipt': receipt, 'project_slug': operation['slug'], 'project_name': operation['name'],
+                'message': 'Zapisano zlecenie synchronizacji instrukcji.'}

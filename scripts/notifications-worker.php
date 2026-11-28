@@ -13,6 +13,11 @@ try {
     // Do not infer service failure from unavailable status.
 }
 try {
+    if (is_array($snapshot['instruction_results'] ?? null)) $store->observeInstructionResults($snapshot['instruction_results']);
+} catch (Throwable) {
+    // An invalid receipt does not suppress mail collection or WinRT delivery.
+}
+try {
     $messages=[];
     for ($start=0;$start<200;$start+=40) {
         $page=devstack_mailpit_request('list',['start'=>(string)$start]);
