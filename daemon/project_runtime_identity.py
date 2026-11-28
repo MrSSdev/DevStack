@@ -30,15 +30,15 @@ class IdentityError(RuntimeError):
 
 
 def account_name(slot, project_id):
-    if slot not in ('a', 'b') or not isinstance(project_id, str) or not PROJECT_ID.fullmatch(project_id):
+    if slot not in ('a', 'b', 'p') or not isinstance(project_id, str) or not PROJECT_ID.fullmatch(project_id):
         raise IdentityError('Invalid registration identity')
     # 31 bytes, within Linux's login-name limit. The record and account
     # comment retain the full ID. Never adopt a truncated-name collision.
     return 'dsrt-' + slot + '-' + project_id[:24]
 
 
-def comment(project_id):
-    return 'DevStack fixture ' + project_id
+def comment(project_id, slot='a'):
+    return ('DevStack pilot ' if slot == 'p' else 'DevStack fixture ') + project_id
 
 
 def validate_record(value, slot):
@@ -62,10 +62,15 @@ def validate_record(value, slot):
 
 
 def record_path(base, slot):
-    if (slot not in ('a', 'b') or base.parent != Path('/var/lib')
-            or not BASE.fullmatch(base.name)):
+    if slot == 'p':
+        if (os.geteuid() != 0 or base.parent != Path('/var/lib/devstack')
+                or not base.name.startswith('pilot-')
+                or not PROJECT_ID.fullmatch(base.name[6:])):
+            raise IdentityError('Expected protected registered pilot journal')
+    elif (slot not in ('a', 'b') or base.parent != Path('/var/lib')
+          or not BASE.fullmatch(base.name)):
         raise IdentityError('Expected protected disposable fixture')
-    for path in (Path('/'), Path('/var'), Path('/var/lib'), base):
+    for path in (*reversed(base.parents), base):
         s = path.lstat()
         if not stat.S_ISDIR(s.st_mode) or s.st_uid != 0 or s.st_mode & 0o022:
             raise IdentityError('Unprotected allocation directory')
@@ -84,7 +89,10 @@ def read_record(base, slot):
     if len(raw) > 2048:
         raise IdentityError('Oversized identity record')
     try:
-        return validate_record(json.loads(raw), slot)
+        record = validate_record(json.loads(raw), slot)
+        if slot == 'p' and base.name != 'pilot-' + record['project_id']:
+            raise IdentityError('Pilot journal registration mismatch')
+        return record
     except (ValueError, RecursionError):
         raise IdentityError('Unreadable identity record') from None
 
@@ -98,7 +106,7 @@ def verify_account(record, *, password_lock=False):
         group = grp.getgrnam(name)
         if (account.pw_uid != uid or account.pw_gid != gid
                 or account.pw_dir != HOME or account.pw_shell != SHELL
-                or account.pw_gecos != comment(record['project_id'])
+                or account.pw_gecos != comment(record['project_id'], record['slot'])
                 or pwd.getpwuid(uid).pw_name != name
                 or group.gr_gid != gid or grp.getgrgid(gid).gr_name != name
                 or set(os.getgrouplist(name, gid)) != {gid}):
@@ -164,6 +172,22 @@ def provision_fixture(base, slot, project_id):
     if (os.geteuid() != 0 or os.getenv('GITHUB_ACTIONS') != 'true'
             or os.getenv('DEVSTACK_RUNTIME_CI') != '1'):
         raise IdentityError('Disposable CI administrator required')
+    if slot not in ('a', 'b'):
+        raise IdentityError('Fixture allocation requires a fixture slot')
+    return _provision(base, slot, project_id)
+
+
+def provision_pilot(base, project_id):
+    # Caller is the installed administrator-only pilot controller, after
+    # checking the protected project registry. No fixture flags accepted.
+    if (os.geteuid() != 0 or not isinstance(project_id, str)
+            or not PROJECT_ID.fullmatch(project_id)
+            or base != Path('/var/lib/devstack') / ('pilot-' + project_id)):
+        raise IdentityError('Expected authorized pilot registration')
+    return _provision(base, 'p', project_id)
+
+
+def _provision(base, slot, project_id):
     path = record_path(base, slot)
     name = account_name(slot, project_id)
     if exists(pwd.getpwnam, name) or exists(grp.getgrnam, name):
@@ -177,7 +201,7 @@ def provision_fixture(base, slot, project_id):
     sync_directory(base)
     result = subprocess.run(['/usr/sbin/useradd', '--system', '--user-group',
                              '--no-create-home', '--home-dir', HOME,
-                             '--shell', SHELL, '--comment', comment(project_id),
+                             '--shell', SHELL, '--comment', comment(project_id, slot),
                              '--', name], env=ENV, capture_output=True,
                             text=True, timeout=15, check=False)
     if result.returncode:

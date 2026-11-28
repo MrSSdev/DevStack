@@ -792,3 +792,76 @@ arbitrary framework layouts and actual existing project activation remain
 separate gates. The installer/updater and deployed project RPCs are unchanged.
 Existing MariaDB project accounts/grants, optional Redis, shared Mailpit
 mailbox, panel, PWA, widgets and Windows integration remain unchanged.
+
+
+### Registered project preview using private systemd mounts (E1.3l)
+
+The first practical ASUS project is created through the normal DevStack
+installer, not by the runtime fixture. The installed read-only preflight
+confirmed the complete standard Laravel layout and registration identity.
+The actual settings have local mail enabled. Do not rewrite those settings
+or switch the ordinary domain to a runtime that cannot send SMTP.
+
+The optional administrator-only `project_pilot.py` entry point is installed
+by the normal install/update path but never starts automatically. It accepts
+only a registered canonical project with a valid project ID, standard
+`public` webroot, HTTPS, no MariaDB or custom Nginx rules. It requires the
+reviewed Bubblewrap version floor (0.13.1), ordinary root-owned binary and
+no file capabilities. The existing preflight continues to report blocked:
+the preview does NOT constitute production enrollment or an agent grant.
+
+- Reuse RuntimePlan, ProjectHttp, RuntimePair, the protected UID/GID
+  allocation journal and FD-based IDMAP. The root-owned pilot identity
+  journal lives in the existing DevStack state directory, keyed by the
+  full registration ID. Never adopt an existing account or recycle a UID.
+- Each of the two transient systemd services uses PrivateMounts and a
+  systemd-owned RuntimeDirectory. The fixed ExecStart helper validates
+  the registration and identity, makes propagation private and prepares
+  its own mapped mounts. This must occur in ExecStart, not ExecStartPre
+  (systemd does not share mount namespaces between separate commands).
+  The full code view is read-only IDMAP; PHP has three separate writable
+  data views. HTTP binds only public and published storage read-only.
+  No original project ACLs are rewritten. Root is used only for the fixed
+  preparation, then all UID/GID values and supplementary groups are dropped
+  before Bubblewrap and the existing runtime seccomp policy is confirmed.
+- The private mount namespace dies with the unit; systemd owns runtime
+  directory cleanup. No host publication table or new privileged daemon.
+  Normal stop/start reuses the durable registration and data. A preview
+  does not persist across WSL shutdown. The administrator explicitly starts
+  it again when required. An explicit stop-id remains available even after
+  registry removal; the locked account journal is retained.
+- The existing public domain, shared PHP pool, registry, certs, mail setting,
+  installer, and all optional services are untouched. The preview exposes
+  an HTTP Unix socket for trusted administrator testing, not an additional
+  TCP port. It has no SMTP connectivity. Do not use the legacy application
+  concurrently during the preview acceptance and do not grant any agent
+  access while the legacy public runtime remains available.
+- Unit tests and the Bubblewrap backport workflow exercise the installed
+  entry point with a canonical /home developer project and protected
+  registry on a disposable runner. The existing ACL and IDMAP fixture
+  regression profiles are unchanged. The new smoke checks private mount
+  cleanup, actual FPM SQLite and mode 0600, developer access, sibling
+  denial, published storage, stable ownership/ACLs, restart, and stop-id.
+  This is not yet a real Laravel/WSL acceptance.
+
+After CI and standard DevStack update, the administrator can run:
+
+```bash
+sudo python3 -I /opt/devstack/daemon/project_pilot.py start isolation-test
+sudo python3 -I /opt/devstack/daemon/project_pilot.py status isolation-test
+sudo python3 -I /opt/devstack/daemon/project_pilot.py stop isolation-test
+```
+
+The start response gives the exact preview_socket and project_id. Use the
+socket for acceptance requests with the original Host and HTTPS forwarding
+headers, without changing DNS, certificates or the normal Nginx vhost.
+If the registration was removed, stop-id accepts the full saved project_id.
+Stop the preview before updating DevStack or deleting/recreating the
+project. Do not run these commands against an installed project before
+reviewing this change and its CI results.
+
+The remaining production cutover must preserve existing mail/service access
+and the existing project lifecycle. Do not silently fall back to shared
+unrestricted PHP for agent-modified code. Agent authorization is a later,
+separate boundary. This preview intentionally does not introduce a mount
+broker, new service catalog or automatic migrations.

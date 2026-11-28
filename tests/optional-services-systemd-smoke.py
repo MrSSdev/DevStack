@@ -210,6 +210,24 @@ def isolation_preflight(slug, *, database=False):
     assert rejected.returncode == 2
     print('PASS: Installed read-only isolation preflight blocks activation', flush=True)
 
+    # Test the actual installer/updater's deployed entry point as well as
+    # the isolated backport fixture. Status must not require Bubblewrap,
+    # allocate a principal or touch the ordinary FPM/registry.
+    pilot = Path('/opt/devstack/daemon/project_pilot.py')
+    status = run('/usr/bin/python3', '-I', str(pilot), 'status', slug, check=False)
+    settings = result['settings']
+    if (database or settings['overrides'] or settings['extra_locations']
+            or not settings['https']):
+        assert status.returncode == 2, (status.returncode, status.stderr[-2000:])
+    else:
+        assert status.returncode == 0, (status.returncode, status.stderr[-2000:])
+        data = json.loads(status.stdout)
+        assert data['project'] == slug and data['status'] == 'not-enrolled', data
+        assert data['project_id'] == registration_id(slug)
+        assert not (STATE / ('pilot-' + data['project_id'])).exists()
+    assert (STATE/'projects.json').read_bytes() == before and pool.read_bytes() == original
+    print('PASS: Installed pilot status preserves ordinary project and service state', flush=True)
+
 
 def missing():
     assert UNIT.read_text() == CORE_UNIT

@@ -44,7 +44,7 @@ if [[ -L "$src/framework-installers" || -L "$src/framework-installers/laravel" ]
 fi
 
 for file in backend/public/index.php backend/public/index.html backend/public/sw.js backend/public/manifest.webmanifest backend/public/pwa/icon-192.png backend/public/pwa/icon-512.png backend/public/pwa/devstack.svg backend/security.php backend/mail-preview.php backend/notifications.php \
-    daemon/devstackd.py daemon/wsl_ca.py daemon/project_frameworks.py daemon/project_isolation_preflight.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
+    daemon/devstackd.py daemon/wsl_ca.py daemon/project_frameworks.py daemon/project_isolation_preflight.py daemon/project_pilot.py daemon/project_runtime_identity.py daemon/project_idmap.py daemon/project_mounts.py daemon/project_access.py daemon/project_data_views.py daemon/project_runtime.py daemon/project_http.py daemon/project_lifecycle.py daemon/managed_services.py daemon/service-catalog.json framework-installers/README.md framework-installers/laravel/README.md framework-installers/catalog.json framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/__init__.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py \
     scripts/set-password.php scripts/configure-auth.php scripts/notifications-worker.php scripts/devstack-notifications.service scripts/devstack-notifications.timer scripts/devstackd.service; do
   if [[ ! -f "$src/$file" || -L "$src/$file" ]]; then
     echo "Missing or unsafe source file: $file" >&2
@@ -135,6 +135,9 @@ install -m 0644 -o root -g root "$src/daemon/devstackd.py" "$stage_dir/daemon/de
 install -m 0644 -o root -g root "$src/daemon/wsl_ca.py" "$stage_dir/daemon/wsl_ca.py"
 install -m 0644 -o root -g root "$src/daemon/project_frameworks.py" "$stage_dir/daemon/project_frameworks.py"
 install -m 0644 -o root -g root "$src/daemon/project_isolation_preflight.py" "$stage_dir/daemon/project_isolation_preflight.py"
+for item in project_pilot.py project_runtime_identity.py project_idmap.py project_mounts.py project_access.py project_data_views.py project_runtime.py project_http.py project_lifecycle.py; do
+  install -m 0644 -o root -g root "$src/daemon/$item" "$stage_dir/daemon/$item"
+done
 install -m 0644 -o root -g root "$src/daemon/managed_services.py" "$stage_dir/daemon/managed_services.py"
 install -m 0644 -o root -g root "$src/daemon/service-catalog.json" "$stage_dir/daemon/service-catalog.json"
 install -d -m 0755 -o root -g root "$stage_dir/framework-installers" "$stage_dir/framework-installers/laravel"
@@ -169,7 +172,7 @@ python3 - "$stage_dir" <<'PY'
 import pathlib
 import sys
 root = pathlib.Path(sys.argv[1])
-for rel in ('daemon/devstackd.py', 'daemon/wsl_ca.py', 'daemon/project_frameworks.py', 'daemon/project_isolation_preflight.py', 'daemon/managed_services.py', 'framework-installers/common.py', 'framework-installers/registry.py', 'framework-installers/runner.py', 'framework-installers/laravel/adapter.py', 'scripts/list-domains.py', 'scripts/watch-domains.py'):
+for rel in ('daemon/devstackd.py', 'daemon/wsl_ca.py', 'daemon/project_frameworks.py', 'daemon/project_isolation_preflight.py', 'daemon/project_pilot.py', 'daemon/project_runtime_identity.py', 'daemon/project_idmap.py', 'daemon/project_mounts.py', 'daemon/project_access.py', 'daemon/project_data_views.py', 'daemon/project_runtime.py', 'daemon/project_http.py', 'daemon/project_lifecycle.py', 'daemon/managed_services.py', 'framework-installers/common.py', 'framework-installers/registry.py', 'framework-installers/runner.py', 'framework-installers/laravel/adapter.py', 'scripts/list-domains.py', 'scripts/watch-domains.py'):
     path = root / rel
     compile(path.read_bytes(), str(path), 'exec')
 print('Staged Python syntax OK')

@@ -4,7 +4,7 @@ Internal mount primitive, NOT a path authorization API or a daemon RPC.
 Caller must authorize both project and runtime identity, pin the approved
 source, prepare an empty root-owned publication directory under a protected
 parent, exclude nested mounts/hardlinks, and serialize mount operations.
-Only the disposable private CI mount namespace uses this primitive today.
+The registered pilot also uses it inside a private service mount namespace.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ OPEN_TREE_CLONE = 1
 MOVE_MOUNT_F_EMPTY_PATH = 0x04
 MOVE_MOUNT_T_EMPTY_PATH = 0x40
 MOUNT_ATTR_IDMAP = 0x00100000
+MOUNT_ATTR_RDONLY = 0x01
 MOUNT_ATTR_NOSUID = 0x02
 MOUNT_ATTR_NODEV = 0x04
 MOUNT_ATTR_NOEXEC = 0x08
@@ -67,7 +68,7 @@ def checked_call(function, *args):
     result = function(*args)
     if result < 0:
         number = ctypes.get_errno()
-        raise OSError(number, os.strerror(number))
+        raise OSError(number, function.__name__ + ': ' + os.strerror(number))
     return result
 
 
@@ -112,12 +113,26 @@ sys.stdin.buffer.read(1)
             raise IdmapError('Mapping namespace was not separated')
         uid_map = f'{mapping.developer_uid} {mapping.runtime_uid} 1\n'
         gid_map = f'{mapping.developer_gid} {mapping.runtime_gid} 1\n'
-        (proc / 'setgroups').write_text('deny\n')
-        (proc / 'uid_map').write_text(uid_map)
-        (proc / 'gid_map').write_text(gid_map)
-        for name, expected in (('uid_map', uid_map), ('gid_map', gid_map)):
+        # Each proc mapping is a write-once kernel interface. Write exactly
+        # one unbuffered payload, distinguish open from write failures, and
+        # confirm the setgroups policy as well as both ID maps.
+        for name, expected in (('setgroups', 'deny\n'), ('uid_map', uid_map),
+                               ('gid_map', gid_map)):
+            try:
+                map_fd = os.open(proc / name, os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            except OSError as exc:
+                raise IdmapError(f'Cannot open namespace {name}: errno={exc.errno}') from exc
+            try:
+                try:
+                    written = os.write(map_fd, expected.encode('ascii'))
+                except OSError as exc:
+                    raise IdmapError(f'Cannot write namespace {name}: errno={exc.errno}') from exc
+                if written != len(expected):
+                    raise IdmapError('Incomplete namespace ' + name)
+            finally:
+                os.close(map_fd)
             if (proc / name).read_text().split() != expected.split():
-                raise IdmapError('Unexpected namespace ID mapping')
+                raise IdmapError('Unexpected namespace ' + name)
         fd = os.open(proc / 'ns/user', os.O_RDONLY | os.O_CLOEXEC)
         yield fd
     finally:
@@ -155,7 +170,7 @@ def validate_sources(source_fd, target_fd, mapping):
     return source
 
 
-def publish_idmapped(source_fd, target_fd, mapping):
+def publish_idmapped(source_fd, target_fd, mapping, *, readonly=False):
     """Attach an exact non-recursive ID map to two already-authorized FDs.
 
     No project path is re-opened. All attributes and owner checks happen on
@@ -171,14 +186,16 @@ def publish_idmapped(source_fd, target_fd, mapping):
     try:
         with mapping_namespace(mapping) as userns_fd:
             attrs = MountAttr(MOUNT_ATTR_IDMAP | MOUNT_ATTR_NOSUID |
-                              MOUNT_ATTR_NODEV | MOUNT_ATTR_NOEXEC,
+                              MOUNT_ATTR_NODEV | MOUNT_ATTR_NOEXEC |
+                              (MOUNT_ATTR_RDONLY if readonly else 0),
                               0, 0, userns_fd)
             checked_call(setattr, fd, b'', AT_EMPTY_PATH,
                          ctypes.byref(attrs), ctypes.sizeof(attrs))
         view = os.fstat(fd)
         if (not os.path.samestat(source, view)
                 or (view.st_uid, view.st_gid) != mapping.runtime
-                or os.fstatvfs(fd).f_flag & MOUNT_FLAGS != MOUNT_FLAGS):
+                or os.fstatvfs(fd).f_flag & MOUNT_FLAGS != MOUNT_FLAGS
+                or bool(os.fstatvfs(fd).f_flag & os.ST_RDONLY) != readonly):
             raise IdmapError('Detached mapping or flags do not match request')
         checked_call(move, fd, b'', target_fd, b'',
                      MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH)

@@ -49,23 +49,25 @@ class ProjectHttp:
     sockets: Path
 
     def sources(self) -> tuple[str, str, str | None, str]:
-        project = fixture_path(self.runtime.project, directory=True)
-        public = fixture_path(self.runtime.project / 'public', directory=True)
+        source_path = checked_path if self.runtime.registration is not None else fixture_path
+        project = source_path(self.runtime.project, directory=True)
+        public = source_path(self.runtime.project / 'public', directory=True)
         storage = self.runtime.project / 'storage/app/public'
-        published = (fixture_path(storage, directory=True)
+        published = (source_path(storage, directory=True)
                      if storage.exists() or storage.is_symlink() else None)
-        fpm = fixture_path(self.runtime.sockets, directory=True)
+        fpm = source_path(self.runtime.sockets, directory=True)
         return project, public, published, fpm
 
     def launch_argv(self) -> list[str]:
-        return fixture_launch_argv(self.runtime.project, 'http', self.runtime.mapped_data)
+        return self.runtime.component_argv('http')
 
     def argv(self, mounts: PinnedProject) -> list[str]:
         if mounts.path != self.runtime.project:
             raise ValueError('Project mount authorization mismatch')
-        fpm = fixture_path(self.runtime.sockets, directory=True)
-        config = fixture_path(self.config, directory=False)
-        sockets = fixture_path(self.sockets, directory=True)
+        source_path = checked_path if self.runtime.registration is not None else fixture_path
+        fpm = source_path(self.runtime.sockets, directory=True)
+        config = source_path(self.config, directory=False)
+        sockets = source_path(self.sockets, directory=True)
         if self.sockets == self.runtime.sockets:
             raise ValueError('HTTP and PHP must use distinct socket directories')
         args = [
@@ -131,8 +133,8 @@ class ProjectHttp:
             fastcgi_param REDIRECT_STATUS 200;
             fastcgi_param HTTP_PROXY "";
         }}
-        location ~ /\. {{ return 404; }}
-        location ~* \.(?:php[0-9]*|phtml|phar)(?:/|$) {{ return 404; }}
+        location ~ /\\. {{ return 404; }}
+        location ~* \\.(?:php[0-9]*|phtml|phar)(?:/|$) {{ return 404; }}
         location /storage/ {{ {published} }}
         location /build/ {{ try_files $uri =404; }}
         location / {{ try_files $uri $uri/ /index.php?$query_string; }}

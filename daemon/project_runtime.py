@@ -34,9 +34,18 @@ class RuntimePlan:
     config: Path
     sockets: Path
     mapped_data: bool = False
+    registration: str | None = None
 
     def launch_argv(self) -> list[str]:
-        return fixture_launch_argv(self.project, 'php', self.mapped_data)
+        return self.component_argv('php')
+
+    def component_argv(self, kind):
+        if self.registration is not None:
+            if kind not in ('php', 'http') or not re.fullmatch(r'[0-9a-f]{32}', self.registration):
+                raise ValueError('Invalid registered pilot launcher')
+            return ['/usr/bin/python3', '-I', '/opt/devstack/daemon/project_pilot.py',
+                    'launch', self.registration, kind]
+        return fixture_launch_argv(self.project, kind, self.mapped_data)
 
     def argv(self, mounts: PinnedProject) -> list[str]:
         if mounts.path != self.project:
@@ -47,7 +56,10 @@ class RuntimePlan:
         # Keep the host absolute project path for framework-generated paths.
         # Only the three explicitly selected existing runtime directories
         # may be writable. No global pool configuration is included.
-        if (self.project == Path('/') or not self.project.is_relative_to('/var/lib')
+        registered = (self.registration is not None
+                      and re.fullmatch(r'[0-9a-f]{32}', self.registration)
+                      and re.fullmatch(r'/home/[a-z_][a-z0-9_-]{0,31}/projects/[a-z][a-z0-9-]{1,39}', project))
+        if (self.project == Path('/') or not (registered or self.project.is_relative_to('/var/lib'))
                 or any(x == self.project or x.is_relative_to(self.project)
                        or self.project.is_relative_to(x)
                        for x in (self.config.parent, self.sockets))
