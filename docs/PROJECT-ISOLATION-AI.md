@@ -970,6 +970,16 @@ Open acceptance items are managed agent isolation, a full security audit,
 MariaDB and Redis across the isolation boundary, live Vite HMR, and automatic
 restoration of isolated runtimes after a full WSL restart.
 
+## Linux executor fixture (E2.1a)
+
+The separate [Linux executor acceptance procedure](PROJECT-EXECUTOR-E2.1A.md)
+describes the administrator-only test boundary. It uses stable synthetic
+project registrations, per-session Linux identities, private ID-mapped
+mounts and a restricted Bubblewrap executor for the read and write/CLI
+profiles. It does not enroll a real project or make the executor available
+to any agent. Native Windows permissions and the broker remain distinct
+future boundaries.
+
 ## Instruction catalogue and managed agent sessions
 
 The [extension system](EXTENSIONS.md) supplies instruction sources, declared

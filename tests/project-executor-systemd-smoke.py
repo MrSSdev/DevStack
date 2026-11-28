@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / 'daemon'))
 
 from project_executor import MODULES, Session
 from project_lifecycle import ENV, unit_state
+from project_mounts import reject_nested_mounts
 from project_runtime_identity import provision_executor_fixture, verify_binding
 from project_pilot import require_backend
 
@@ -140,7 +141,7 @@ def add_artisan(fixture, archive):
     # synthetic owner; the archive is an input, never a mount source.
     with archive.open('rb') as stream:
         as_developer(developer, '/usr/bin/tar', '--no-same-owner', '--no-same-permissions',
-                     '-xf', '-', cwd=project, stdin=stream)
+                     '-xf', '-', '--', 'vendor', cwd=project, stdin=stream)
     as_developer(developer, PYTHON, '-I', '-c',
                  'import pathlib,sys; pathlib.Path("artisan").write_text(sys.argv[1])',
                  ARTISAN, cwd=project)
@@ -191,7 +192,7 @@ def assert_clean(session, processes=None):
         assert all(info is None or proc_identity(pid) != info for pid, info in pids.items())
 
 
-def run_suite(base, archive):
+def run_suite(base, archive, *, ci):
     accounts = []
     sessions = []
     clients = []
@@ -214,11 +215,11 @@ def run_suite(base, archive):
                             str(other_path), str(base / 'admin.sock'), EXPECT]}
         write_record(session.record / 'launch.json', request)
         output = session.record / 'output'
-        clients.append((session, subprocess.Popen(session.service_argv(
-            runtime_seconds=runtime, test_properties=(
-                '--setenv=DEVSTACK_TEST_SECRET=host-only',
-                '--property=OpenFile=' + str(base / 'canary') + ':fixture:read-only',
-            )), env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)))
+        argv = session.service_argv(runtime_seconds=runtime)
+        argv[1:1] = ['--setenv=DEVSTACK_TEST_SECRET=host-only',
+                     '--property=OpenFile=' + str(base / 'canary') + ':fixture:read-only']
+        clients.append((session, subprocess.Popen(
+            argv, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)))
         sessions.append(session)
         return session, identity, output, clients[-1][1]
 
@@ -253,10 +254,12 @@ def run_suite(base, archive):
             # Use the second fixture for Laravel so the standalone local
             # Composer package in the first fixture remains independent.
             add_artisan(b, archive)
-        host_socket = socket.socket(socket.AF_UNIX)
-        with host_socket:
-            host_socket.bind(str(base / 'admin.sock'))
+        with socket.socket(socket.AF_UNIX) as host_socket, socket.socket(socket.AF_UNIX) as abstract:
+            address = str(base / 'admin.sock')
+            host_socket.bind(address)
             host_socket.listen()
+            abstract.bind('\0' + address)
+            abstract.listen()
             (base / 'canary').write_text('host-only descriptor')
             (base / 'host-home').mkdir(mode=0o700)
             (base / 'host-home/credentials').write_text('synthetic private home')
@@ -274,11 +277,26 @@ def run_suite(base, archive):
             assert_clean(holder[0], held_processes)
             finish(holder, expected=1)
             assert unit_state(second[0]) == unit_state(third[0]) == 'active'
-            assert_clean(second[0], second_processes)
+            # An administrator replaces the source name while a session is
+            # active. A new launch must refuse it; the pinned view keeps
+            # seeing the contents of the original inode until exit.
+            _, project, developer = a
+            moved = project.with_name('moved-project')
+            project.rename(moved)
+            project.mkdir(mode=0o700)
+            try:
+                finish(start(a, b, 'read'), 1, 'mount source changed')
+                as_developer(developer, '/usr/bin/touch', 'finish', cwd=moved)
+                assert 'PASS: hold' in finish(second)
+                assert_clean(second[0], second_processes)
+            finally:
+                project.rmdir()
+                moved.rename(project)
+                (project / 'finish').unlink(missing_ok=True)
+            assert unit_state(third[0]) == 'active'
             assert_clean(third[0], third_processes)
-            finish(second, expected=1)
             finish(third, expected=1)
-            print('PASS: concurrent sessions on the same and distinct fixtures; independent stop', flush=True)
+            print('PASS: concurrent sessions, source pinning during replacement and independent stop', flush=True)
 
             readonly = start(a, b, 'read')
             assert 'PASS: read' in finish(readonly)
@@ -286,7 +304,6 @@ def run_suite(base, archive):
             writable = start(a, b, 'write', profile='write-cli')
             assert 'PASS: write' in finish(writable)
             proof(writable)
-            _, project, developer = a
             created = project / 'created'
             info = created.stat()
             assert (info.st_uid, info.st_gid) == (developer['uid'], developer['gid'])
@@ -299,13 +316,16 @@ def run_suite(base, archive):
                          'from pathlib import Path; import sys; Path("source.txt").write_text(sys.argv[1])',
                          EXPECT, cwd=project)
             assert (b[1] / 'source.txt').read_text() == EXPECT
-            if archive:
-                laravel = start(b, a, 'read')
-                # Run Artisan in a separate write-enabled session because
-                # Laravel may generate its local bootstrap cache.
-                assert 'PASS: read' in finish(laravel)
-                job = start(b, a, 'artisan', profile='write-cli')
-                assert 'PASS: actual Laravel Artisan' in finish(job)
+            assert 'PASS: read' in finish(start(b, a, 'read'))
+            wrote_b = start(b, a, 'write-second', profile='write-cli')
+            output_b = finish(wrote_b)
+            assert 'PASS: write-second' in output_b
+            proof(wrote_b)
+            assert ('PASS: actual Laravel Artisan' in output_b) == bool(archive)
+            owner_b = b[2]
+            created_b = (b[1] / 'created').stat()
+            assert (created_b.st_uid, created_b.st_gid) == (owner_b['uid'], owner_b['gid'])
+            assert as_developer(owner_b, '/usr/bin/cat', 'created', cwd=b[1]) == 'sandbox data\n'
             print('PASS: RO/RW, tool subset, physical owner and developer edits', flush=True)
 
             crash = start(a, b, 'crash')
@@ -335,16 +355,6 @@ def run_suite(base, archive):
                 finish(start(a, b, 'read'), 1, 'account or group changed')
             finally:
                 identity.write_text(binding)
-            # Replace the protected source name with a different real inode.
-            moved = project.with_name('moved-project')
-            project.rename(moved)
-            project.mkdir(mode=0o700)
-            try:
-                finish(start(a, b, 'read'), 1, 'mount source changed')
-            finally:
-                project.rmdir()
-                moved.rename(project)
-
             for name, create in (
                 ('absolute-link', lambda path: path.symlink_to(b[1] / 'source.txt')),
                 ('hardlink', lambda path: os.link(project / 'source.txt', path)),
@@ -357,34 +367,40 @@ def run_suite(base, archive):
                     finish(start(a, b, 'read'), 1, 'Unsafe fixture tree metadata')
                 finally:
                     path.unlink()
-            nested = project / 'nested'
-            as_developer(developer, '/usr/bin/mkdir', 'nested', cwd=project)
-            command('/usr/bin/mount', '-n', '--bind', str(b[1]), str(nested))
-            try:
-                finish(start(a, b, 'read'), 1, 'Nested project mount')
-            finally:
-                command('/usr/bin/umount', '-n', str(nested))
-                nested.rmdir()
+            if ci:
+                nested = project / 'nested'
+                as_developer(developer, '/usr/bin/mkdir', 'nested', cwd=project)
+                command('/usr/bin/mount', '-n', '--bind', str(b[1]), str(nested))
+                try:
+                    finish(start(a, b, 'read'), 1, 'Nested project mount')
+                finally:
+                    command('/usr/bin/umount', '-n', str(nested))
+                    nested.rmdir()
+                print('PASS: nested fixture mount refused', flush=True)
             # A system unit without PrivateMounts fails before creating a view.
-            job = start(a, b, 'read')
-            finish(job)
             unsafe = Session(base, secrets.token_hex(16))
             allocate(unsafe.record, 'e', unsafe.session_id)
             write_record(unsafe.record / 'launch.json',
-                         {**job[0].request(), 'session_id': unsafe.session_id})
+                         {**readonly[0].request(), 'session_id': unsafe.session_id})
             sessions.append(unsafe)
-            argv = unsafe.service_argv(test_properties=('--property=PrivateMounts=no',))
+            argv = unsafe.service_argv()
+            argv.remove('--property=PrivateMounts=yes')
             result = subprocess.run(argv, env=ENV, capture_output=True, timeout=20, check=False)
             assert result.returncode and 'PrivateMounts is required' in (
                 unsafe.record / 'output').read_text()
             assert_clean(unsafe)
-            print('PASS: missing registration, identity drift, replaced source, links, Git, mount and incomplete setup refused',
+            print('PASS: missing registration, identity drift, replaced source, links, Git and incomplete setup refused',
                   flush=True)
     finally:
         for session in sessions:
             assert_clean(session)
         for _, client in clients:
             client.communicate(timeout=20)
+        reject_nested_mounts(base)
+        # Remove the synthetic developer's files before releasing its UID.
+        for project in (*base.glob('project-*'), base / 'dependency-prep'):
+            if project.exists():
+                shutil.rmtree(project)
         for path, slot in reversed(accounts):
             identity = verify_binding(path, slot)
             assert not any(has_uid(pid, identity['uid'])
@@ -398,11 +414,12 @@ def main():
             or Path('/proc/1/comm').read_text().strip() != 'systemd'):
         raise SystemExit('Use sudo python3 -I with --local (spare WSL) or --ci (hosted runner)')
     wsl = 'microsoft' in Path('/proc/sys/kernel/osrelease').read_text().lower()
-    if sys.argv[1] == '--ci':
+    ci = sys.argv[1] == '--ci'
+    if ci:
         if wsl or os.getenv('GITHUB_ACTIONS') != 'true' or os.getenv('RUNNER_ENVIRONMENT') != 'github-hosted':
             raise SystemExit('Expected a disposable hosted CI runner')
-    elif not wsl:
-        raise SystemExit('The local smoke is for a disposable WSL distribution')
+    elif not wsl or os.path.lexists('/etc/devstack'):
+        raise SystemExit('The local smoke requires a spare WSL distribution without DevStack')
     if len(sys.argv) == 4 and sys.argv[2] != '--laravel-vendor':
         raise SystemExit('Expected --laravel-vendor ARCHIVE')
     archive = Path(sys.argv[3]) if len(sys.argv) == 4 else None
@@ -418,7 +435,7 @@ def main():
     shutil.copyfile(ROOT / 'tests/project-executor-payload.py', proof)
     proof.chmod(0o644)
     try:
-        run_suite(base, archive)
+        run_suite(base, archive, ci=ci)
     except BaseException:
         # Retain the protected records for root-only investigation if a unit
         # or account could not be confirmed and removed.

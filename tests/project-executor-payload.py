@@ -14,8 +14,9 @@ ROOT = Path('/workspace')
 
 
 def call(*argv):
-    return subprocess.run(argv, check=True, capture_output=True, text=True,
-                          timeout=25).stdout
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=25)
+    assert not result.returncode, (argv, result.returncode, result.stderr[-1200:])
+    return result.stdout
 
 
 def denied(action, errors):
@@ -54,6 +55,8 @@ def boundary(host_home, sibling, admin_socket, expected):
     denied(lambda: (Path(sibling) / 'created').write_bytes(b'no'), {errno.ENOENT, errno.EACCES})
     with socket.socket(socket.AF_UNIX) as client:
         denied(lambda: client.connect(admin_socket), {errno.ENOENT, errno.ECONNREFUSED})
+        denied(lambda: client.connect('\0' + admin_socket), {errno.ECONNREFUSED})
+        denied(lambda: client.bind('/tmp/named-socket'), {errno.EACCES})
     for family in (socket.AF_INET, socket.AF_INET6, socket.AF_NETLINK,
                    socket.AF_PACKET, socket.AF_VSOCK):
         denied(lambda: socket.socket(family), {errno.EAFNOSUPPORT})
@@ -81,7 +84,7 @@ def git_proof(changed):
     denied(lambda: Path('/run/git/config').write_text('bad'), {errno.EROFS, errno.EACCES})
 
 
-def write_tools():
+def write_project():
     (ROOT / 'source.txt').write_text('sandbox edit\n')
     (ROOT / 'created').write_text('sandbox data\n')
     # Neither a shebang nor an ELF in the mapped checkout can be execve'd.
@@ -95,12 +98,15 @@ def write_tools():
         (ROOT / 'outside').unlink()
     denied(lambda: os.link('/usr/bin/sh', ROOT / 'outside'), {errno.EXDEV})
     assert 'sqlite:1' in call('/usr/bin/php8.5', 'probe.php')
+    git_proof(changed=True)
+
+
+def write_tools():
     assert 'node:local' in call('/usr/bin/npm', 'run', 'proof')
     output = call('/usr/bin/composer', '--no-plugins', '--no-scripts',
                   '--no-interaction', 'dump-autoload')
     assert 'Generated autoload' in output
     assert 'composer:local' in call('/usr/bin/php8.5', 'composer-proof.php')
-    git_proof(changed=True)
 
 
 def main():
@@ -114,10 +120,15 @@ def main():
     elif mode == 'write':
         assert not os.statvfs(ROOT).f_flag & os.ST_RDONLY
         git_proof(changed=False)
+        write_project()
         write_tools()
-    elif mode == 'artisan':
-        assert 'Laravel Framework' in call('/usr/bin/php8.5', 'artisan', '--version')
-        print('PASS: actual Laravel Artisan and preinstalled vendor tree', flush=True)
+    elif mode == 'write-second':
+        assert not os.statvfs(ROOT).f_flag & os.ST_RDONLY
+        git_proof(changed=False)
+        write_project()
+        if (ROOT / 'artisan').exists():
+            assert 'Laravel Framework' in call('/usr/bin/php8.5', 'artisan', '--version')
+            print('PASS: actual Laravel Artisan and preinstalled vendor tree', flush=True)
     elif mode in ('hold', 'crash'):
         # A real orphan candidate with its own session and no stdio pipes.
         subprocess.Popen(['/usr/bin/sh', '-c',
@@ -129,6 +140,7 @@ def main():
         marker = ROOT / 'finish'
         while not marker.exists():
             time.sleep(0.05)
+        assert (ROOT / 'source.txt').read_text() == expected
         if mode == 'crash':
             os._exit(17)
     else:

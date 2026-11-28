@@ -123,7 +123,9 @@ class Session:
             raise ValueError('Invalid fixture command vector')
         return value
 
-    def service_argv(self, *, runtime_seconds=90, test_properties=()):
+    def service_argv(self, *, runtime_seconds=90):
+        if type(runtime_seconds) is not int or not 1 <= runtime_seconds <= 90:
+            raise ValueError('Invalid executor fixture runtime limit')
         self.request()
         verify_binding(self.record, 'e')
         directory = Path('/run') / self.runtime_directory
@@ -135,7 +137,7 @@ class Session:
                 '--property=RuntimeDirectory=' + self.runtime_directory,
                 '--property=RuntimeDirectoryMode=0711',
                 '--property=StandardOutput=file:' + str(self.record / 'output'),
-                *test_properties, '/usr/bin/python3', '-I',
+                '/usr/bin/python3', '-I',
                 str(self.base / 'launcher/project_executor.py'), str(self.base), self.session_id]
 
     def stop(self):
@@ -204,6 +206,11 @@ def socket_filter():
             number = lib.seccomp_syscall_resolve_name(name)
             if number < 0 or lib.seccomp_rule_add_array(ctx, deny, number, 1, ctypes.byref(condition)):
                 raise RuntimeError('Cannot configure executor socket filter')
+        # A named filesystem socket in a shared RW workspace would permit
+        # exchanging descriptors across sessions, unlike a private socketpair.
+        bind = lib.seccomp_syscall_resolve_name(b'bind')
+        if bind < 0 or lib.seccomp_rule_add_array(ctx, 0x00050000 | errno.EACCES, bind, 0, None):
+            raise RuntimeError('Cannot disable named Unix sockets')
         fd = os.memfd_create('devstack-executor-seccomp', os.MFD_CLOEXEC)
         try:
             if lib.seccomp_export_bpf(ctx, fd) or not os.fstat(fd).st_size:
