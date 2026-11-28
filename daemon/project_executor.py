@@ -65,6 +65,7 @@ EXECUTOR_PROPERTIES = (
     '--property=TasksMax=64',
     '--property=UMask=0077',
     '--property=LimitFSIZE=16M',
+    '--property=LimitCORE=0',
     '--property=StandardInput=null',
     '--property=StandardError=inherit',
 )
@@ -235,7 +236,7 @@ def sandbox_argv(view_fd, git_fd, proof_fd, filter_fd, request):
     if Path('/usr/lib64').is_dir():
         args += ['--ro-bind', '/usr/lib64', '/usr/lib64', '--symlink', 'usr/lib64', '/lib64']
     if os.path.lexists('/usr/lib/wsl'):
-        args += ['--tmpfs', '/usr/lib/wsl']
+        args += ['--tmpfs', '/usr/lib/wsl', '--remount-ro', '/usr/lib/wsl']
     args += ['--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib',
              '--symlink', '/usr/bin/php8.5', '/etc/alternatives/php',
              '--proc', '/proc', '--dev', '/dev',
@@ -244,7 +245,7 @@ def sandbox_argv(view_fd, git_fd, proof_fd, filter_fd, request):
              '--perms', '0700', '--dir', '/tmp/cache',
              bind, str(view_fd), WORKSPACE,
              '--ro-bind-fd', str(git_fd), '/run/git',
-             '--ro-bind-fd', str(proof_fd), '/run/devstack-proof.py',
+             '--ro-bind-data', str(proof_fd), '/run/devstack-proof.py',
              '--remount-ro', '/', '--chdir', WORKSPACE, '--seccomp', str(filter_fd)]
     for key, value in {
         'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/tmp/home',
@@ -319,7 +320,9 @@ def launch(session):
         pinned.fds.append(mapped_view(pinned.root, work / 'workspace', mapping,
                                       readonly=request['profile'] == 'read'))
         pinned.fds.append(os.open(git, DIR_FLAGS))
-        pinned.fds.append(os.open(proof, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC))
+        # Pass the reviewed payload by data FD. Bubblewrap may canonicalize
+        # bind-FD paths, so the root-only launcher directory stays private.
+        pinned.fds.append(os.open(proof, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC))
         pinned.fds.append(socket_filter())
         args = sandbox_argv(*pinned.fds, request)
         drop_credentials(mapping)

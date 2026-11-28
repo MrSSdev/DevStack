@@ -113,6 +113,11 @@ def make_project(base, allocate):
     command(*git_cmd, 'config', 'core.fsmonitor', 'false')
     blob = command(*git_cmd, 'hash-object', '-w', '--stdin', input=EXPECT).strip()
     command(*git_cmd, 'update-index', '--add', '--cacheinfo', '100644,' + blob + ',source.txt')
+    tree = command(*git_cmd, 'write-tree').strip()
+    commit = command(*git_cmd, '-c', 'user.name=DevStack fixture', '-c',
+                     'user.email=fixture@example.invalid', 'commit-tree', tree,
+                     '-m', 'Synthetic baseline').strip()
+    command(*git_cmd, 'update-ref', 'HEAD', commit)
     git.chmod(0o755)
     for directory, subdirs, filenames in os.walk(git):
         for name in subdirs:
@@ -203,13 +208,14 @@ def run_suite(base, archive, *, ci):
         accounts.append((path, slot))
         return record
 
-    def start(fixture, sibling, mode, *, profile='read', runtime=90, missing=None):
+    def start(fixture, sibling, mode, *, agent='fixture-agent-a',
+              profile='read', runtime=90, missing=None):
         key, _, _ = fixture
         other_path = sibling[1]
         session = Session(base, secrets.token_hex(16))
         identity = allocate(session.record, 'e', session.session_id)
         request = {'schema': 1, 'session_id': session.session_id, 'project_id': missing or key,
-                   'agent_id': 'fixture-agent-a' if sibling is b else 'fixture-agent-b',
+                   'agent_id': agent,
                    'profile': profile,
                    'argv': [PYTHON, '-I', '/run/devstack-proof.py', mode, str(base / 'host-home'),
                             str(other_path), str(base / 'admin.sock'), EXPECT]}
@@ -242,8 +248,13 @@ def run_suite(base, archive, *, ci):
         return observation
 
     def ready(job):
-        wait_for(lambda: job[2].exists() and 'child-ready' in job[2].read_text(),
-                 'sandbox child')
+        def child_ready():
+            if job[3].poll() is not None:
+                finish(job)
+                raise RuntimeError('Executor exited before creating its child')
+            return job[2].exists() and 'child-ready' in job[2].read_text()
+
+        wait_for(child_ready, 'sandbox child')
         return cgroup_children(job[0])
 
     try:
@@ -266,9 +277,9 @@ def run_suite(base, archive, *, ci):
 
             holder = start(a, b, 'hold')
             held_processes = ready(holder)
-            second = start(a, b, 'hold')
+            second = start(a, b, 'hold', agent='fixture-agent-b')
             second_processes = ready(second)
-            third = start(b, a, 'hold')
+            third = start(b, a, 'hold', agent='fixture-agent-b')
             third_processes = ready(third)
             observations = [proof(job) for job in (holder, second, third)]
             assert len({(p['uid'], p['gid']) for p in observations}) == 3
