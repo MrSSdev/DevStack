@@ -89,6 +89,7 @@ class RegisteredPilotTests(unittest.TestCase):
                     return namespace_stat
                 return real_stat(target, *args, **kwargs)
             with patch.object(pilot, 'require_backend'), \
+                 patch.object(pilot.os, 'geteuid', return_value=0), \
                  patch.object(pilot, 'registered', return_value=(spec,key,account)), \
                  patch.object(pilot, 'journal', return_value=path), \
                  patch.object(pilot, 'verify_binding', return_value=identity), \
