@@ -175,9 +175,16 @@ def mapped_view(source_fd, target, mapping, *, readonly):
         raise
 
 
+def launch_stage(name):
+    # Fixed stages only: the journal can identify a failed system call
+    # without logging .env, source paths, database contents or credentials.
+    print('Registered pilot preparation: ' + name, file=sys.stderr, flush=True)
+
+
 def launch(project_id, kind):
     # Must be the actual ExecStart process, not ExecStartPre: systemd gives
     # each command its own mount namespace. Never attach a mount in PID 1's.
+    launch_stage('backend-and-registration')
     require_backend()
     spec, _, developer = registered(None, project_id=project_id)
     identity = verify_binding(journal(project_id), 'p')
@@ -187,6 +194,7 @@ def launch(project_id, kind):
     protected_control(work, directory=True)
     if stat.S_IMODE(work.stat().st_mode) != 0o711 or any(work.iterdir()):
         raise ValueError('Expected empty systemd runtime directory')
+    launch_stage('private-namespace')
     if os.path.samestat(os.stat('/proc/self/ns/mnt'), os.stat('/proc/1/ns/mnt')):
         raise ValueError('PrivateMounts is required')
     mount_command('/usr/bin/mount', '-n', '--make-rprivate', '/')
@@ -195,6 +203,7 @@ def launch(project_id, kind):
            for line in Path('/proc/self/mountinfo').read_text().splitlines()):
         raise ValueError('Mount propagation is not private')
 
+    launch_stage('socket-and-config')
     plan = plan_for(spec, project_id)
     active = plan.runtime if kind == 'php' else plan
     sockets = work / 'sockets'
@@ -217,11 +226,14 @@ def launch(project_id, kind):
     # only public and published storage descriptors from the read-only root.
     sources = PrivateSources(plan.runtime.project)
     try:
+        launch_stage('pin-source')
         with PinnedProject(plan.runtime.project) as original:
+            launch_stage('map-code-readonly')
             sources.root = mapped_view(original.root, views / 'code', mapping, readonly=True)
             sources.device = mount_id(sources.root)
             if kind == 'php':
                 for relative in SHARED_DATA:
+                    launch_stage('map-data-' + view_name(relative))
                     fd = open_directory(original.root, relative, original.device)
                     try:
                         validate_shared_tree(fd, mapping, original.device)
@@ -229,12 +241,17 @@ def launch(project_id, kind):
                             fd, views / view_name(relative), mapping, readonly=False)
                     finally:
                         os.close(fd)
+        launch_stage('runtime-argv')
         args = active.argv(sources)
         # Root only prepares mounts and root-owned config; no project code
         # is evaluated. Irreversibly drop all IDs before bwrap or PHP/Nginx.
+        launch_stage('drop-groups')
         os.setgroups([])
+        launch_stage('drop-gid')
         os.setresgid(mapping.runtime_gid, mapping.runtime_gid, mapping.runtime_gid)
+        launch_stage('drop-uid')
         os.setresuid(mapping.runtime_uid, mapping.runtime_uid, mapping.runtime_uid)
+        launch_stage('verify-runtime-credentials')
         values = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines()
                       if ':' in line)
         if (os.getresuid() != (mapping.runtime_uid,) * 3
@@ -242,6 +259,7 @@ def launch(project_id, kind):
                 or int(values['CapEff'], 16) or int(values['CapPrm'], 16)
                 or values['NoNewPrivs'].strip() != '1' or values['Seccomp'].strip() != '2'):
             raise ValueError('Runtime credentials or policy not confirmed')
+        launch_stage('exec-bubblewrap')
         os.chdir('/')
         exec_pinned(args, sources)
     finally:
