@@ -410,6 +410,9 @@ DevStack Mail provides a versioned `status`, `search`, `wait` and `get`
 interface for the trusted developer's common mailbox. The CLI uses an
 adapter so a future, authorized mailbox provider can return the same
 message model. The developer adapter reads shared Mailpit directly.
+DevStack Tools ships a project-discoverable Agent Skill describing when
+an end-to-end test should use mail and how to combine it with Playwright.
+Discovery does not grant access to the mailbox.
 When mounting Playwright for a managed agent, expose the selected browser
 and Playwright tooling only. Keep the developer mail adapter, shared
 Mailpit HTTP API and mailbox storage outside the agent's boundary.

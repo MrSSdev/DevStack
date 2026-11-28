@@ -37,8 +37,9 @@ if [[ -f /opt/devstack/daemon/devstackd.py ]]; then
 fi
 # Hash the actual distribution files, not the DevStack commit or project tree.
 mail_files=(mail/cli.py mail/contract.py mail/mailpit.py mail/message.py)
+skill_files=(skills/devstack-tools/SKILL.md skills/devstack-tools/references/mail.md)
 files=(package.json install.sh publish.sh update.sh uninstall.sh smoke.cjs
-  bin/playwright bin/playwright-cli bin/devstack-mail "${mail_files[@]}")
+  bin/playwright bin/playwright-cli bin/devstack-mail "${mail_files[@]}" "${skill_files[@]}")
 for file in "${files[@]}"; do
   [[ -f "$src/$file" && ! -L "$src/$file" ]] || { echo "Missing/unsafe source: $file" >&2; exit 1; }
 done
@@ -54,7 +55,9 @@ mkdir -p "$payload/playwright" "$payload/browsers" "$payload/bin" "$payload/mail
 cp -- "$src/package.json" "$payload/playwright/package.json"
 cp -- "$src/smoke.cjs" "$payload/smoke.cjs"
 cp -- "$src/bin/playwright" "$src/bin/playwright-cli" "$src/bin/devstack-mail" "$payload/bin/"
-for file in "${mail_files[@]}"; do cp -- "$src/$file" "$payload/$file"; done
+for file in "${mail_files[@]}" "${skill_files[@]}"; do
+  install -D -m 0644 -- "$src/$file" "$payload/$file"
+done
 chmod 0755 "$payload/bin/"*
 printf '%s\n' "$build" > "$payload/BUILD"
 cd "$payload/playwright"

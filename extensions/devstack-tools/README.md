@@ -1,6 +1,6 @@
 # DevStack Tools
 
-Optional, independently managed tools for local development. Version 0.2.0 contains Playwright Test and its built-in CLI (1.65.1) and DevStack Mail (1.0.0). The core installer/updater does not install this extension.
+Optional, independently managed tools for local development. Version 0.2.0 contains Playwright Test and its built-in CLI (1.65.1), DevStack Mail (1.0.0), and a discoverable Agent Skill. The core installer/updater does not install this extension.
 
 ## Install / update
 
@@ -30,6 +30,7 @@ No routine core update, frontend build or service restart. An identical build is
   bin/          -> current/bin      playwright, playwright-cli, devstack-mail
   playwright/   -> current/playwright
   browsers/     -> current/browsers
+  skills/       -> current/skills
   current       -> releases/release-...
   releases/     root-owned, one active package/browser release
 ~~~
@@ -66,6 +67,50 @@ module.exports = defineConfig({
 ~~~
 
 The built-in CLI uses the same package and shared browser binaries. Its named sessions and temporary/persistent profiles are managed by Playwright under the invoking user's own account; explicitly close sessions after work. Reports, snapshots and traces may contain sensitive application data; do not commit them. No private browser profile is configured or attached.
+
+## Agent instructions for project tests
+
+The `devstack-tools` Agent Skill tells an agent when to use a dedicated
+DevStack tool in a project workflow. For example, a Playwright registration
+test can trigger the form in the browser, wait for a verification email with
+DevStack Mail and assert that the link points to the expected app route.
+The skill links to a [DevStack Mail reference](skills/devstack-tools/references/mail.md)
+with the commands, failure handling and a Playwright example.
+
+After installing or updating DevStack Tools, enable discovery in each
+project where you want the instructions. The setup works for both existing
+and newly created projects. Run once from the project's root in WSL:
+
+~~~bash
+mkdir -p .agents/skills
+ln -sT /opt/devstack-tools/skills/devstack-tools .agents/skills/devstack-tools
+~~~
+
+Open the WSL project in Codex and start a session. Codex scans
+`.agents/skills` and can select the skill when the task matches its
+description. You can also invoke `$devstack-tools` explicitly. Keep the
+link local if the project also runs on machines without DevStack Tools.
+The link points to the active Tools release, so later extension updates
+pick up new instructions with the same project setup. To disconnect
+this skill, remove the link you created.
+
+For a client that reads project `AGENTS.md` but lacks Agent Skills
+discovery, add this pointer to your existing project instructions:
+
+~~~markdown
+For dedicated DevStack Tools workflows, read
+/opt/devstack-tools/skills/devstack-tools/SKILL.md and its matching reference.
+Use the DevStack Mail reference when a Playwright test expects an email.
+~~~
+
+Discovery provides instructions for a trusted developer session. Mailbox
+access in a managed agent sandbox still requires the future authorized
+mail broker. [Codex Agent Skills discovery](https://developers.openai.com/codex/skills)
+
+When adding another dedicated DevStack tool, add its reference to the
+skill, update the description and reference list, and include the files
+in the install build and publication validation. Existing project links
+will then discover the updated catalog.
 
 ## DevStack Mail
 
@@ -248,4 +293,4 @@ This is tooling, not an AI isolation boundary. Agents running as the same Linux 
 
 ## CI
 
-The independent DevStack Tools workflow runs when extension files or its workflow change. Core CI and Windows push-only workflows ignore extension-only changes; a mixed change still triggers normal core checks. CI exercises the relocated browser, both Playwright commands, the installed mail command, update, rollback and uninstall. A separate disposable Ubuntu job runs the Mail unit tests and tests the command against the pinned Mailpit, including concurrent waits and preservation of unread state. Mail fixtures never clear a mailbox.
+The independent DevStack Tools workflow runs when extension files or its workflow change. Core CI and Windows push-only workflows ignore extension-only changes; a mixed change still triggers normal core checks. CI exercises the relocated browser, both Playwright commands, the installed mail command, the project skill link, update, rollback and uninstall. A separate disposable Ubuntu job runs the Mail unit tests and tests the command against the pinned Mailpit, including concurrent waits and preservation of unread state. Mail fixtures never clear a mailbox.
