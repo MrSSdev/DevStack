@@ -248,7 +248,7 @@ def sandbox_argv(view_fd, git_fd, proof_fd, filter_fd, request):
             '--unshare-ipc', '--unshare-uts', '--disable-userns', '--cap-drop', 'ALL',
             '--die-with-parent', '--new-session', '--clearenv']
     for path in ('/usr/bin', '/usr/lib', '/usr/share/git-core', '/usr/share/nodejs',
-                 '/usr/share/php'):
+                 '/usr/share/php', '/usr/share/zoneinfo'):
         args += ['--ro-bind', path, path]
     # Load only known distro modules for SQLite, Composer and Artisan.
     # The host cli/conf.d can include unrelated services and extensions.
@@ -270,7 +270,7 @@ def sandbox_argv(view_fd, git_fd, proof_fd, filter_fd, request):
              '--ro-bind-data', str(proof_fd), '/run/devstack-proof.py',
              '--remount-ro', '/', '--chdir', WORKSPACE, '--seccomp', str(filter_fd)]
     for key, value in {
-        'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/tmp/home',
+        'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'Etc/UTC', 'HOME': '/tmp/home',
         'TMPDIR': '/tmp', 'XDG_CACHE_HOME': '/tmp/cache', 'XDG_CONFIG_HOME': '/tmp/home/.config',
         'GIT_DIR': '/run/git', 'GIT_WORK_TREE': WORKSPACE, 'GIT_CONFIG_NOSYSTEM': '1',
         'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0',

@@ -55,8 +55,9 @@ test entry points. [Issue #51](https://github.com/MrSSdev/DevStack/issues/51)
   The controlled tools exercise PHP CLI and SQLite, a locally installed
   npm dependency, Composer autoload for a local package with plugins and
   scripts disabled, and Laravel's `artisan --version` with preinstalled
-  vendor dependencies when included. PHP loads a fixed set of distribution
-  extensions from a private INI directory. No package download or remote Git
+  vendor dependencies when included. PHP uses read-only system timezone data
+  and a fixed set of distribution extensions from a private INI directory.
+  No package download or remote Git
   operation occurs in the executor.
 - The session unit name comes from the protected session record. Startup
   requires an empty systemd runtime directory and private mount propagation.
