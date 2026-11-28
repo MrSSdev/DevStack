@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Administrator-only preview of a registered project's isolated PHP/HTTP.
-
-The existing domain/pool and project settings are not switched. No agent
-grant is issued. This command uses systemd's service-private mount namespace
-and RuntimeDirectory, not a persistent host mount publication broker.
-"""
+"""Administrator controls and private mounting for registered PHP/HTTP."""
 from __future__ import annotations
 
 from contextlib import contextmanager
 import errno
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -16,6 +12,7 @@ import pwd
 import stat
 import subprocess
 import sys
+import time
 
 INSTALLED = Path('/opt/devstack/daemon/project_pilot.py')
 MODULES = (
@@ -49,11 +46,29 @@ from project_idmap import IdMapping, publish_idmapped
 from project_mounts import (DIR_FLAGS, PinnedProject, SHARED_DATA, exec_pinned,
                             mount_id, open_directory, verify_data_view, view_name)
 from project_data_views import mount_command, validate_shared_tree
-from project_runtime import RuntimePlan, fpm_config
+from project_runtime import (MAILPIT, SMTP_ADDRESS, SOCKET_ACTIVATE, SOCKET_PROXY,
+                             RuntimePlan, fpm_config)
 from project_http import ProjectHttp
 from project_lifecycle import Component, RuntimePair
 
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'}
+
+
+@contextmanager
+def registry_lock():
+    # Both the installed root CLI and daemon serialize with the project
+    # registry writer. ExecStart only reads atomic snapshots.
+    path = REGISTRY.parent / 'project-operations.lock'
+    protected_parents(path)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid or info.st_mode & 0o077 or info.st_nlink != 1:
+            raise ValueError('Unsafe project operations lock')
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def journal(project_id):
@@ -78,6 +93,9 @@ def registered(slug, *, project_id=None):
     if spec['identity'] != 'registered':
         raise ValueError('Project requires a valid registration ID')
     record = registry[slug]
+    spec['isolated'] = 'isolation_id' in record
+    if spec['isolated'] and record['isolation_id'] != record['project_id']:
+        raise ValueError('Isolated route registration mismatch')
     settings = spec['settings']
     if (spec['webroot'] != 'public' or settings['database']
             or settings['overrides'] or settings['extra_locations']
@@ -112,12 +130,25 @@ def runtime_dir(project_id, kind):
     return Path('/run') / ('devstack-pilot-' + project_id + '-' + kind)
 
 
-def plan_for(spec, project_id):
+def plan_for(spec, project_id, *, sendmail=False):
     project = Path('/home') / spec['developer'] / 'projects' / spec['slug']
     php, http = (runtime_dir(project_id, k) for k in ('php', 'http'))
+    smtp = php / 'smtp/smtp.sock' if spec['isolated'] and spec['settings']['local_mail'] else None
     return ProjectHttp(RuntimePlan(project, php / 'config/fpm.conf', php / 'sockets',
-                                   mapped_data=True, registration=project_id),
+                                   mapped_data=True, registration=project_id,
+                                   smtp_socket=smtp, sendmail=sendmail),
                        http / 'config/nginx.conf', http / 'sockets')
+
+
+def pair_for(spec, project_id, *, provision=False):
+    base = journal(project_id)
+    if provision:
+        require_backend()
+        base.mkdir(mode=0o700, exist_ok=True)
+        protected_control(base, directory=True)
+        if not os.path.lexists(base / 'identity-p.json'):
+            provision_pilot(base, project_id)
+    return RegisteredPair(project_id, plan_for(spec, project_id))
 
 
 class RegisteredPair(RuntimePair):
@@ -207,7 +238,16 @@ def prepare_runtime(project_id, kind):
         raise ValueError('Mount propagation is not private')
 
     launch_stage('socket-and-config')
-    plan = plan_for(spec, project_id)
+    sendmail = (kind == 'php' and spec['isolated'] and spec['settings']['local_mail']
+                and os.path.lexists(MAILPIT))
+    if sendmail:
+        protected_parents(MAILPIT)
+        protected_control(MAILPIT, directory=False)
+    plan = plan_for(spec, project_id, sendmail=sendmail)
+    if kind == 'php' and plan.runtime.smtp_socket is not None:
+        smtp_dir = plan.runtime.smtp_socket.parent
+        smtp_dir.mkdir(mode=0o700)
+        os.chown(smtp_dir, mapping.runtime_uid, mapping.runtime_gid)
     active = plan.runtime if kind == 'php' else plan
     sockets = work / 'sockets'
     sockets.mkdir(mode=0o700)
@@ -217,7 +257,7 @@ def prepare_runtime(project_id, kind):
                   'u:www-data:rwX,g::---,o::---,m::rwx', str(sockets))
     active.config.parent.mkdir(mode=0o755)
     active.config.parent.chmod(0o755)
-    active.config.write_text(fpm_config() if kind == 'php' else plan.nginx_config(),
+    active.config.write_text(fpm_config(sendmail=sendmail) if kind == 'php' else plan.nginx_config(),
                              encoding='utf-8')
     active.config.chmod(0o644)
     views = work / 'views'
@@ -255,6 +295,7 @@ def launch(project_id, kind):
     # Must be the actual ExecStart process, not ExecStartPre: systemd gives
     # each command its own mount namespace. Never attach a mount in PID 1's.
     require_backend()
+    endpoint = runtime_dir(project_id, 'php') / 'smtp/smtp.sock' if kind == 'php' else None
     with prepare_runtime(project_id, kind) as (args, sources, mapping):
         # Root only prepares mounts and root-owned config; no project code
         # is evaluated. Irreversibly drop all IDs before bwrap or PHP/Nginx.
@@ -274,7 +315,33 @@ def launch(project_id, kind):
             raise ValueError('Runtime credentials or policy not confirmed')
         launch_stage('exec-bubblewrap')
         os.chdir('/')
+        if endpoint is not None and endpoint.parent.is_dir():
+            start_smtp_listener(endpoint)
         exec_pinned(args, sources)
+
+
+def start_smtp_listener(endpoint):
+    # Only this fixed, unprivileged process sees the host network. No
+    # dependency on Mailpit is started or enabled by socket activation.
+    process = subprocess.Popen(
+        [SOCKET_ACTIVATE, '--listen=' + str(endpoint), SOCKET_PROXY, SMTP_ADDRESS],
+        env=ENV, stdin=subprocess.DEVNULL, close_fds=True)
+    deadline = time.monotonic() + 3
+    try:
+        while process.poll() is None and time.monotonic() < deadline:
+            try:
+                info = endpoint.lstat()
+            except FileNotFoundError:
+                time.sleep(0.02)
+                continue
+            if stat.S_ISSOCK(info.st_mode) and info.st_uid == os.geteuid():
+                return
+            break
+        raise ValueError('Private SMTP listener did not start')
+    except BaseException:
+        process.terminate()
+        process.wait(timeout=5)
+        raise
 
 
 def control(action, target):
@@ -283,30 +350,40 @@ def control(action, target):
         return {'project_id': target, 'status': pair.stop()}
     spec, project_id, _ = registered(target)
     base = journal(project_id)
-    if action == 'start':
-        require_backend()
-        if not os.path.lexists(base):
-            base.mkdir(mode=0o700)
-        protected_control(base, directory=True)
-        if not os.path.lexists(base / 'identity-p.json'):
-            provision_pilot(base, project_id)
-    elif not os.path.lexists(base):
+    if action != 'start' and not os.path.lexists(base):
         return {'project': target, 'project_id': project_id, 'status': 'not-enrolled'}
-    pair = RegisteredPair(project_id, plan_for(spec, project_id))
-    state = {'start': pair.start, 'stop': pair.stop, 'status': pair.status}[action]()
+    pair = pair_for(spec, project_id, provision=action == 'start' and not spec['isolated'])
+    state = {'start': pair.start, 'stop': pair.stop, 'status': pair.status,
+             'restart': pair.restart}[action]()
     return {'project': target, 'project_id': project_id, 'status': state,
             'preview_socket': str(pair.http.endpoint),
-            'public_domain_unchanged': True, 'local_mail_setting': spec['settings']['local_mail'],
+            'isolated_https': spec['isolated'],
+            'public_domain_unchanged': not spec['isolated'],
+            'smtp_enabled': pair.plan.runtime.smtp_socket is not None,
+            'local_mail_setting': spec['settings']['local_mail'],
             'smtp_in_preview': False, 'agent_access': False}
 
 
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == 'launch':
         launch(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) == 3 and sys.argv[1] in ('start', 'stop', 'status', 'stop-id'):
-        print(json.dumps(control(sys.argv[1], sys.argv[2]), sort_keys=True))
+    elif len(sys.argv) == 3:
+        action, target = sys.argv[1:]
+        with registry_lock():
+            if action in ('activate', 'deactivate'):
+                protected_control(INSTALLED.with_name('devstackd.py'), directory=False)
+                from devstackd import InputError, change_project_isolation
+                try:
+                    result = change_project_isolation(target, activate=action == 'activate')
+                except InputError as exc:
+                    raise ValueError(str(exc)) from None
+            elif action in ('start', 'stop', 'status', 'stop-id', 'restart'):
+                result = control(action, target)
+            else:
+                raise ValueError('Unknown isolation action')
+        print(json.dumps(result, sort_keys=True))
     else:
-        raise ValueError('Usage: project_pilot.py start|stop|status SLUG; stop-id ID')
+        raise ValueError('Usage: project_pilot.py activate|deactivate|start|stop|restart|status SLUG; stop-id ID')
 
 
 if __name__ == '__main__':

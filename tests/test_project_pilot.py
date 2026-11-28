@@ -36,9 +36,20 @@ class RegisteredPilotTests(unittest.TestCase):
         self.assertEqual(account, self.account)
         for changes in ({'database': True}, {'https': False}, {'webroot': 'web'},
                         {'overrides': 'client_max_body_size 32m;'},
+                        {'isolation_id': '2' * 32},
                         {'project_id': 'bad'}, {'path': '/tmp/other'}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.spec(**changes)
+
+    def test_smtp_needs_both_activation_and_existing_local_mail_opt_in(self):
+        with patch.object(pilot, 'journal'):
+            for changes, enabled in (({}, False), ({'isolation_id': self.key}, True),
+                                     ({'isolation_id': self.key, 'local_mail': False}, False)):
+                spec, key, _ = self.spec(**changes)
+                runtime = pilot.plan_for(spec, key).runtime
+                self.assertEqual(runtime.smtp_socket is not None, enabled)
+                if enabled:
+                    self.assertEqual(runtime.smtp_socket, runtime.sockets.parent / 'smtp/smtp.sock')
 
     def test_registered_units_use_exact_registration(self):
         user = account_name('p', self.key)

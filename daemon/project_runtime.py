@@ -16,6 +16,11 @@ FPM = '/usr/sbin/php-fpm8.5'
 PHP_CONFIG = Path('/etc/php/8.5')
 SOCKET = '/run/project-fpm/php.sock'
 RUNTIME_CONFIG = '/run/project-config/fpm.conf'
+SOCKET_ACTIVATE = '/usr/bin/systemd-socket-activate'
+SOCKET_PROXY = '/usr/lib/systemd/systemd-socket-proxyd'
+SMTP_ADDRESS = '127.0.0.1:1025'
+SMTP_ENDPOINT = '/run/project-smtp/smtp.sock'
+MAILPIT = Path('/opt/devstack-mailpit/mailpit')
 SAFE_PATH = re.compile(r'/[A-Za-z0-9._/-]+\Z')
 
 
@@ -35,6 +40,8 @@ class RuntimePlan:
     sockets: Path
     mapped_data: bool = False
     registration: str | None = None
+    smtp_socket: Path | None = None
+    sendmail: bool = False
 
     def launch_argv(self) -> list[str]:
         return self.component_argv('php')
@@ -88,6 +95,18 @@ class RuntimePlan:
         for relative in ('fpm/php.ini', 'fpm/conf.d', 'mods-available'):
             source = str(PHP_CONFIG / relative)
             args += ['--ro-bind', source, source]
+        relay = []
+        if self.smtp_socket is not None:
+            if not registered or self.smtp_socket != self.sockets.parent / 'smtp/smtp.sock':
+                raise ValueError('Invalid registered SMTP endpoint')
+            args += ['--ro-bind', str(self.smtp_socket), SMTP_ENDPOINT]
+            if self.sendmail:
+                args += ['--ro-bind', str(MAILPIT), str(MAILPIT)]
+            # Bubblewrap owns this process tree. Both listeners die with the
+            # FPM unit, including when its main process fails during startup.
+            relay = ['/bin/sh', '-c',
+                     f'{SOCKET_ACTIVATE} --listen={SMTP_ADDRESS} {SOCKET_PROXY} {SMTP_ENDPOINT} &\n'
+                     'exec "$@"', 'devstack-smtp']
         args += [
             '--ro-bind', config, RUNTIME_CONFIG,
             '--bind', sockets, '/run/project-fpm',
@@ -96,7 +115,7 @@ class RuntimePlan:
             '--setenv', 'HOME', '/tmp',
             '--setenv', 'TMPDIR', '/tmp',
             '--setenv', 'PHP_INI_SCAN_DIR', str(PHP_CONFIG / 'fpm/conf.d'),
-            '--', FPM, '--nodaemonize', '--fpm-config', RUNTIME_CONFIG,
+            '--', *relay, FPM, '--nodaemonize', '--fpm-config', RUNTIME_CONFIG,
             '-c', str(PHP_CONFIG / 'fpm/php.ini'),
         ]
         return args
@@ -113,7 +132,7 @@ def fixture_launch_argv(project: Path, component: str, mapped_data: bool = False
             component, str(project)] + (['idmapped'] if mapped_data else [])
 
 
-def fpm_config() -> str:
+def fpm_config(*, sendmail=False) -> str:
     # The systemd service sets the non-root identity before exec. The
     # non-root FPM master and its workers retain that identity; neither is
     # launched as www-data or as the developer.
@@ -132,4 +151,5 @@ clear_env = yes
 catch_workers_output = yes
 php_admin_value[expose_php] = Off
 php_admin_value[sys_temp_dir] = /tmp
-'''
+''' + (f'php_admin_value[sendmail_path] = {MAILPIT} sendmail -S {SMTP_ADDRESS} -t -i\n'
+       if sendmail else '')

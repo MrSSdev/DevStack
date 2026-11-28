@@ -7,6 +7,7 @@ Supported operations are intentionally small and typed.
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 import hashlib
 import importlib.util
 import json
@@ -18,10 +19,12 @@ import pwd
 import re
 import secrets
 import socket
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 CFG_FILE = pathlib.Path('/etc/devstack/server.json')
@@ -234,9 +237,18 @@ def write_json_atomic(path: pathlib.Path, data: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
+        sync_parent(path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+def sync_parent(path: pathlib.Path) -> None:
+    fd = os.open(path.parent, os.O_DIRECTORY | os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def ensure_project_registry() -> None:
@@ -397,6 +409,7 @@ def public_projects() -> list[dict[str, Any]]:
         item = dict(p)
         # Internal registration identity is not yet a public API or a grant.
         item.pop('project_id', None)
+        item['isolated_https'] = item.pop('isolation_id', None) is not None
         item['slug'] = slug
         item.pop('detected_framework', None)
         if slug in frameworks:
@@ -617,7 +630,8 @@ php_admin_value[expose_php] = Off
 
 
 def nginx_conf(slug: str, domain: str, public: pathlib.Path, ssl_enabled: bool,
-               overrides: str = '', extra_locations: str = '') -> str:
+               overrides: str = '', extra_locations: str = '', *,
+               isolation_id: str | None = None) -> str:
     """Generate a protected virtual host with two narrowly editable regions."""
     rules = check_overrides(overrides)
     assets = check_extra_locations(extra_locations)
@@ -639,6 +653,28 @@ server {{
     ssl_certificate_key /etc/devstack/certs/{slug}-key.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 '''
+    if isolation_id is not None:
+        if not ssl_enabled or rules or assets or not re.fullmatch(r'[0-9a-f]{32}', isolation_id):
+            raise InputError('Izolowane HTTPS wymaga standardowej konfiguracji Nginx.')
+        return text + f'''    server_tokens off;
+    location / {{
+        proxy_pass http://unix:/run/devstack-pilot-{isolation_id}-http/sockets/http.sock;
+        proxy_http_version 1.1;
+        proxy_next_upstream off;
+        proxy_redirect off;
+        proxy_ignore_headers X-Accel-Redirect;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header X-Forwarded-Prefix "";
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+'''
     text += f'''    root {public};
     index index.php index.html;
     server_tokens off;
@@ -654,6 +690,243 @@ server {{
 }}
 '''
     return text
+
+
+def isolated_site_path(project_id: str) -> pathlib.Path:
+    if not isinstance(project_id, str) or not re.fullmatch(r'[0-9a-f]{32}', project_id):
+        raise InputError('Nieprawidlowy identyfikator izolowanej konfiguracji.')
+    return STATE_FILE.parent / f'isolated-{project_id}.conf'
+
+
+def replace_host_config(path: pathlib.Path, *, text: str = '', link: pathlib.Path | None = None) -> None:
+    fd, name = tempfile.mkstemp(prefix='.devstack-', dir=path.parent)
+    tmp = pathlib.Path(name)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            if link is None:
+                stream.write(text)
+                stream.flush()
+                os.fsync(stream.fileno())
+        if link is not None:
+            tmp.unlink()
+            tmp.symlink_to(link)
+        tmp.replace(path)
+        sync_parent(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def protected_config_matches(path: pathlib.Path, expected: str) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return (stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022
+            and info.st_nlink == 1 and path.read_text(encoding='utf-8') == expected)
+
+
+def managed_site_link(slug: str) -> bool:
+    link = site_link_path(slug)
+    return link.is_symlink() and link.readlink() == site_path(slug)
+
+
+def project_host_configs(slug: str, project: dict[str, Any], project_id: str) -> tuple[str, str, str]:
+    domain = check_domain(project['domain'])
+    public = pathlib.Path(project['path']) / 'public'
+    return (nginx_conf(slug, domain, public, True),
+            nginx_conf(slug, domain, public, True, isolation_id=project_id),
+            php_pool(slug, config()['dev_user'], project.get('local_mail', False)))
+
+
+def isolated_route_matches(slug: str, project_id: str, isolated: str) -> bool:
+    site, target = site_path(slug), isolated_site_path(project_id)
+    return (managed_site_link(slug) and site.is_symlink() and site.readlink() == target
+            and protected_config_matches(target, isolated) and not os.path.lexists(pool_path(slug)))
+
+
+def legacy_fpm_socket(slug: str) -> pathlib.Path:
+    return pathlib.Path('/run/php') / f'devstack-{slug}.sock'
+
+
+def retire_project_pool(slug: str) -> None:
+    endpoint = legacy_fpm_socket(slug)
+    try:
+        info = endpoint.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != pwd.getpwnam('www-data').pw_uid:
+            raise InputError('Nieoczekiwane gniazdo zwyklej puli PHP projektu.')
+        # Existing connections can drain. Retired Nginx workers must not
+        # open new connections to the old pool while FPM reloads.
+        endpoint.chmod(0)
+    run(['/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
+    deadline = time.monotonic() + 30
+    while os.path.lexists(endpoint):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Nie potwierdzono wycofania zwyklej puli PHP projektu.')
+        time.sleep(0.1)
+
+
+def wait_for_ordinary_pool(slug: str) -> None:
+    endpoint = legacy_fpm_socket(slug)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.settimeout(1)
+                listener.connect(str(endpoint))
+                return
+        except (FileNotFoundError, ConnectionRefusedError, TimeoutError):
+            time.sleep(0.1)
+    raise RuntimeError('Zwykla pula PHP projektu nie uruchomila sie.')
+
+
+def test_project_host_configs() -> None:
+    run(['/usr/sbin/php-fpm8.5', '-t'])
+    run(['/usr/sbin/nginx', '-t'])
+
+
+def set_isolated_route(slug: str, project_id: str, isolated: str) -> None:
+    target = isolated_site_path(project_id)
+    replace_host_config(target, text=isolated)
+    replace_host_config(site_path(slug), link=target)
+    pool = pool_path(slug)
+    pool.unlink(missing_ok=True)
+    sync_parent(pool)
+
+
+def reload_isolated_route(slug: str) -> None:
+    try:
+        run(['/usr/bin/systemctl', 'reload', 'nginx'])
+    finally:
+        retire_project_pool(slug)
+
+
+def change_project_isolation(slug: str, *, activate: bool) -> dict[str, Any]:
+    """Root CLI only. Caller holds the shared project operations lock."""
+    from project_pilot import pair_for, registered
+
+    ensure_engine_idle()
+    if managed_services.action_pending():
+        raise InputError('Poczekaj na zakonczenie operacji uslugi.')
+    slug = check_slug(slug)
+    spec, project_id, _ = registered(slug)
+    state = read_json(STATE_FILE)
+    project = state[slug]
+    ordinary, isolated, legacy_pool = project_host_configs(slug, project, project_id)
+    if project.get('agent_grants'):
+        raise InputError('Najpierw cofnij wszystkie uprawnienia agentow projektu.')
+    active = spec['isolated']
+    if active:
+        if not isolated_route_matches(slug, project_id, isolated):
+            raise InputError('Niespojna konfiguracja izolowanego projektu.')
+        pair = pair_for(spec, project_id)
+        if activate:
+            if os.path.lexists(legacy_fpm_socket(slug)):
+                retire_project_pool(slug)
+            return {'project': slug, 'project_id': project_id, 'status': pair.start(),
+                    'isolated_https': True}
+        try:
+            # An explicit administrator rollback is the only path back to
+            # the canonical ordinary vhost. Keep intent until it commits.
+            replace_host_config(pool_path(slug), text=legacy_pool)
+            replace_host_config(site_path(slug), text=ordinary)
+            test_project_host_configs()
+            run(['/usr/bin/systemctl', 'reload', 'php8.5-fpm'])
+            wait_for_ordinary_pool(slug)
+            run(['/usr/bin/systemctl', 'reload', 'nginx'])
+            pair.stop()
+            del project['isolation_id']
+            write_json_atomic(STATE_FILE, state)
+        except Exception:
+            set_isolated_route(slug, project_id, isolated)
+            project['isolation_id'] = project_id
+            write_json_atomic(STATE_FILE, state)
+            test_project_host_configs()
+            reload_isolated_route(slug)
+            raise
+        discard_isolated_site(project_id)
+        return {'project': slug, 'project_id': project_id, 'status': 'ordinary',
+                'isolated_https': False}
+    if not activate:
+        return {'project': slug, 'project_id': project_id, 'status': 'ordinary',
+                'isolated_https': False}
+    if (not managed_site_link(slug) or not protected_config_matches(site_path(slug), ordinary)
+            or not protected_config_matches(pool_path(slug), legacy_pool)):
+        raise InputError('Zwykla konfiguracja projektu odbiega od konfiguracji DevStack.')
+    pair = pair_for(spec, project_id, provision=True)
+    pair.stop()
+    project['isolation_id'] = project_id
+    write_json_atomic(STATE_FILE, state)
+    route_staged = False
+    try:
+        pair.start()
+        route_staged = True
+        set_isolated_route(slug, project_id, isolated)
+        test_project_host_configs()
+    except Exception:
+        if route_staged:
+            replace_host_config(site_path(slug), text=ordinary)
+            replace_host_config(pool_path(slug), text=legacy_pool)
+        pair.stop()
+        del project['isolation_id']
+        write_json_atomic(STATE_FILE, state)
+        if route_staged:
+            discard_isolated_site(project_id)
+        raise
+    # From the first attempted live cutover onward, failures retain the
+    # isolated route and intent. No fallback to the old FPM pool.
+    reload_isolated_route(slug)
+    return {'project': slug, 'project_id': project_id, 'status': 'running',
+            'isolated_https': True}
+
+
+def recover_isolated_projects() -> None:
+    from project_pilot import pair_for, registered
+
+    for slug, project in read_json(STATE_FILE).items():
+        if not isinstance(project, dict) or 'isolation_id' not in project:
+            continue
+        try:
+            spec, project_id, _ = registered(slug)
+            ordinary, isolated, legacy_pool = project_host_configs(slug, project, project_id)
+            if not isolated_route_matches(slug, project_id, isolated):
+                # Recover only known transaction artifacts. A foreign vhost,
+                # enabled link or pool needs an administrator's attention.
+                site, pool = site_path(slug), pool_path(slug)
+                target = isolated_site_path(project_id)
+                enabled = site_link_path(slug)
+                linked = site.is_symlink() and site.readlink() == target
+                interrupted_delete = (not os.path.lexists(enabled) and not os.path.lexists(site)
+                                      and protected_config_matches(target, isolated))
+                if (not (interrupted_delete or (managed_site_link(slug)
+                        and (linked or protected_config_matches(site, ordinary))))
+                        or (os.path.lexists(pool) and not protected_config_matches(pool, legacy_pool))):
+                    raise InputError('Unrecognized isolated hosting configuration')
+                set_isolated_route(slug, project_id, isolated)
+                if interrupted_delete:
+                    replace_host_config(enabled, link=site)
+                test_project_host_configs()
+                reload_isolated_route(slug)
+            elif os.path.lexists(legacy_fpm_socket(slug)):
+                retire_project_pool(slug)
+            pair = pair_for(spec, project_id)
+            if pair.status() == 'degraded':
+                pair.restart()
+            else:
+                pair.start()
+        except (InputError, OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+            print(f'Isolated project recovery refused for {slug!r}: {exc}', file=sys.stderr)
+
+
+def discard_isolated_site(project_id: str) -> None:
+    try:
+        target = isolated_site_path(project_id)
+        target.unlink(missing_ok=True)
+        sync_parent(target)
+    except OSError:
+        print('Warning: leftover protected isolated vhost for ' + project_id, file=sys.stderr)
 
 
 def check_full_config(raw: Any, slug: str, project: dict[str, Any]) -> dict[str, str]:
@@ -948,9 +1221,19 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
     site_file = site_path(slug)
     site_link = site_link_path(slug)
     pool_file = pool_path(slug)
-    if (not site_file.is_file() or site_file.is_symlink()
-            or not pool_file.is_file() or pool_file.is_symlink()
-            or not site_link.is_symlink() or site_link.readlink() != site_file):
+    isolated_pair = None
+    if 'isolation_id' in project:
+        from project_pilot import pair_for, registered
+
+        if project.get('agent_grants'):
+            raise InputError('Najpierw cofnij wszystkie uprawnienia agentow projektu.')
+        spec, project_id, _ = registered(slug)
+        _, isolated, _ = project_host_configs(slug, project, project_id)
+        if not isolated_route_matches(slug, project_id, isolated):
+            raise InputError('Niespojna konfiguracja izolowanego projektu. Niczego nie usunieto.')
+        isolated_pair = pair_for(spec, project_id)
+    elif (not site_file.is_file() or site_file.is_symlink()
+          or not pool_file.is_file() or pool_file.is_symlink() or not managed_site_link(slug)):
         raise InputError('Niepelna lub zmieniona konfiguracja projektu. Niczego nie usunieto.')
 
     cert_files = []
@@ -974,19 +1257,28 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
         saved_site = staged / 'nginx.conf'
         saved_pool = staged / 'fpm.conf'
         link_removed = False
+        restore_runtime = False
         db_dropped = False
         original_state = dict(state)
         original_secrets = dict(secrets_state)
         try:
+            if isolated_pair is not None:
+                restore_runtime = isolated_pair.status() != 'stopped'
+                isolated_pair.stop()
             site_link.unlink()
             link_removed = True
             site_file.rename(saved_site)
-            pool_file.rename(saved_pool)
+            if isolated_pair is None:
+                pool_file.rename(saved_pool)
+            else:
+                sync_parent(site_file)
+                sync_parent(site_link)
             run(['/usr/sbin/nginx', '-t'])
             run(['/usr/bin/systemctl', 'reload', 'nginx'])
 
             # A delayed reload avoids interrupting this live API request.
-            defer_php_fpm_reload()
+            if isolated_pair is None:
+                defer_php_fpm_reload()
             del state[slug]
             secrets_state.pop(slug, None)
             # Complete metadata writes before irreversible SQL removal.
@@ -1011,6 +1303,8 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
             try:
                 run(['/usr/sbin/nginx', '-t'])
                 run(['/usr/bin/systemctl', 'reload', 'nginx'])
+                if restore_runtime:
+                    isolated_pair.start()
             except Exception:
                 print('Critical: DevStack deletion rollback needs manual Nginx recovery', file=sys.stderr)
             if db_dropped:
@@ -1019,6 +1313,8 @@ def delete_project(data: dict[str, Any]) -> dict[str, str]:
 
     # Remove generated TLS files only AFTER the project is committed as gone.
     # On filesystem errors, leave orphaned certs rather than endangering user code.
+    if isolated_pair is not None:
+        discard_isolated_site(project_id)
     for certificate in cert_files:
         try:
             certificate.unlink()
@@ -1068,6 +1364,8 @@ def update_config(data: dict[str, Any]) -> dict[str, str]:
     if slug not in state:
         raise InputError('Nie ma takiego projektu.')
     p = state[slug]
+    if 'isolation_id' in p:
+        raise InputError('Konfiguracje izolowanego HTTPS moze zmienic administrator po dezaktywacji.')
     if validated is None:
         validated = {
             'overrides': check_overrides(data.get('overrides')),
@@ -1109,6 +1407,8 @@ def update_full_config(data: dict[str, Any]) -> dict[str, str]:
     state = read_json(STATE_FILE)
     if slug not in state:
         raise InputError('Nie ma takiego projektu.')
+    if 'isolation_id' in state[slug]:
+        raise InputError('Konfiguracje izolowanego HTTPS moze zmienic administrator po dezaktywacji.')
     validated = check_full_config(data.get('full_config'), slug, state[slug])
     outcome = update_config({'slug': slug, **validated})
     return {**outcome, **validated}
@@ -1736,7 +2036,10 @@ OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notificatio
        'public_ca_certificate': public_ca_certificate, 'install_wsl_ca': install_wsl_ca}
 
 
-def handle(raw: bytes) -> bytes:
+PROJECT_WRITERS = {'create', 'delete_project', 'update_config', 'update_full_config', 'engine_tool_action'}
+
+
+def handle(raw: bytes, *, serialize=False) -> bytes:
     try:
         if len(raw) > 65536:
             raise InputError('Zbyt dlugie zadanie.')
@@ -1746,9 +2049,15 @@ def handle(raw: bytes) -> bytes:
         operation = request.get('op')
         if operation not in OPS:
             raise InputError('Nieobslugiwana operacja.')
-        if operation in {'create', 'delete_project', 'update_config', 'update_full_config', 'engine_tool_action'} and managed_services.action_pending():
-            raise InputError('Poczekaj na zakonczenie operacji uslugi.')
-        response = {'ok': True, 'result': OPS[operation](request['data'])}
+        lock = nullcontext()
+        if serialize and operation in PROJECT_WRITERS | {'service_control'}:
+            from project_pilot import registry_lock
+
+            lock = registry_lock()
+        with lock:
+            if operation in PROJECT_WRITERS and managed_services.action_pending():
+                raise InputError('Poczekaj na zakonczenie operacji uslugi.')
+            response = {'ok': True, 'result': OPS[operation](request['data'])}
     except (InputError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         response = {'ok': False, 'error': str(exc)[:1200]}
     except Exception:
@@ -1758,9 +2067,13 @@ def handle(raw: bytes) -> bytes:
 
 
 def serve() -> None:
+    from project_pilot import registry_lock
+
     config()
     ensure_project_registry()
-    recover_engine_job()
+    with registry_lock():
+        recover_engine_job()
+        recover_isolated_projects()
     uid = pwd.getpwnam('devstackweb').pw_uid
     gid = pwd.getpwnam('devstackweb').pw_gid
     SOCKET_FILE.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
@@ -1777,7 +2090,9 @@ def serve() -> None:
     request_windows_hosts_sync()
     print('DevStack local helper listening', flush=True)
     while True:
-        poll_engine_results()
+        if engine_busy():
+            with registry_lock():
+                poll_engine_results()
         server.settimeout(1 if engine_busy() else None)
         try:
             conn, _ = server.accept()
@@ -1798,7 +2113,7 @@ def serve() -> None:
                     data += part
                     if b'\n' in part:
                         break
-                conn.sendall(handle(bytes(data).split(b'\n', 1)[0]))
+                conn.sendall(handle(bytes(data).split(b'\n', 1)[0], serialize=True))
             except (OSError, socket.timeout):
                 continue
 

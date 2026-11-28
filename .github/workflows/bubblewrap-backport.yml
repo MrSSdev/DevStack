@@ -6,6 +6,13 @@ on:
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
       - 'daemon/project_mounts.py'
+      - 'daemon/devstackd.py'
+      - 'frontend/**'
+      - 'framework-installers/**'
+      - 'scripts/install.sh'
+      - 'scripts/apply-update.sh'
+      - 'tests/project-activation-ci.sh'
+      - 'tests/project-activation-smoke.py'
       - 'daemon/project_idmap.py'
       - 'daemon/project_pilot.py'
       - 'tests/project-registered-pilot-smoke.py'
@@ -33,6 +40,13 @@ on:
     paths:
       - 'tests/bubblewrap-backport-ci.sh'
       - 'daemon/project_mounts.py'
+      - 'daemon/devstackd.py'
+      - 'frontend/**'
+      - 'framework-installers/**'
+      - 'scripts/install.sh'
+      - 'scripts/apply-update.sh'
+      - 'tests/project-activation-ci.sh'
+      - 'tests/project-activation-smoke.py'
       - 'daemon/project_idmap.py'
       - 'daemon/project_pilot.py'
       - 'tests/project-registered-pilot-smoke.py'
@@ -62,11 +76,14 @@ jobs:
   backport:
     name: Authenticated source rebuild on Ubuntu 26.04 amd64
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Check script syntax and packaging transformation
         run: |
           bash -n tests/bubblewrap-backport-ci.sh
@@ -74,6 +91,11 @@ jobs:
           python3 -m unittest discover -s tests -p test_bubblewrap_backport_compat.py -v
       - name: Build, test and roll back the temporary package
         run: bash tests/bubblewrap-backport-ci.sh
+      - name: Installed runtime diagnostics
+        if: failure()
+        run: |
+          sudo journalctl -u devstackd -u nginx -u php8.5-fpm -u devstack-mailpit -u 'devstack-pilot-*' --no-pager -n 180
+          sudo tail -60 /var/log/nginx/error.log
       - uses: actions/upload-artifact@v4
         with:
           name: bubblewrap-resolute-test-backport-amd64
