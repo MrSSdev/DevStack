@@ -3,6 +3,7 @@
 The app, PHP session boundary, Unix helper, Nginx, databases, and Mailpit are
 real. The dedicated notification lifecycle scenario replays only engine_job in a state response. The context guards every external HTTP(S) request; only the two controlled image fixtures are fulfilled during explicit image opt-in. Mailbox requests and writes are real. Never use a personal inbox.
 """
+import argparse
 import base64
 import json
 import os
@@ -1610,11 +1611,53 @@ class BrowserAcceptance(unittest.TestCase):
         self.dismiss_visible_toasts()
 
 
-if __name__=='__main__':
-    # Rate limiting is tested last because it is deliberately shared by all sessions.
-    suite=unittest.defaultTestLoader.loadTestsFromTestCase(BrowserAcceptance)
-    tests=list(suite)
-    tests.sort(key=lambda t:t._testMethodName=='test_03_session_csrf_origin_validation_and_rate_limit')
-    result=unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(tests))
+BROWSER_GROUPS = {
+    # Installer toast navigation reuses the project created by test_01.
+    'projects': (
+        'test_01_real_project_and_all_views',
+        'test_04_navigation_forms_widgets_and_service_confirmation',
+        'test_07_global_toasts_and_job_presentation',
+    ),
+    'mail': (
+        'test_02_mail_rendering_download_search_pagination_and_deletion',
+        'test_06_mailpit_offline_and_recovery',
+    ),
+    'pwa': ('test_08_pwa_and_notification_history',),
+    'notifications': (
+        'test_09_notification_presence_lifecycle',
+        'test_10_visible_toast_marks_exact_history_read',
+        'test_11_actual_service_completion_notification',
+        'test_11b_service_autostart_in_panel_only',
+        'test_11c_native_dialog_move_during_toast_exit',
+        'test_12_native_toast_stack_and_no_animation_overflow',
+    ),
+    'platform': (
+        'test_01b_wsl_ca_button_installs_only_public_ca',
+        'test_04b_live_external_service_status',
+        'test_04c_live_unexpected_service_failure',
+        'test_05_login_screen_and_form',
+        # Rate limiting is deliberately shared by all sessions in this runner.
+        'test_03_session_csrf_origin_validation_and_rate_limit',
+    ),
+}
+
+
+def select_tests(group):
+    tests = unittest.defaultTestLoader.loadTestsFromTestCase(BrowserAcceptance)
+    assigned = [name for names in BROWSER_GROUPS.values() for name in names]
+    by_name = {test._testMethodName: test for test in tests}
+    if set(assigned) != set(by_name) or len(assigned) != len(by_name):
+        raise RuntimeError('Each browser regression must belong to exactly one CI group.')
+    if group is None:
+        # Preserve the original serial order for local acceptance.
+        return sorted(tests, key=lambda test: test._testMethodName == 'test_03_session_csrf_origin_validation_and_rate_limit')
+    return [by_name[name] for name in BROWSER_GROUPS[group]]
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--group', choices=BROWSER_GROUPS)
+    args = parser.parse_args()
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(select_tests(args.group)))
     (OUT / 'report.json').write_text(json.dumps({'tests':result.testsRun,'failures':[(str(t),msg) for t,msg in result.failures],'errors':[(str(t),msg) for t,msg in result.errors],'success':result.wasSuccessful()},ensure_ascii=False,indent=2))
     raise SystemExit(not result.wasSuccessful())

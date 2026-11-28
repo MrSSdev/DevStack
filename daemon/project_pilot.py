@@ -58,7 +58,7 @@ ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'}
 
 
 @contextmanager
-def registry_lock():
+def registry_lock(*, blocking=True):
     # Both the installed root CLI and daemon serialize with the project
     # registry writer. ExecStart only reads atomic snapshots.
     path = REGISTRY.parent / 'project-operations.lock'
@@ -68,7 +68,7 @@ def registry_lock():
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid or info.st_mode & 0o077 or info.st_nlink != 1:
             raise ValueError('Unsafe project operations lock')
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
     finally:
         os.close(fd)

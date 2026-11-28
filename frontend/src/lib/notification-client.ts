@@ -23,7 +23,7 @@ export type NoticeRequest=<T>(method:'GET'|'POST',path:string,csrf?:string,data?
 export const emptyNoticeState:NoticeState={items:[],toast:[],push_categories:['mail','project','installer','service'],windows_enabled:false}
 
 export function isNoticeRoute(route:string):boolean{
-  return /^\/#\/(?:dashboard|settings|projects|mail(?:\/[A-Za-z0-9]{22})?|project\/[a-z][a-z0-9-]{1,39})$/.test(route)
+  return /^\/#\/(?:dashboard|settings|projects|mail(?:\/[A-Za-z0-9]{22})?|project\/[a-z][a-z0-9-]{1,39}|extensions\/[a-z][a-z0-9-]{0,39})$/.test(route)
 }
 // Notification clicks use an opaque ID in the hash, never a secret or an
 // arbitrary URL. Accept only a known DevStack route and a complete event ID.

@@ -43,10 +43,11 @@ jobs:
           php -l scripts/configure-auth.php
           bash -n scripts/install.sh scripts/bootstrap-ubuntu.sh scripts/preflight.sh scripts/build-frontend.sh scripts/security-scan.sh scripts/backup-project-db.sh scripts/verify-project-db-backup.sh scripts/update.sh scripts/apply-update.sh scripts/install-mailpit.sh
           bash -n scripts/enable-windows-local-notifications.sh
-          python3 -m py_compile daemon/devstackd.py daemon/wsl_ca.py daemon/project_frameworks.py daemon/project_isolation_preflight.py daemon/project_pilot.py daemon/project_runtime_identity.py daemon/project_idmap.py daemon/project_mounts.py daemon/project_access.py daemon/project_data_views.py daemon/project_runtime.py daemon/project_http.py daemon/project_lifecycle.py daemon/managed_services.py framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py
+          python3 -m py_compile daemon/devstackd.py daemon/extension_manifest.py daemon/extension_instructions.py daemon/extension_instruction_worker.py daemon/wsl_ca.py daemon/project_frameworks.py daemon/project_isolation_preflight.py daemon/project_pilot.py daemon/project_runtime_identity.py daemon/project_idmap.py daemon/project_mounts.py daemon/project_access.py daemon/project_data_views.py daemon/project_runtime.py daemon/project_http.py daemon/project_lifecycle.py daemon/managed_services.py framework-installers/common.py framework-installers/registry.py framework-installers/runner.py framework-installers/laravel/adapter.py scripts/list-domains.py scripts/watch-domains.py
       - name: Backend unit tests
         run: |
           python3 -m unittest discover -s tests -v
+          sudo python3 -B -m unittest discover -s tests -p test_extension_instructions.py -v
           php tests/php-security.php
           php tests/php-mail-preview.php
           php tests/php-notifications.php

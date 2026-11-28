@@ -16,7 +16,12 @@ CSRF, origin validation, input rejection and login rate limiting.
 
 The dedicated PWA/history scenario exercises the real manifest, service worker, empty cache, live SMTP notification, cross-tab deduplication, read/delete/clear and persistence without deleting mail. All scenarios allow the real network-only service worker. Playwright 1.60's built-in service_workers='block' init script reads navigator.serviceWorker in sandboxed frames and throws a SecurityError in the deliberately opaque mail preview. The mail scenario explicitly verifies the top-level worker is active and the cache is empty before exercising the unchanged sandbox, CSP, external HTTP guard and image opt-in assertions. The worker handles only same-origin root navigations, not API calls or image requests; no browser runtime errors are filtered or ignored. PHP tests cover presence and push claims with a fake subscription; the suite does not contact real push providers or certify Windows notification delivery.
 
-Screenshots, traces and the screenshot manifest are uploaded for one day.
+CI builds the production UI once, then tests six parallel groups on independent
+runners. The Tools job covers extension lifecycle. The existing regression jobs
+cover projects, mail, PWA, notifications, and platform behavior. Each job gets
+its own DevStack and Mailpit, allowing service restarts, inbox clearing and
+login-rate limiting without concurrent mutations in another group.
+Screenshots and traces are uploaded by group for one day.
 Only generated fixture data is used. These tests do not certify Windows/WSL
 integration or acceptance on a physical workstation.
 
@@ -31,6 +36,11 @@ NODE_EXTRA_CA_CERTS='/path/to/public/rootCA.pem' \
   python tests/browser-smoke.py
 ```
 
+Pass `--group projects`, `mail`, `pwa`, `notifications` or `platform` to run one
+regression group. Use a fresh disposable installation per group. The Tools
+scenario is in `tests/extensions-browser-smoke.py` and runs on a GitHub-hosted
+fixture.
+
 This deliberately clears the entire Mailpit inbox, creates a project and
 database, changes theme/widget settings, stops/starts Redis and exercises the
 shared login limiter. Never run it against a personal or shared installation.
@@ -39,7 +49,8 @@ The installed-stack workflow also reproduces a legacy root-owned, mode-0755
 `/var/lib/devstack-web` before applying the real privileged updater. It checks
 that directory ownership and permissions are repaired, the sandboxed collector
 completes successfully, the timer is active, and a previously stored SQLite
-preference survives the update. The real SMTP/browser scenarios run afterward.
+preference survives the update. The platform group includes this upgrade check
+and the restricted systemd notification RPC test.
 
 Notification-click coverage tests the actual service-worker handlers with
 isolated clients (cold window, focused window, old notification tag and

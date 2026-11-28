@@ -37,8 +37,9 @@ if [[ -f /opt/devstack/daemon/devstackd.py ]]; then
 fi
 # Hash the actual distribution files, not the DevStack commit or project tree.
 mail_files=(mail/cli.py mail/contract.py mail/mailpit.py mail/message.py)
-skill_files=(skills/devstack-tools/SKILL.md skills/devstack-tools/references/mail.md)
-files=(package.json install.sh publish.sh update.sh uninstall.sh smoke.cjs
+skill_files=(skills/devstack-tools/SKILL.md skills/devstack-tools/references/mail.md
+  skills/devstack-playwright/SKILL.md skills/devstack-mail/SKILL.md)
+files=(package.json manifest.json install.sh publish.sh update.sh uninstall.sh rollback.sh smoke.cjs
   bin/playwright bin/playwright-cli bin/devstack-mail "${mail_files[@]}" "${skill_files[@]}")
 for file in "${files[@]}"; do
   [[ -f "$src/$file" && ! -L "$src/$file" ]] || { echo "Missing/unsafe source: $file" >&2; exit 1; }
@@ -53,7 +54,7 @@ trap 'rm -rf -- "$stage"' EXIT
 payload="$stage/payload"
 mkdir -p "$payload/playwright" "$payload/browsers" "$payload/bin" "$payload/mail"
 cp -- "$src/package.json" "$payload/playwright/package.json"
-cp -- "$src/smoke.cjs" "$payload/smoke.cjs"
+cp -- "$src/smoke.cjs" "$src/manifest.json" "$payload/"
 cp -- "$src/bin/playwright" "$src/bin/playwright-cli" "$src/bin/devstack-mail" "$payload/bin/"
 for file in "${mail_files[@]}" "${skill_files[@]}"; do
   install -D -m 0644 -- "$src/$file" "$payload/$file"
@@ -90,6 +91,16 @@ if $deps; then
   "$node_bin" "$cli" install-deps chromium
 fi
 "$node_bin" "$cli" install --no-shell chromium
+"$node_bin" - <<'JS' > chromium-path
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require('@playwright/test');
+const root = path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH);
+const executable = path.relative(root, fs.realpathSync(chromium.executablePath()));
+if (!/^browsers\/chromium-/.test(executable))
+  throw new Error('Chromium executable is outside the staged browser directory.');
+process.stdout.write(executable + '\n');
+JS
 # The staged client's cache registration is not meaningful after relocation.
 rm -rf -- "$payload/browsers/.links"
 cd "$src"

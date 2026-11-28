@@ -2,6 +2,36 @@
 
 Optional, independently managed tools for local development. Version 0.2.0 contains Playwright Test and its built-in CLI (1.65.1), DevStack Mail (1.0.0), and a discoverable Agent Skill. The core installer/updater does not install this extension.
 
+## Panel and project instructions
+
+After updating DevStack Core once, install or update Tools from the terminal
+and open **Rozszerzenia → Tools**, or go to
+`https://devstack.test/#/extensions/devstack-tools`. The view shows the
+currently installed releases, tools, read-only instructions, project
+synchronization and automation settings. Routine updates to Tools and its
+catalogue do not need a Core upgrade or frontend rebuild.
+
+Core automatically adds `devstack-playwright` to registered web projects and
+`devstack-mail` to projects with configured local mail and a compatible
+installed Mailpit. If Mailpit stops, the project keeps its mail instruction.
+In **Projekty**, inspect the reason, adjust automatic management or retry.
+In **Automatyzacje**, configure default management for the extension.
+An existing matching manual `devstack-tools` skill keeps working. The panel's
+explicit migration removes that legacy link only after the selected
+replacements are ready. See the [Core extension guide](../../docs/EXTENSIONS.md).
+
+Close active Playwright tests and CLI sessions before rolling back:
+
+```bash
+bash extensions/devstack-tools/rollback.sh
+```
+
+Rollback reactivates the prior verified release and its central instructions.
+Uninstall removes the menu and the project's DevStack-owned links
+as the Core reconciler runs. It preserves manual links and project data
+and leaves Mailpit installed. The CLI and manually linked skills remain
+usable in a standalone Tools installation without DevStack Core.
+
 ## Install / update
 
 In Ubuntu WSL, from a reviewed DevStack checkout, as the developer (Node.js 22+ and npm required):
@@ -21,7 +51,7 @@ bash extensions/devstack-tools/update.sh
 
 When DevStack is installed, installation and update automatically trust its existing public CA in the configured developer's Chromium NSS database. This uses the shared core helper, installing libnss3-tools if missing; an older core without the helper must be updated once first. Standalone installation without DevStack skips CA setup. The helper is also available in DevStack Settings → Security → Skopiuj do WSL, or via `sudo python3 -I /opt/devstack/daemon/devstackd.py --trust-wsl-ca`. No Windows certificate store, system-wide Linux trust store or CA private key is modified.
 
-No routine core update, frontend build or service restart. An identical build is a no-op; pass --with-deps if new libraries are needed, or --force for repair. Close active Playwright tests and CLI sessions before updating; an active launcher or detected browser/CLI process blocks replacement. The previous installation remains active if the candidate fails. Only one release is retained after successful replacement (temporarily more disk space is needed during staging).
+No routine core update, frontend build or service restart. An identical build is a no-op; pass --with-deps if new libraries are needed, or --force for repair. Close active Playwright tests and CLI sessions before updating; an active launcher or detected browser/CLI process blocks replacement. The previous installation remains active if the candidate fails. The active release and one previously verified release are retained. Staging temporarily uses additional disk space.
 
 ## Layout
 
@@ -32,7 +62,8 @@ No routine core update, frontend build or service restart. An identical build is
   browsers/     -> current/browsers
   skills/       -> current/skills
   current       -> releases/release-...
-  releases/     root-owned, one active package/browser release
+  previous      -> previously verified release, when available
+  releases/     root-owned active and previous package/browser releases
 ~~~
 
 Do not modify the managed directories as root outside the installer. Tools are read-only to ordinary users. Project code, browser profiles, sessions and test reports remain outside the installation. No project gets its own downloaded Chromium copy.

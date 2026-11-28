@@ -9,6 +9,8 @@ Use the reference for the dedicated developer tool relevant to the task.
 Use the installed command paths so the workflow is independent of the app
 framework and the shell's PATH.
 
+- For Playwright Test and Playwright CLI, see
+  `/opt/devstack-tools/skills/devstack-playwright/SKILL.md`.
 - [DevStack Mail](references/mail.md) applies when a test expects an email
   as an outcome or when asked to check a known local test message. For a
   Playwright flow, use the browser to trigger the application action and

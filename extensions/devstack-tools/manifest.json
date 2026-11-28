@@ -1,0 +1,212 @@
+{
+  "id": "devstack-tools",
+  "name": "DevStack Tools",
+  "description": "Wspólne narzędzia do testowania aplikacji i lokalnej poczty.",
+  "version": "0.3.0",
+  "contract": 1,
+  "core_contract": 1,
+  "menu": {
+    "label": "Tools",
+    "icon": "wrench",
+    "order": 100,
+    "view": "tools"
+  },
+  "view": {
+    "id": "tools",
+    "title": "DevStack Tools",
+    "sections": [
+      {
+        "id": "overview",
+        "kind": "overview",
+        "label": "Przegląd"
+      },
+      {
+        "id": "instructions",
+        "kind": "instructions",
+        "label": "Instrukcje"
+      },
+      {
+        "id": "projects",
+        "kind": "projects",
+        "label": "Projekty"
+      },
+      {
+        "id": "automations",
+        "kind": "automations",
+        "label": "Automatyzacje"
+      }
+    ]
+  },
+  "terminal": [
+    {
+      "id": "install",
+      "label": "Instalacja",
+      "command": "bash extensions/devstack-tools/install.sh --with-deps"
+    },
+    {
+      "id": "update",
+      "label": "Aktualizacja",
+      "command": "bash extensions/devstack-tools/update.sh"
+    },
+    {
+      "id": "repair",
+      "label": "Naprawa",
+      "command": "bash extensions/devstack-tools/update.sh --force"
+    },
+    {
+      "id": "rollback",
+      "label": "Przywrócenie wydania",
+      "command": "bash extensions/devstack-tools/rollback.sh"
+    }
+  ],
+  "tools": [
+    {
+      "id": "playwright-test",
+      "name": "Playwright Test",
+      "description": "Testy przeglądarkowe aplikacji webowych.",
+      "version": "1.65.1",
+      "files": [
+        "bin/playwright",
+        "playwright/node_modules/@playwright/test/cli.js",
+        "playwright/node_modules/@playwright/test/package.json"
+      ],
+      "service": null,
+      "dependencies": [
+        "Node.js 22+",
+        "Chromium i biblioteki systemowe"
+      ],
+      "documentation": "https://github.com/MrSSdev/DevStack/tree/main/extensions/devstack-tools#playwright-test",
+      "example": "/opt/devstack-tools/bin/playwright test",
+      "readiness": "chromium"
+    },
+    {
+      "id": "playwright-cli",
+      "name": "Playwright CLI",
+      "description": "Interaktywna obsługa lokalnej przeglądarki z terminala.",
+      "version": "1.65.1",
+      "files": [
+        "bin/playwright-cli",
+        "playwright/node_modules/playwright/cli.js",
+        "playwright/node_modules/playwright/package.json"
+      ],
+      "service": null,
+      "dependencies": [
+        "Node.js 22+",
+        "Chromium i biblioteki systemowe"
+      ],
+      "documentation": "https://github.com/MrSSdev/DevStack/tree/main/extensions/devstack-tools#playwright-cli",
+      "example": "/opt/devstack-tools/bin/playwright-cli --help",
+      "readiness": "chromium"
+    },
+    {
+      "id": "devstack-mail",
+      "name": "DevStack Mail",
+      "description": "Odczyt wiadomości i podpisanych odnośników w testach.",
+      "version": "1.0.0",
+      "files": [
+        "bin/devstack-mail",
+        "mail/cli.py"
+      ],
+      "service": "mailpit",
+      "dependencies": [
+        "Python 3",
+        "Mailpit v1.34.0"
+      ],
+      "documentation": "https://github.com/MrSSdev/DevStack/tree/main/extensions/devstack-tools#devstack-mail",
+      "example": "/opt/devstack-tools/bin/devstack-mail status --json",
+      "readiness": null
+    }
+  ],
+  "instructions": [
+    {
+      "id": "devstack-playwright",
+      "name": "DevStack Playwright",
+      "description": "Testy i interaktywna weryfikacja lokalnych aplikacji webowych.",
+      "format": "agent-skill",
+      "tools": [
+        "playwright-test",
+        "playwright-cli"
+      ],
+      "requires": [
+        "web"
+      ],
+      "reason": "Zarejestrowana aplikacja webowa ze wspólnym środowiskiem Playwright.",
+      "audience": "trusted-developer"
+    },
+    {
+      "id": "devstack-mail",
+      "name": "DevStack Mail",
+      "description": "Odczyt lokalnej poczty, w tym weryfikacja konta w teście Playwright.",
+      "format": "agent-skill",
+      "tools": [
+        "devstack-mail"
+      ],
+      "requires": [
+        "local_mail",
+        "mailpit_installed"
+      ],
+      "reason": "Włączona lokalna poczta i zainstalowany obsługiwany Mailpit.",
+      "audience": "trusted-developer"
+    }
+  ],
+  "legacy": [
+    "devstack-tools"
+  ],
+  "automations": [
+    {
+      "id": "new-project",
+      "label": "Nowy projekt",
+      "description": "Dobiera instrukcje po zarejestrowaniu projektu lub pomyślnej instalacji frameworka.",
+      "events": [
+        "project_created",
+        "framework_ready"
+      ],
+      "action": "reconcile_instructions"
+    },
+    {
+      "id": "existing-projects",
+      "label": "Istniejące projekty",
+      "description": "Sprawdza projekty podczas uruchomienia DevStack i ręcznego ponowienia.",
+      "events": [
+        "startup",
+        "manual"
+      ],
+      "action": "reconcile_instructions"
+    },
+    {
+      "id": "configuration",
+      "label": "Konfiguracja projektu",
+      "description": "Ponownie dobiera instrukcje po zmianie konfiguracji i odłącza nieaktualne powiązania.",
+      "events": [
+        "project_changed"
+      ],
+      "action": "reconcile_instructions"
+    },
+    {
+      "id": "release",
+      "label": "Wydanie rozszerzenia",
+      "description": "Synchronizuje po instalacji, aktywacji aktualizacji i przywróceniu wydania.",
+      "events": [
+        "extension_installed",
+        "extension_updated",
+        "extension_rolled_back"
+      ],
+      "action": "reconcile_instructions"
+    },
+    {
+      "id": "cleanup",
+      "label": "Sprzątanie",
+      "description": "Odpina zarządzane instrukcje po usunięciu projektu lub rozszerzenia.",
+      "events": [
+        "project_removed",
+        "extension_removed"
+      ],
+      "action": "reconcile_instructions"
+    }
+  ],
+  "operations": [
+    "sync",
+    "set_automatic",
+    "migrate"
+  ]
+}

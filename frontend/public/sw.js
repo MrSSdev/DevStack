@@ -25,7 +25,7 @@ const validId=id=>typeof id==='string'&&/^(?:(?:op|job|batch|service)-[a-f0-9]{3
 self.addEventListener('notificationclick',event=>{
   event.notification.close();
   const route=event.notification.data?.route;
-  const safe=typeof route==='string'&&/^\/#\/(?:dashboard|projects|settings|mail(?:\/[A-Za-z0-9]{22})?)$/.test(route)?route:'/#/dashboard';
+  const safe=typeof route==='string'&&/^\/#\/(?:dashboard|projects|settings|mail(?:\/[A-Za-z0-9]{22})?|extensions\/[a-z][a-z0-9-]{0,39})$/.test(route)?route:'/#/dashboard';
   // Keep the exact journal ID through startup and password login. Older
   // notifications already carry this ID in their stable tag. The fragment
   // stays local to the page; a normal authenticated CSRF-protected poll
