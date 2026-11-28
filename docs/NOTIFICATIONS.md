@@ -23,7 +23,16 @@ installer states and the final result use one stable job record; the
 existing non-dismissible loading toast and terminal timing are preserved.
 Service control records command acceptance separately from confirmed
 completion or failure. The collector also detects independent service
-failures and recovery.
+failures and recovery. Instruction synchronization likewise records a separate
+terminal event. Its acknowledgement and result share the same operation
+receipt in history. The collector reads the bounded `instruction_results`
+snapshot without opening project directories or running synchronization.
+It deduplicates terminal receipts using the existing SQLite tombstones,
+including after deletion or a history clear. A project result links to its
+project, while a global operation produces one summary in the Tools view.
+These terminal notices use the existing Projects category and the same in-app
+and opted-in WinRT delivery rules as other project notices. Only the opaque
+event ID, category and kind are passed to the Windows launcher.
 Routine refresh, clipboard and form validation messages remain temporary.
 
 ### Adding an operation

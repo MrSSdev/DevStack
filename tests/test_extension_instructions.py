@@ -241,6 +241,114 @@ class ManagerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 manager.operate({**operation, 'action': 'migrate'})
 
+    def test_receipts_commit_with_reconciliation_and_survive_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            keys = [f'{i:032x}' for i in range(1, 67)]
+            projects = {key: ('webapp', {'name': 'Projekt testowy', 'domain': 'webapp.test', 'webroot': 'public'}) for key in keys}
+            release = {**MANIFEST, 'state': 'active', 'build': 'a' * 64,
+                       'tools': [{**tool, 'installed': True} for tool in MANIFEST['tools']]}
+
+            def read(path):
+                return json.loads(path.read_text()) if path.exists() else {}
+
+            fail_commit = False
+
+            def write(path, value):
+                if fail_commit and value.get('results'):
+                    raise OSError('fixture failed final write')
+                path.write_text(json.dumps(value))
+
+            core = SimpleNamespace(STATE_FILE=root / 'projects.json', read_json=read, write_json_atomic=write)
+            manager = instructions.Manager(core)
+            global_action = {'extension': 'devstack-tools', 'action': 'set_automatic', 'enabled': False}
+            local_action = {'extension': 'devstack-tools', 'action': 'sync', 'project': keys[0]}
+
+            def work(_, batch):
+                return {key: {'state': 'complete', 'identity': [1, 2], 'links': {}, 'legacy': {}} for key in batch}
+
+            with patch.object(instructions, 'registered', return_value=projects), \
+                 patch.object(instructions, 'discover', return_value={'devstack-tools': release}), \
+                 patch.object(instructions, 'installed_service', return_value=False), \
+                 patch.object(instructions, 'run_worker', side_effect=work):
+                pending = manager.operate(global_action)['receipt']
+                self.assertEqual(manager.completion_results(), [])
+                manager.reconcile(0)
+                self.assertEqual(manager.completion_results(), [], 'A partially processed global batch is not finished')
+                self.assertEqual(manager.load()['operations'][pending]['remaining'], 2)
+                manager = instructions.Manager(core)
+                fail_commit = True
+                with self.assertRaises(OSError):
+                    manager.reconcile(3)
+                    manager.reconcile(4)
+                self.assertEqual(manager.completion_results(), [], 'A failed final write cannot publish a receipt')
+                fail_commit = False
+                manager = instructions.Manager(core)
+                manager.reconcile(6)
+                manager.reconcile(7)
+                self.assertEqual(manager.completion_results()[0]['outcomes'], {'done': 66})
+                first = manager.operate(local_action)['receipt']
+                newer = manager.operate(local_action)['receipt']
+                self.assertNotIn(first, {item['id'] for item in manager.completion_results()})
+                manager.reconcile(9)
+                results = {item['id']: item for item in manager.completion_results()}
+                self.assertEqual(results[first]['outcomes'], {'superseded': 1})
+                self.assertEqual(results[newer]['outcomes'], {'done': 1})
+                self.assertEqual(results[newer]['name'], 'Projekt testowy')
+                manager.reconcile(60)
+                self.assertEqual({item['id']: item for item in manager.completion_results()}, results)
+
+                unchanged = manager.operate(global_action)['receipt']
+                manager.reconcile(63)
+                manager.reconcile(66)
+                self.assertEqual({item['id']: item for item in manager.completion_results()}[unchanged]['outcomes'],
+                                 {'unchanged': 66})
+                cancelled = manager.operate(local_action)['receipt']
+                del projects[keys[0]]
+                manager.reconcile(69)
+                self.assertEqual({item['id']: item for item in manager.completion_results()}[cancelled]['outcomes'],
+                                 {'removed': 1})
+                changed = manager.operate({**local_action, 'project': keys[1]})['receipt']
+                release['state'] = 'invalid'
+                manager.reconcile(72)
+                self.assertEqual({item['id']: item for item in manager.completion_results()}[changed]['outcomes'],
+                                 {'unavailable': 1})
+
+                release['state'] = 'active'
+                projects[keys[1]][1]['engine_status'] = 'configuring'
+                queued_at = 1000
+                with patch.object(instructions.time, 'time', return_value=queued_at):
+                    waiting = manager.operate({**local_action, 'project': keys[1]})['receipt']
+                    manager.reconcile(75)
+                    self.assertNotIn(waiting, {item['id'] for item in manager.completion_results()})
+                with patch.object(instructions.time, 'time', return_value=queued_at + instructions.OPERATION_TIMEOUT):
+                    manager.reconcile(78)
+                    self.assertEqual({item['id']: item for item in manager.completion_results()}[waiting]['outcomes'],
+                                     {'expired': 1})
+
+                projects.clear()
+                empty = manager.operate({'extension': 'devstack-tools', 'action': 'sync'})['receipt']
+                self.assertNotIn(empty, {item['id'] for item in manager.completion_results()})
+                manager.reconcile(81)
+                self.assertEqual({item['id']: item for item in manager.completion_results()}[empty]['outcomes'], {})
+
+    def test_result_classifier_requires_evidence_from_worker(self):
+        def outcome(action='sync', status='synced', migrated=(), manual=(), enabled=True, changed=True):
+            return instructions.instruction_outcome(
+                {'action': action, 'enabled': enabled, 'changed': changed},
+                status, {'enabled': status != 'disabled', 'migration': ['legacy']},
+                {'migrated': migrated}, manual)
+        self.assertEqual(outcome(status='unsafe_directory'), 'error')
+        self.assertEqual(outcome(status='directory_changed'), 'error')
+        self.assertEqual(outcome(status='missing'), 'error')
+        self.assertEqual(outcome(status='conflict'), 'conflict')
+        self.assertEqual(outcome(action='migrate', manual=['legacy']), 'conflict')
+        self.assertEqual(outcome(action='migrate'), 'unchanged')
+        self.assertEqual(outcome(action='migrate', migrated=['legacy']), 'done')
+        self.assertEqual(outcome(action='set_automatic', status='disabled'), 'inactive')
+        self.assertEqual(outcome(action='set_automatic', status='disabled', enabled=False, manual=['legacy']), 'manual')
+        self.assertEqual(outcome(action='set_automatic', changed=False), 'unchanged')
+
     def test_events_crash_recovery_settings_and_retired_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

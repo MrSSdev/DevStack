@@ -279,4 +279,62 @@ $wrong=[...$restart,'id'=>str_repeat('3',32),'state'=>'inactive'];
 $svc->observeServices([['id'=>'mailpit','name'=>'Mailpit','state'=>'inactive']],[$wrong]);
 $items=array_column($svc->poll($a)['items'],null,'id');
 check_notice($items['service-'.$wrong['id']]['kind']==='error','Inconsistent successful receipt cannot report service as active');
-echo "Notification journal, service completion, deletion, deduplication, presence, click read and system delivery policy: OK\n";
+
+
+// Application instruction results use the same durable collector tombstones.
+$sync = new DevStackNotices(':memory:');
+$receipt = str_repeat('7',32);
+$acceptArgs = [
+    '/api/extensions/instructions',['extension'=>'devstack-tools','action'=>'set_automatic','enabled'=>false],
+    ['receipt'=>$receipt,'project_slug'=>'webapp','project_name'=>'Projekt testowy'],$a,
+];
+$accepted = $sync->operation(...$acceptArgs);
+$sync->acknowledge($accepted,$a);
+check_notice($sync->operation(...$acceptArgs) === $accepted,'A single acknowledgement per operation receipt');
+$event = ['id'=>$receipt,'extension'=>'devstack-tools','slug'=>'webapp','name'=>'Projekt testowy',
+    'action'=>'set_automatic','enabled'=>false,'outcomes'=>['done'=>1],'stamp'=>time()-3];
+$terminal = 'op-'.$receipt;
+check_notice($sync->poll($a)['items'][0]['kind']==='info' && $sync->claimPush(time()-60)===null,
+    'Acceptance alone is informational and does not push');
+$sync->observeInstructionResults([$event,$event]);
+$events = $sync->poll($a);
+$byId = array_column($events['items'],null,'id');
+check_notice(count($byId)===2 && $byId[$accepted]['receipt']===$receipt && $byId[$terminal]['receipt']===$receipt,
+    'Terminal event correlates with exactly one acknowledgement');
+check_notice($byId[$terminal]['kind']==='success' && $byId[$terminal]['title']==='Automatyczne instrukcje wyłączone' &&
+    $byId[$terminal]['description']==='Projekt testowy' && $byId[$terminal]['route']==='/#/project/webapp',
+    'Verified successful project result uses the registry name and route');
+check_notice(array_column($events['toast'],'id')===[$terminal] && $sync->poll($b)['toast']===[],
+    'One live client receives the terminal toast');
+$sync->mutate('delete',$terminal);
+$sync->observeInstructionResults([$event]);
+check_notice(count($sync->poll($b)['items'])===1,'Deleted instruction result is not replayed');
+$sync->leave($a);
+$sync->leave($b);
+$global = [...$event,'id'=>str_repeat('8',32),'slug'=>'','name'=>'','action'=>'sync','enabled'=>null,
+    'outcomes'=>['done'=>2,'conflict'=>1,'error'=>1]];
+$sync->observeInstructionResults([$global]);
+$push = $sync->claimPush(time()-60);
+check_notice($push['payload']===['id'=>'op-'.$global['id'],'category'=>'project','kind'=>'error'],
+    'Closed-panel global result uses existing WinRT and includes only the safe payload');
+check_notice($sync->claimPush(time()-60)===null,'Native delivery is claimed once');
+$row = array_column($sync->poll('',false)['items'],null,'id')['op-'.$global['id']];
+check_notice($row['route']==='/#/extensions/devstack-tools' && str_contains($row['description'],'Konflikty 1') &&
+    str_contains($row['description'],'Gotowe 2'),'Mixed global outcomes produce a single summary');
+$manual = [...$event,'id'=>str_repeat('9',32),'outcomes'=>['manual'=>1]];
+$removed = [...$event,'id'=>str_repeat('a',32),'outcomes'=>['removed'=>1]];
+$empty = [...$global,'id'=>str_repeat('b',32),'outcomes'=>[]];
+$invalid = [...$event,'id'=>str_repeat('c',32),'slug'=>'../outside'];
+$sync->observeInstructionResults([$manual,$removed,$empty,$invalid]);
+$events = array_column($sync->poll('',false)['items'],null,'id');
+check_notice($events['op-'.$manual['id']]['kind']==='info' &&
+    str_contains($events['op-'.$manual['id']]['description'],'Pozostały dowiązania ręczne'),
+    'Manual link retention is not presented as complete detachment');
+check_notice($events['op-'.$removed['id']]['route']==='/#/projects' && $events['op-'.$removed['id']]['kind']==='info',
+    'Removed registration does not route to a different project under its old slug');
+check_notice($events['op-'.$empty['id']]['title']==='Brak projektów do synchronizacji' &&
+    !isset($events['op-'.$invalid['id']]),'Empty batch and invalid context are handled');
+$sync->mutate('clear');
+$sync->observeInstructionResults([$event,$global,$manual,$removed,$empty]);
+check_notice($sync->poll('',false)['items']===[],'Clearing history does not re-import instruction results');
+echo "Notification journal, durable receipts, deletion, deduplication, presence and delivery policy: OK\n";

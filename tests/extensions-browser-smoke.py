@@ -41,6 +41,39 @@ def staged_release():
         shutil.rmtree(stage)
 
 
+@contextmanager
+def native_notification_fixture():
+    """Use the real opt-in path and an isolated launcher that only records payloads."""
+    marker = Path('/etc/devstack/windows-local-notifications')
+    mount = Path('/mnt/c')
+    launcher = mount / 'DevStack/LocalNotifications/DevStack.Notifications.exe'
+    output = launcher.with_name('ci-notification-events.jsonl')
+    opt_in = ('sudo', '/bin/bash', str(SRC.parents[1] / 'scripts/enable-windows-local-notifications.sh'))
+    status = subprocess.check_output([*opt_in, '--status'], text=True, timeout=10).strip()
+    if status != 'disabled' or mount.exists() or mount.is_symlink():
+        raise RuntimeError('Native notification fixture requires an unused marker and mount.')
+    command('sudo', 'install', '-d', '-m', '0755', str(mount), str(mount / 'DevStack'), str(launcher.parent))
+    try:
+        script = r"""#!/usr/bin/python3
+import base64
+import json
+from pathlib import Path
+import sys
+payload = json.loads(base64.b64decode(sys.argv[1]))
+assert set(payload) == {'id', 'category', 'kind'}
+with Path('ci-notification-events.jsonl').open('a') as f:
+    f.write(json.dumps(payload) + '\n')
+"""
+        subprocess.run(['sudo', 'tee', str(launcher)], input=script, text=True, stdout=subprocess.DEVNULL, check=True)
+        command('sudo', 'chmod', '0755', str(launcher))
+        command('sudo', 'install', '-o', str(os.getuid()), '-m', '0600', '/dev/null', str(output))
+        command(*opt_in)
+        yield output
+    finally:
+        command('sudo', 'rm', '-f', str(marker), str(launcher), str(output))
+        command('sudo', 'rmdir', str(launcher.parent), str(mount / 'DevStack'), str(mount))
+
+
 def skills(slug):
     return PROJECTS / slug / '.agents/skills'
 
@@ -73,6 +106,39 @@ def exercise(browser):
     def post(path, data):
         response = context.request.post(ORIGIN + '/api/' + path, data=data, headers=headers)
         assert response.ok, response.text()
+        return response.json()['result']
+
+    def journal():
+        code = 'require "/opt/devstack/notifications.php"; echo json_encode((new DevStackNotices())->poll("", false)["items"]);'
+        wire = subprocess.check_output(['sudo', '-u', 'devstackweb', '/usr/bin/php', '-r', code], text=True, timeout=10)
+        return json.loads(wire)
+
+    def terminal(accept, title, kind, slug=None):
+        receipt = accept['receipt']
+        assert re.fullmatch('[a-f0-9]{32}', receipt) and accept['notification_id'] != 'op-' + receipt
+        matched = []
+        def observed():
+            matched[:] = [item for item in journal() if item.get('receipt') == receipt]
+            return any(item['id'] == 'op-' + receipt for item in matched)
+        wait_for(observed, 'collector did not publish the instruction result', timeout=45)
+        rows = {item['id']: item for item in matched}
+        assert len(rows) == len(matched) == 2 and rows[accept['notification_id']]['kind'] == 'info', rows
+        result = rows['op-' + receipt]
+        assert result['title'] == title and result['kind'] == kind, rows
+        expected_route = '/#/project/' + slug if slug else EXTENSION
+        assert result['route'] == expected_route and rows[accept['notification_id']]['route'] == expected_route, rows
+        if slug:
+            assert result['description'].startswith(slug), rows
+        return result
+
+    def submit(click, expected=None):
+        with page.expect_response(lambda response: response.request.method == 'POST' and
+                                  response.url.endswith('/api/extensions/instructions')) as submitted:
+            click()
+        response = submitted.value
+        assert response.ok, response.text()
+        if expected is not None:
+            assert response.request.post_data_json == expected
         return response.json()['result']
 
     def settle_php():
@@ -192,9 +258,10 @@ def exercise(browser):
     expect(plain_card.get_by_text('Podłączono ręcznie', exact=True)).to_be_visible()
     page.screenshot(path=results / 'extensions-projects.png', full_page=True)
     page.once('dialog', lambda prompt: prompt.accept())
-    plain_card.get_by_role('button', name='Migruj ręczne dowiązanie').click()
+    migrated_global_view = submit(plain_card.get_by_role('button', name='Migruj ręczne dowiązanie').click)
     expect(page.get_by_text('Przyjęto synchronizację. Wynik pojawi się przy projektach.')).to_be_visible()
     wait_for(lambda: not legacy.is_symlink() and (plain / PLAYWRIGHT).is_symlink(), 'migration did not complete')
+    terminal(migrated_global_view, 'Migracja instrukcji zakończona', 'success', PLAIN)
     assert personal.read_text() == 'fixture from developer'
     project_mode = mail_card.get_by_role('switch')
     expect(project_mode).to_be_checked()
@@ -205,8 +272,9 @@ def exercise(browser):
     expect(project_mode).to_be_checked(timeout=15000)
     wait_for(lambda: (local / MAIL).is_symlink(), 'project re-enable did not attach skill')
     mail_inode = (local / MAIL).lstat().st_ino
-    page.get_by_role('button', name='Synchronizuj wszystkie projekty').click()
+    global_sync = submit(page.get_by_role('button', name='Synchronizuj wszystkie projekty').click)
     wait_for(lambda: project(LOCAL)['event'] == 'manual', 'manual retry did not complete')
+    assert terminal(global_sync, 'Synchronizacja instrukcji zakończona', 'success')['description'] == 'Gotowe 2'
     assert mail_inode == (local / MAIL).lstat().st_ino
     mail_card.get_by_role('link', name=LOCAL, exact=True).click()
     expect(page.get_by_role('region', name='DevStack Tools')).to_be_visible()
@@ -238,10 +306,11 @@ def exercise(browser):
     migration.click()
     assert contextual_legacy.is_symlink()
     page.once('dialog', lambda prompt: prompt.accept())
-    migration.click()
+    migrated = submit(migration.click)
     wait_for(lambda: not contextual_legacy.is_symlink() and (contextual / PLAYWRIGHT).is_symlink(),
              'contextual migration did not finish')
     expect(migration).to_have_count(0)
+    terminal(migrated, 'Migracja instrukcji zakończona', 'success', CONTEXT)
     expect(page).to_have_url(ORIGIN + '/#/project/' + CONTEXT)
 
     card = show_project(LOCAL)
@@ -260,18 +329,20 @@ def exercise(browser):
     expect(page).to_have_url(ORIGIN + '/#/project/' + LOCAL)
 
     local_switch = card.get_by_role('switch')
-    local_switch.click()
+    off = submit(local_switch.click)
     expect(local_switch).not_to_be_checked(timeout=15000)
     wait_for(lambda: not (local / MAIL).is_symlink(), 'contextual disable did not detach the instruction')
     assert project(LOCAL)['automatic'] is False
-    local_switch.click()
+    off_result = terminal(off, 'Automatyczne instrukcje wyłączone', 'success', LOCAL)
+    expect(page.locator('[data-slot="toast"]').get_by_text(off_result['title'], exact=True)).to_be_visible(timeout=15000)
+    on = submit(local_switch.click)
     expect(local_switch).to_be_checked(timeout=15000)
     wait_for(lambda: (local / MAIL).is_symlink(), 'contextual enable did not attach the instruction')
     mail_inode = (local / MAIL).lstat().st_ino
-    with page.expect_request(lambda req: req.method == 'POST' and req.url.endswith('/api/extensions/instructions')) as submitted:
-        card.get_by_role('button', name='Synchronizuj instrukcje').click()
-    assert submitted.value.post_data_json == {'extension': 'devstack-tools', 'action': 'sync',
-                                              'project': original, 'card': 'tools'}
+    sync_result = submit(card.get_by_role('button', name='Synchronizuj instrukcje').click,
+                         {'extension': 'devstack-tools', 'action': 'sync', 'project': original, 'card': 'tools'})
+    terminal(on, 'Automatyczne instrukcje włączone', 'success', LOCAL)
+    terminal(sync_result, 'Synchronizacja instrukcji zakończona', 'success', LOCAL)
     plain_project = show_project(PLAIN)
     expect(plain_project.get_by_role('button', name=re.compile('DevStack Mail'))).to_have_count(0)
     expect(plain_project.get_by_role('button', name=re.compile('DevStack Playwright.*Zarządzane'))).to_be_visible()
@@ -284,8 +355,9 @@ def exercise(browser):
     unsafe.rename(saved)
     unsafe.symlink_to(plain.parent, target_is_directory=True)
     try:
-        card.get_by_role('button', name='Synchronizuj instrukcje').click()
+        failed = submit(card.get_by_role('button', name='Synchronizuj instrukcje').click)
         expect(card.get_by_text('Nie można bezpiecznie otworzyć katalogu')).to_be_visible(timeout=15000)
+        terminal(failed, 'Synchronizacja instrukcji zakończona z problemami', 'error', CONTEXT)
         expect(card.get_by_role('button', name='Ponów synchronizację')).to_be_visible()
     finally:
         unsafe.unlink()
@@ -296,17 +368,19 @@ def exercise(browser):
     page.goto(ORIGIN + EXTENSION)
     section_menu.get_by_role('button', name='Automatyzacje').click()
     global_mode = page.get_by_role('switch', name='Automatyczne zarządzanie instrukcjami')
-    global_mode.click()
+    global_off = submit(global_mode.click)
     expect(global_mode).not_to_be_checked(timeout=15000)
     card = show_project(LOCAL)
     expect(card.get_by_text('Automatyzacja wyłączona dla rozszerzenia.')).to_be_visible()
     expect(card.get_by_role('switch')).to_be_checked()
     page.go_back(wait_until='commit')
     section_menu.get_by_role('button', name='Automatyzacje').click()
-    global_mode.click()
+    assert 'Gotowe 3' in terminal(global_off, 'Automatyczne instrukcje wyłączone', 'success')['description']
+    global_on = submit(global_mode.click)
     expect(global_mode).to_be_checked(timeout=15000)
     wait_for(lambda: (local / MAIL).is_symlink(), 'global re-enable did not restore local mail instruction')
     mail_inode = (local / MAIL).lstat().st_ino
+    assert 'Gotowe 3' in terminal(global_on, 'Automatyczne instrukcje włączone', 'success')['description']
 
     command('sudo', 'systemctl', 'stop', 'devstack-mailpit')
     try:
@@ -321,8 +395,9 @@ def exercise(browser):
     replacement = plain / PLAYWRIGHT
     replacement.unlink()
     replacement.write_text('custom instruction file')
-    post('extensions/instructions', {'extension': 'devstack-tools', 'action': 'sync', 'project': project(PLAIN)['id']})
+    conflict = post('extensions/instructions', {'extension': 'devstack-tools', 'action': 'sync', 'project': project(PLAIN)['id']})
     wait_for(lambda: project(PLAIN)['status'] == 'conflict', 'user content collision was not reported')
+    terminal(conflict, 'Konflikt synchronizacji instrukcji', 'error', PLAIN)
     assert replacement.read_text() == 'custom instruction file'
     conflict_card = show_project(PLAIN)
     expect(conflict_card.get_by_text('Konflikty · devstack-playwright')).to_be_visible()
@@ -391,6 +466,10 @@ def exercise(browser):
     register(LOCAL, True)
     wait_for(lambda: (local / MAIL).is_symlink(), 'recreated project not synchronized')
     assert project(LOCAL)['id'] != original
+    # The test registered the project outside the browser. Synchronize the
+    # panel before asserting the recreated project's route across rollbacks.
+    with page.expect_response(lambda response: response.url.endswith('/api/state') and response.ok):
+        refresh()
     response = context.request.post(ORIGIN + '/api/extensions/instructions', headers=headers,
                                     data={'extension': 'devstack-tools', 'action': 'sync', 'project': original, 'card': 'tools'})
     assert not response.ok
@@ -411,6 +490,35 @@ def exercise(browser):
     assert (local / MAIL).is_symlink()
     command('bash', str(SRC / 'rollback.sh'))
     expect(page.get_by_role('region', name='DevStack Tools')).to_be_visible(timeout=15000)
+
+    # Reload and wait for a genuine automatic audit. Neither can re-emit a
+    # previously collected receipt. Then close all panel pages for real WinRT collection.
+    page.reload()
+    checked_at = project(LOCAL)['last_sync']
+    wait_for(lambda: project(LOCAL)['last_sync'] != checked_at, 'periodic instruction audit did not run', timeout=50)
+    assert sum(item['id'] == off_result['id'] for item in journal()) == 1
+    page.wait_for_function('navigator.serviceWorker.controller !== null')
+    with page.expect_event('close'):
+        page.close(run_before_unload=True)
+
+    def no_present_clients():
+        code = ('echo (new PDO("sqlite:/var/lib/devstack-web/notifications.sqlite3"))'
+                '->query("SELECT COUNT(*) FROM clients WHERE expires > " . time())->fetchColumn();')
+        return subprocess.check_output(['sudo', '-u', 'devstackweb', '/usr/bin/php', '-r', code],
+                                       text=True, timeout=10).strip() == '0'
+    # Allow the ordinary 90-second lease to expire if teardown loses a beacon.
+    wait_for(no_present_clients, 'closed panel still has a notification lease', timeout=95)
+    with native_notification_fixture() as output:
+        closed = post('extensions/instructions', {'extension': 'devstack-tools', 'action': 'sync', 'project': project(LOCAL)['id']})
+        payload = {'id': 'op-' + closed['receipt'], 'category': 'project', 'kind': 'success'}
+        def delivered():
+            return payload in [json.loads(line) for line in output.read_text().splitlines()]
+        wait_for(delivered, 'collector failed to deliver a closed-panel result through the native launcher', timeout=45)
+        assert [json.loads(line) for line in output.read_text().splitlines()].count(payload) == 1
+        terminal(closed, 'Synchronizacja instrukcji zakończona', 'success', LOCAL)
+    page = context.new_page()
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    show_project(LOCAL)
 
     page.get_by_role('button', name='Włącz ciemny motyw').click()
     expect(page.locator('html')).to_have_class(re.compile('dark'))
@@ -441,7 +549,7 @@ def exercise(browser):
     expect(page.get_by_role('region', name='DevStack Tools')).to_have_count(0)
     page.goto(ORIGIN + EXTENSION)
     refresh()
-    expect(menu).to_have_count(0)
+    expect(page.get_by_role('navigation', name='Rozszerzenia')).to_have_count(0)
     expect(page.get_by_text('Rozszerzenie nie jest zainstalowane.')).to_be_visible(timeout=20000)
     wait_for(lambda: not (local / MAIL).is_symlink(), 'uninstall did not detach managed instructions')
     assert personal.read_text() == 'fixture from developer'
@@ -457,7 +565,8 @@ def exercise(browser):
 
 
 if __name__ == '__main__':
-    if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('DEVSTACK_E2E_ISOLATED') != '1':
+    if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('DEVSTACK_E2E_ISOLATED') != '1'
+            or 'microsoft' in Path('/proc/sys/kernel/osrelease').read_text().lower()):
         raise SystemExit('Only run against a disposable DevStack CI installation.')
     if TOOLS.exists() or any((PROJECTS / slug).exists() for slug in (LOCAL, PLAIN, CONTEXT)):
         raise SystemExit('Expected a clean extension and project fixture.')

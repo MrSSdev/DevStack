@@ -223,9 +223,13 @@ final class DevStackNotices
     }
     private static function publicRow(array $row): array
     {
-        return ['id'=>$row['id'],'category'=>$row['category'],'title'=>$row['title'],
+        $result = ['id'=>$row['id'],'category'=>$row['category'],'title'=>$row['title'],
             'description'=>$row['description'],'route'=>$row['route'],'kind'=>$row['kind'],
             'created'=>(int)$row['created'],'updated'=>(int)$row['updated'],'unread'=>(bool)$row['unread']];
+        if (preg_match('~^instruction:([a-f0-9]{32})$~D', $row['revision'], $match)) {
+            $result['receipt'] = $match[1];
+        }
+        return $result;
     }
 
     // Operation results are generated at the authenticated API boundary, not
@@ -240,6 +244,7 @@ final class DevStackNotices
         $description = $slug;
         $title = $ok ? $successTitle : $errorTitle;
         $kind = $ok ? 'success' : 'error';
+        $receipt = '';
         if ($key === '/api/projects' || $key === '/api/engines/:engine') {
             $isEngine = self::installerOperation($path,$body);
             $job = $result['job_id'] ?? null;
@@ -276,7 +281,17 @@ final class DevStackNotices
             if (is_string($extension) && preg_match('~^[a-z][a-z0-9-]{0,39}$~D', $extension)) {
                 $route = '/#/extensions/' . $extension;
             }
-            if ($ok) $kind = 'info';
+            if ($ok) {
+                $kind = 'info';
+                $receipt = self::client($result['receipt'] ?? null);
+                if ($receipt !== '') {
+                    $project = self::project($result['project_slug'] ?? null);
+                    if ($project !== '') {
+                        $route = '/#/project/' . $project;
+                        $description = self::clean($result['project_name'] ?? '', 70) ?: $project;
+                    }
+                }
+            }
         } elseif ($key === '/api/ca/wsl') {
             if ($body !== []) return null;
             $description=$ok?'Potwierdzono zaufanie do lokalnego CA DevStack.':'';
@@ -289,9 +304,11 @@ final class DevStackNotices
             if ($message!=='') $description .= ($description!==''?' · ':'') . $message;
         }
         if ($slug!=='' && $scope==='project') $route='/#/project/'.$slug;
-        return $this->atomic(function () use ($category,$title,$description,$route,$kind,$owner,$push) {
-            $id='op-'.bin2hex(random_bytes(16));
-            $this->insert($id,$category,$title,$description,$route,$kind,$owner,true,$push);
+        return $this->atomic(function () use ($category,$title,$description,$route,$kind,$owner,$push,$receipt) {
+            $id = 'op-' . ($receipt === '' ? bin2hex(random_bytes(16))
+                : substr(hash('sha256', 'instruction-accepted:' . $receipt), 0, 32));
+            $this->insert($id,$category,$title,$description,$route,$kind,$owner,true,$push,
+                $receipt === '' ? '' : 'instruction:' . $receipt);
             $this->prune();
             return $id;
         });
@@ -381,6 +398,95 @@ final class DevStackNotices
         });
     }
 
+    private function insertResult(string $id, int $stamp, string $category, string $title,
+        string $description, string $route, string $kind, string $revision = ''): bool
+    {
+        // Reuse the existing receipt tombstones for all terminal outcomes.
+        // The tombstone and the notice commit in the same SQLite transaction.
+        if ($this->execute('INSERT OR IGNORE INTO service_results_seen(id,stamp) VALUES(?,?)', [$id,$stamp])->rowCount() !== 1) {
+            return false;
+        }
+        $this->insert($id,$category,$title,$description,$route,$kind,'',false,true,$revision);
+        $this->execute('UPDATE notices SET created=?,updated=? WHERE id=?', [$stamp,$stamp,$id]);
+        return true;
+    }
+
+    private function pruneResults(int $now): void
+    {
+        $this->execute('DELETE FROM service_results_seen WHERE stamp<?', [$now-31*86400]);
+        $this->db->exec('DELETE FROM service_results_seen WHERE id IN
+            (SELECT id FROM service_results_seen ORDER BY stamp DESC,id DESC LIMIT -1 OFFSET 20000)');
+    }
+
+    public function observeInstructionResults(array $results): void
+    {
+        $this->atomic(function () use ($results) {
+            $now = time();
+            $labels = [
+                'done'=>'Gotowe', 'manual'=>'Pozostały dowiązania ręczne', 'conflict'=>'Konflikty',
+                'error'=>'Błędy', 'inactive'=>'Zarządzanie pozostaje wyłączone',
+                'unchanged'=>'Ustawienie lub migracja bez zmian', 'superseded'=>'Zastąpione nowszym zleceniem',
+                'removed'=>'Usunięte projekty', 'unavailable'=>'Wydanie niedostępne lub zmienione',
+                'expired'=>'Przekroczony czas oczekiwania',
+            ];
+            foreach (array_slice($results, 0, 64) as $result) {
+                if (!is_array($result)) continue;
+                $key = self::client($result['id'] ?? null);
+                $extension = $result['extension'] ?? null;
+                $slug = $result['slug'] ?? null;
+                $action = $result['action'] ?? null;
+                $enabled = $result['enabled'] ?? null;
+                $counts = $result['outcomes'] ?? null;
+                $stamp = $result['stamp'] ?? null;
+                if ($key === '' || !is_string($extension) || !preg_match('~^[a-z][a-z0-9-]{0,39}$~D',$extension) ||
+                    !is_string($slug) || ($slug !== '' && self::project($slug) === '') ||
+                    !in_array($action,['sync','set_automatic','migrate'],true) ||
+                    ($action === 'set_automatic' ? !is_bool($enabled) : $enabled !== null) ||
+                    ($action === 'migrate' && $slug === '') ||
+                    !is_array($counts) || array_diff_key($counts,$labels) ||
+                    array_filter($counts,static fn($count) => !is_int($count) || $count < 1 || $count > 1000000) ||
+                    ($slug !== '' && array_sum($counts) !== 1) ||
+                    !is_int($stamp) || $stamp < $now-30*86400 || $stamp > $now+5) continue;
+                $route = '/#/extensions/' . $extension;
+                if ($slug !== '') $route = isset($counts['removed']) ? '/#/projects' : '/#/project/' . $slug;
+                $description = $slug !== '' ? (self::clean($result['name'] ?? '',70) ?: $slug) : '';
+                $details = [];
+                foreach ($labels as $outcome => $label) {
+                    if (isset($counts[$outcome]) && $outcome !== 'done') {
+                        $details[] = $slug === '' ? $label . ' ' . $counts[$outcome] : $label;
+                    }
+                }
+                if ($slug === '' && isset($counts['done'])) array_unshift($details,'Gotowe ' . $counts['done']);
+                if ($details) $description .= ($description !== '' ? ' · ' : '') . implode(' · ', $details);
+
+                $kind = 'info';
+                if (array_intersect_key($counts, array_flip(['error','conflict','unavailable','expired']))) {
+                    $kind = 'error';
+                    $title = array_keys($counts) === ['conflict']
+                        ? 'Konflikt synchronizacji instrukcji' : 'Synchronizacja instrukcji zakończona z problemami';
+                } elseif ($counts === []) {
+                    $title = 'Brak projektów do synchronizacji';
+                } elseif (isset($counts['manual'])) {
+                    $title = 'Synchronizacja zakończona z ręcznymi dowiązaniami';
+                } elseif (isset($counts['removed']) || isset($counts['superseded'])) {
+                    $title = 'Zakończono obsługę zlecenia synchronizacji';
+                } elseif (isset($counts['inactive']) || isset($counts['unchanged'])) {
+                    $title = 'Sprawdzono konfigurację instrukcji';
+                } else {
+                    $kind = 'success';
+                    $title = match ($action) {
+                        'set_automatic' => $enabled ? 'Automatyczne instrukcje włączone' : 'Automatyczne instrukcje wyłączone',
+                        'migrate' => 'Migracja instrukcji zakończona',
+                        default => 'Synchronizacja instrukcji zakończona',
+                    };
+                }
+                $this->insertResult('op-'.$key,$stamp,'project',$title,$description,$route,$kind,'instruction:'.$key);
+            }
+            $this->pruneResults($now);
+            $this->prune();
+        });
+    }
+
     public function observeServices(array $services, array $results = []): void
     {
         $this->atomic(function () use ($services,$results) {
@@ -401,19 +507,16 @@ final class DevStackNotices
                     !in_array($state,['active','inactive','failed','activating','deactivating','reloading','refreshing','unknown'],true)||
                     !is_int($stamp)||$stamp<$now-30*86400||$stamp>$now+5) continue;
                 $id='service-'.$key;
-                if ($this->execute('INSERT OR IGNORE INTO service_results_seen(id,stamp) VALUES(?,?)',[$id,$stamp])->rowCount()!==1) continue;
                 // Defense in depth: even a malformed success receipt cannot
                 // present a stopped service as a successful start/restart.
                 $success=$outcome==='success'&&$state===($action==='stop'?'inactive':'active');
                 $title=$success?['start'=>'Usługa uruchomiona','restart'=>'Usługa uruchomiona ponownie','stop'=>'Usługa zatrzymana'][$action]:
                     'Nie potwierdzono wykonania polecenia usługi';
                 $description=self::clean($result['name']??$service,60).' — '.['start'=>'uruchomienie','restart'=>'restart','stop'=>'zatrzymanie'][$action];
-                $this->insert($id,'service',$title,$description,'/#/dashboard',$success?'success':'error');
-                $this->execute('UPDATE notices SET created=?,updated=? WHERE id=?',[$stamp,$stamp,$id]);
-                if ($stamp>=$now-120) $completed[$service]=$state;
+                if ($this->insertResult($id,$stamp,'service',$title,$description,'/#/dashboard',$success?'success':'error') &&
+                    $stamp >= $now-120) $completed[$service] = $state;
             }
-            $this->execute('DELETE FROM service_results_seen WHERE stamp<?',[$now-31*86400]);
-            $this->db->exec('DELETE FROM service_results_seen WHERE id IN (SELECT id FROM service_results_seen ORDER BY stamp DESC,id DESC LIMIT -1 OFFSET 20000)');
+            $this->pruneResults($now);
             $previous=json_decode($this->meta('service_states','{}'),true);
             $next=[];
             foreach (array_slice($services,0,24) as $service) {

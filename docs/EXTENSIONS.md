@@ -106,8 +106,26 @@ performed from the terminal is observed without restarting the panel.
 The project registry lock precedes any shared release locks. Publication
 uses the extension lock alone. A failed instruction operation is recorded
 for retry and never participates in the project's hosting transaction.
-Manual requests enter the same reconciliation path and the UI shows
-acceptance and then the actual outcome by project.
+The instruction POST endpoint returns an informational acknowledgement with an
+opaque `receipt` for `sync`, `set_automatic` and `migrate`. The daemon correlates
+each accepted operation with the targeted registration IDs and active release.
+It commits one terminal receipt together with the reconciled state, after the
+worker finishes. A global request summarizes the registrations present when
+accepted and waits for all of them across worker batches. An empty batch,
+unchanged settings, retained manual links, and work superseded or removed
+before reconciliation have explicit informational outcomes. Worker failures,
+unsafe or replaced directories, conflicts, unavailable releases and expired
+work do not produce success. A superseded or failed reconciliation does not
+roll back any preference that was already saved.
+
+The receipt queues are bounded to 64 pending operations and 64 terminal
+results, with a one-hour wait limit for unfinished work and a 30-day result
+retention limit. Uncommitted final writes are retried after restart. A migration
+needs evidence from the worker that it removed the recorded old link. If a
+restart loses that report and the old link is already gone, the result only
+describes the verified current configuration. Automatic audits and retries
+can update the project state without generating another notification for a
+settled operation. [Notifications and delivery](NOTIFICATIONS.md)
 
 ## Ownership and removal
 

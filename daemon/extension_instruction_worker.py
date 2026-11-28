@@ -181,16 +181,18 @@ def run_project(projects, root_mount, plan):
                 if info is not None:
                     observed[name] = 'manual' if actual_target == target else 'conflict'
             migration_failed = False
+            migrated = []
             if attach and migration and all(results.get(name) in {'linked', 'manual'} for name in plan['desired']):
                 for name, (receipt, target) in migration.items():
                     if remove_link(skills, name, receipt, target):
                         del legacy[name]
                         del legacy_receipts[name]
+                        migrated.append(name)
                     else:
                         migration_failed = True
             state = 'error' if migration_failed or 'error' in results.values() else 'complete'
             return {'state': state, 'identity': actual, 'links': results, 'legacy': legacy,
-                    'legacy_receipts': legacy_receipts, 'prepared': prepared, 'observed': observed}
+                    'legacy_receipts': legacy_receipts, 'prepared': prepared, 'observed': observed, 'migrated': migrated}
     except FileNotFoundError:
         return {'state': 'missing'}
     except OSError:
