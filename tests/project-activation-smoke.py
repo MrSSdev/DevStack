@@ -7,6 +7,7 @@ import secrets
 import socket
 import subprocess
 import time
+import traceback
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
@@ -36,6 +37,7 @@ BLADE = '''
 <html lang="en">
 <head>
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="session-cookie" content="{{ config('session.cookie') }}">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @fluxAppearance
     @livewireStyles
@@ -212,7 +214,7 @@ def mailpit(path='/messages', *, ids=None):
                       headers={'Content-Type': 'application/json'})
     with urlopen(request, timeout=5) as response:
         body = response.read()
-    return json.loads(body) if body else None
+    return json.loads(body) if ids is None else None
 
 
 def test_messages():
@@ -243,20 +245,25 @@ def browser_acceptance():
         page = browser.new_page()
         page.context.route(re.compile(r'^https?://(?!isolation-livewire\.test(?:/|$))'),
                            lambda route: route.abort())
-        assert page.goto(BASE).ok
+        home = page.goto(BASE)
+        assert home.ok, home.status
         responses = []
         page.on('response', lambda response: responses.append(response))
-        assert page.goto(BASE + '/isolation-proof').ok
+        fixture = page.goto(BASE + '/isolation-proof')
+        assert fixture.ok, fixture.status
         expect(page.get_by_role('heading', name='Isolation acceptance')).to_be_visible()
         with page.expect_response(lambda r: r.request.method == 'POST'
                                   and 'livewire' in urlparse(r.url).path) as update:
             page.get_by_role('button', name='Increment').click()
         assert update.value.ok, update.value.text()
         expect(page.locator('#isolation-count')).to_have_text('incremented-7')
-        assert any(cookie['name'].endswith('_session') for cookie in page.context.cookies())
-        assert any('/build/assets/' in response.url and response.ok for response in responses)
-        assert any('/flux/' in response.url and '.js' in urlparse(response.url).path
-                   and response.ok for response in responses)
+        session_cookie = page.locator('meta[name=session-cookie]').get_attribute('content')
+        assert session_cookie and any(cookie['name'] == session_cookie and cookie['httpOnly']
+                                      for cookie in page.context.cookies())
+        assets = [(urlparse(response.url).path, response.status) for response in responses]
+        assert any('/build/assets/' in path and status == 200 for path, status in assets), assets
+        assert any('/flux/' in path and path.endswith('.js') and status == 200
+                   for path, status in assets), assets
         token = page.locator('meta[name=csrf-token]').get_attribute('content')
         upload = page.request.post(BASE + '/isolation-upload',
             headers={'X-CSRF-TOKEN': token},
@@ -412,7 +419,7 @@ def main():
         # SMTP and service recovery are independent of the browser fixture.
         # Keep their results and still fail the workflow for a browser error.
         browser_error = exc
-        print('Browser acceptance failed:', exc, flush=True)
+        traceback.print_exc()
     else:
         print('PASS: Laravel, Livewire, Flux/Vite, session, upload and SQLite', flush=True)
     assert (PROJECT / '.env').read_bytes() == env
@@ -430,6 +437,7 @@ def main():
         ids = [item['ID'] for item in test_messages()]
         if ids:
             mailpit(ids=ids)
+            until(lambda: not test_messages())
     host_smtp = run('sudo', 'ss', '-Hlnpt', 'sport', '=', ':1025').stdout
     assert len(host_smtp.splitlines()) == 1 and '127.0.0.1:1025' in host_smtp and 'mailpit' in host_smtp
     run('sudo', 'systemctl', 'stop', 'devstack-mailpit.service')
