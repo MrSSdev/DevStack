@@ -314,6 +314,24 @@ class ManagerTests(unittest.TestCase):
                 self.assertEqual({item['id']: item for item in manager.completion_results()}[changed]['outcomes'],
                                  {'unavailable': 1})
 
+                release['state'] = 'active'
+                projects[keys[1]][1]['engine_status'] = 'configuring'
+                queued_at = 1000
+                with patch.object(instructions.time, 'time', return_value=queued_at):
+                    waiting = manager.operate({**local_action, 'project': keys[1]})['receipt']
+                    manager.reconcile(75)
+                    self.assertNotIn(waiting, {item['id'] for item in manager.completion_results()})
+                with patch.object(instructions.time, 'time', return_value=queued_at + instructions.OPERATION_TIMEOUT):
+                    manager.reconcile(78)
+                    self.assertEqual({item['id']: item for item in manager.completion_results()}[waiting]['outcomes'],
+                                     {'expired': 1})
+
+                projects.clear()
+                empty = manager.operate({'extension': 'devstack-tools', 'action': 'sync'})['receipt']
+                self.assertNotIn(empty, {item['id'] for item in manager.completion_results()})
+                manager.reconcile(81)
+                self.assertEqual({item['id']: item for item in manager.completion_results()}[empty]['outcomes'], {})
+
     def test_result_classifier_requires_evidence_from_worker(self):
         def outcome(action='sync', status='synced', migrated=(), manual=(), enabled=True, changed=True):
             return instructions.instruction_outcome(

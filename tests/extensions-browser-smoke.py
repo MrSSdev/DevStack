@@ -131,12 +131,14 @@ def exercise(browser):
             assert result['description'].startswith(slug), rows
         return result
 
-    def submit(click):
+    def submit(click, expected=None):
         with page.expect_response(lambda response: response.request.method == 'POST' and
                                   response.url.endswith('/api/extensions/instructions')) as submitted:
             click()
         response = submitted.value
         assert response.ok, response.text()
+        if expected is not None:
+            assert response.request.post_data_json == expected
         return response.json()['result']
 
     def settle_php():
@@ -256,9 +258,10 @@ def exercise(browser):
     expect(plain_card.get_by_text('Podłączono ręcznie', exact=True)).to_be_visible()
     page.screenshot(path=results / 'extensions-projects.png', full_page=True)
     page.once('dialog', lambda prompt: prompt.accept())
-    plain_card.get_by_role('button', name='Migruj ręczne dowiązanie').click()
+    migrated_global_view = submit(plain_card.get_by_role('button', name='Migruj ręczne dowiązanie').click)
     expect(page.get_by_text('Przyjęto synchronizację. Wynik pojawi się przy projektach.')).to_be_visible()
     wait_for(lambda: not legacy.is_symlink() and (plain / PLAYWRIGHT).is_symlink(), 'migration did not complete')
+    terminal(migrated_global_view, 'Migracja instrukcji zakończona', 'success', PLAIN)
     assert personal.read_text() == 'fixture from developer'
     project_mode = mail_card.get_by_role('switch')
     expect(project_mode).to_be_checked()
@@ -269,8 +272,9 @@ def exercise(browser):
     expect(project_mode).to_be_checked(timeout=15000)
     wait_for(lambda: (local / MAIL).is_symlink(), 'project re-enable did not attach skill')
     mail_inode = (local / MAIL).lstat().st_ino
-    page.get_by_role('button', name='Synchronizuj wszystkie projekty').click()
+    global_sync = submit(page.get_by_role('button', name='Synchronizuj wszystkie projekty').click)
     wait_for(lambda: project(LOCAL)['event'] == 'manual', 'manual retry did not complete')
+    assert terminal(global_sync, 'Synchronizacja instrukcji zakończona', 'success')['description'] == 'Gotowe 2'
     assert mail_inode == (local / MAIL).lstat().st_ino
     mail_card.get_by_role('link', name=LOCAL, exact=True).click()
     expect(page.get_by_role('region', name='DevStack Tools')).to_be_visible()
@@ -335,7 +339,8 @@ def exercise(browser):
     expect(local_switch).to_be_checked(timeout=15000)
     wait_for(lambda: (local / MAIL).is_symlink(), 'contextual enable did not attach the instruction')
     mail_inode = (local / MAIL).lstat().st_ino
-    sync_result = submit(card.get_by_role('button', name='Synchronizuj instrukcje').click)
+    sync_result = submit(card.get_by_role('button', name='Synchronizuj instrukcje').click,
+                         {'extension': 'devstack-tools', 'action': 'sync', 'project': original, 'card': 'tools'})
     terminal(on, 'Automatyczne instrukcje włączone', 'success', LOCAL)
     terminal(sync_result, 'Synchronizacja instrukcji zakończona', 'success', LOCAL)
     plain_project = show_project(PLAIN)
@@ -482,6 +487,35 @@ def exercise(browser):
     command('bash', str(SRC / 'rollback.sh'))
     expect(page.get_by_role('region', name='DevStack Tools')).to_be_visible(timeout=15000)
 
+    # Reload and wait for a genuine automatic audit. Neither can re-emit a
+    # previously collected receipt. Then close all panel pages for real WinRT collection.
+    page.reload()
+    checked_at = project(LOCAL)['last_sync']
+    wait_for(lambda: project(LOCAL)['last_sync'] != checked_at, 'periodic instruction audit did not run', timeout=50)
+    assert sum(item['id'] == off_result['id'] for item in journal()) == 1
+    page.wait_for_function('navigator.serviceWorker.controller !== null')
+    with page.expect_event('close'):
+        page.close(run_before_unload=True)
+
+    def no_present_clients():
+        code = ('echo (new PDO("sqlite:/var/lib/devstack-web/notifications.sqlite3"))'
+                '->query("SELECT COUNT(*) FROM clients WHERE expires > " . time())->fetchColumn();')
+        return subprocess.check_output(['sudo', '-u', 'devstackweb', '/usr/bin/php', '-r', code],
+                                       text=True, timeout=10).strip() == '0'
+    # Allow the ordinary 90-second lease to expire if teardown loses a beacon.
+    wait_for(no_present_clients, 'closed panel still has a notification lease', timeout=95)
+    with native_notification_fixture() as output:
+        closed = post('extensions/instructions', {'extension': 'devstack-tools', 'action': 'sync', 'project': project(LOCAL)['id']})
+        payload = {'id': 'op-' + closed['receipt'], 'category': 'project', 'kind': 'success'}
+        def delivered():
+            return payload in [json.loads(line) for line in output.read_text().splitlines()]
+        wait_for(delivered, 'collector failed to deliver a closed-panel result through the native launcher', timeout=45)
+        assert [json.loads(line) for line in output.read_text().splitlines()].count(payload) == 1
+        terminal(closed, 'Synchronizacja instrukcji zakończona', 'success', LOCAL)
+    page = context.new_page()
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    show_project(LOCAL)
+
     page.get_by_role('button', name='Włącz ciemny motyw').click()
     expect(page.locator('html')).to_have_class(re.compile('dark'))
     with browser.new_context(viewport={'width': 390, 'height': 820}, is_mobile=True, has_touch=True,
@@ -506,29 +540,6 @@ def exercise(browser):
         mobile_page.get_by_role('button', name='Zamknij podgląd').tap()
         mobile_page.get_by_role('button', name='Włącz jasny motyw').tap()
         expect(mobile_page.locator('html')).not_to_have_class(re.compile('dark'))
-
-    # Reload and wait for a genuine automatic audit. Neither can re-emit a
-    # previously collected receipt. Then close all panel pages for real WinRT collection.
-    page.reload()
-    checked_at = project(LOCAL)['last_sync']
-    wait_for(lambda: project(LOCAL)['last_sync'] != checked_at, 'periodic instruction audit did not run', timeout=50)
-    assert sum(item['id'] == off_result['id'] for item in journal()) == 1
-    page.goto('about:blank')
-    def no_present_clients():
-        code = ('echo (new PDO("sqlite:/var/lib/devstack-web/notifications.sqlite3"))'
-                '->query("SELECT COUNT(*) FROM clients WHERE expires > " . time())->fetchColumn();')
-        return subprocess.check_output(['sudo', '-u', 'devstackweb', '/usr/bin/php', '-r', code],
-                                       text=True, timeout=10).strip() == '0'
-    wait_for(no_present_clients, 'panel client did not leave', timeout=30)
-    with native_notification_fixture() as output:
-        closed = post('extensions/instructions', {'extension': 'devstack-tools', 'action': 'sync', 'project': project(LOCAL)['id']})
-        payload = {'id': 'op-' + closed['receipt'], 'category': 'project', 'kind': 'success'}
-        def delivered():
-            return payload in [json.loads(line) for line in output.read_text().splitlines()]
-        wait_for(delivered, 'collector failed to deliver a closed-panel result through the native launcher', timeout=45)
-        assert [json.loads(line) for line in output.read_text().splitlines()].count(payload) == 1
-        terminal(closed, 'Synchronizacja instrukcji zakończona', 'success', LOCAL)
-    show_project(LOCAL)
 
     command('bash', str(SRC / 'uninstall.sh'), '--confirm')
     expect(page.get_by_role('region', name='DevStack Tools')).to_have_count(0)

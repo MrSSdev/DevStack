@@ -424,8 +424,8 @@ final class DevStackNotices
             $now = time();
             $labels = [
                 'done'=>'Gotowe', 'manual'=>'Pozostały dowiązania ręczne', 'conflict'=>'Konflikty',
-                'error'=>'Błędy', 'inactive'=>'Automatyzacja wyłączona globalnie',
-                'unchanged'=>'Bez zmian ustawienia lub migracji', 'superseded'=>'Zastąpione nowszym zleceniem',
+                'error'=>'Błędy', 'inactive'=>'Zarządzanie pozostaje wyłączone',
+                'unchanged'=>'Ustawienie lub migracja bez zmian', 'superseded'=>'Zastąpione nowszym zleceniem',
                 'removed'=>'Usunięte projekty', 'unavailable'=>'Wydanie niedostępne lub zmienione',
                 'expired'=>'Przekroczony czas oczekiwania',
             ];
