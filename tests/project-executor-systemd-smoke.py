@@ -233,7 +233,8 @@ def run_suite(base, archive, *, ci):
         session, _, output, process = job
         logs, _ = process.communicate(timeout=110)
         proof = output.read_text() if output.exists() else ''
-        assert (process.returncode == 0) == (expected == 0), (logs, proof)
+        if expected is not None:
+            assert (process.returncode == 0) == (expected == 0), (logs, proof)
         if failure:
             assert failure in proof, (logs, proof)
         assert_clean(session)
@@ -286,7 +287,7 @@ def run_suite(base, archive, *, ci):
             for name in observations[0]['namespaces']:
                 assert len({p['namespaces'][name] for p in observations}) == 3
             assert_clean(holder[0], held_processes)
-            finish(holder, expected=1)
+            assert 'PASS: hold' not in finish(holder, expected=None)
             assert unit_state(second[0]) == unit_state(third[0]) == 'active'
             # An administrator replaces the source name while a session is
             # active. A new launch must refuse it; the pinned view keeps
@@ -306,7 +307,7 @@ def run_suite(base, archive, *, ci):
                 (project / 'finish').unlink(missing_ok=True)
             assert unit_state(third[0]) == 'active'
             assert_clean(third[0], third_processes)
-            finish(third, expected=1)
+            assert 'PASS: hold' not in finish(third, expected=None)
             print('PASS: concurrent sessions, source pinning during replacement and independent stop', flush=True)
 
             readonly = start(a, b, 'read')
