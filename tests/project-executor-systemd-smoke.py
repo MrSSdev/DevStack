@@ -147,9 +147,16 @@ def add_artisan(fixture, archive):
     with archive.open('rb') as stream:
         as_developer(developer, '/usr/bin/tar', '--no-same-owner', '--no-same-permissions',
                      '-xf', '-', '--', 'vendor', cwd=project, stdin=stream)
-    as_developer(developer, PYTHON, '-I', '-c',
-                 'import pathlib,sys; pathlib.Path("artisan").write_text(sys.argv[1])',
-                 ARTISAN, cwd=project)
+    # Exercise Laravel's CLI in the synthetic application. E2.0 has
+    # already exercised the original starter kit's optional providers.
+    as_developer(developer, PYTHON, '-I', '-c', '''
+import json, pathlib, sys
+pathlib.Path("artisan").write_text(sys.argv[1])
+manifest = pathlib.Path("composer.json")
+config = json.loads(manifest.read_text())
+config["extra"] = {"laravel": {"dont-discover": ["*"]}}
+manifest.write_text(json.dumps(config))
+''', ARTISAN, cwd=project)
 
 
 def wait_for(predicate, label, timeout=12):

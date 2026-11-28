@@ -15,7 +15,8 @@ ROOT = Path('/workspace')
 
 def call(*argv):
     result = subprocess.run(argv, capture_output=True, text=True, timeout=25)
-    assert not result.returncode, (argv, result.returncode, result.stderr[-1200:])
+    assert not result.returncode, (argv, result.returncode,
+                                   result.stdout[-1200:], result.stderr[-1200:])
     return result.stdout
 
 
@@ -144,7 +145,8 @@ def main():
         git_proof(changed=False)
         write_project()
         if (ROOT / 'artisan').exists():
-            assert 'Laravel Framework' in call('/usr/bin/php8.5', 'artisan', '--version')
+            assert 'Laravel Framework' in call('/usr/bin/php8.5', '-d', 'display_errors=stderr',
+                                               'artisan', '--version')
             print('PASS: actual Laravel Artisan and preinstalled vendor tree', flush=True)
     elif mode in ('hold', 'crash'):
         # A real orphan candidate with its own session and no stdio pipes.

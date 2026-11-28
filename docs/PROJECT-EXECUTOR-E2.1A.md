@@ -57,8 +57,9 @@ test entry points. [Issue #51](https://github.com/MrSSdev/DevStack/issues/51)
   local Composer package, and Laravel's `artisan --version` with preinstalled
   vendor dependencies when included. PHP uses read-only system timezone data
   and a fixed set of distribution extensions from a private INI directory.
-  No package download or remote Git
-  operation occurs in the executor.
+  The synthetic Artisan application uses Laravel's core providers. The
+  E2.0 regression exercises the Livewire starter kit's providers separately.
+  No package download or remote Git operation occurs in the executor.
 - The session unit name comes from the protected session record. Startup
   requires an empty systemd runtime directory and private mount propagation.
   Stop checks the exact transient unit identity. An independent cgroup,
