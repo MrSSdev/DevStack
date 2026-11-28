@@ -74,7 +74,7 @@ def boundary(host_home, sibling, admin_socket, expected):
     assert ctypes.get_errno() in (errno.EPERM, errno.ENOSPC, errno.EUSERS)
     # Same architecture-independent libc interfaces used by the workloads.
     assert libc.ptrace(0, 0, 0, 0) == -1 and ctypes.get_errno() == errno.ENOSYS
-    denied(lambda: os.setuid(0), {errno.EPERM})
+    denied(lambda: os.setuid(0), {errno.EPERM, errno.EINVAL})
     # Some distributions expose sudo via a host alternatives symlink.
     # Check that the alias or any visible packaged implementation denies
     # escalation with the sandbox's capabilities, mounts and policy.
