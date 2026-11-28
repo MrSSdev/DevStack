@@ -55,7 +55,8 @@ test entry points. [Issue #51](https://github.com/MrSSdev/DevStack/issues/51)
   The controlled tools exercise PHP CLI and SQLite, a locally installed
   npm dependency, Composer autoload for a local package with plugins and
   scripts disabled, and Laravel's `artisan --version` with preinstalled
-  vendor dependencies when included. No package download or remote Git
+  vendor dependencies when included. PHP loads a fixed set of distribution
+  extensions from a private INI directory. No package download or remote Git
   operation occurs in the executor.
 - The session unit name comes from the protected session record. Startup
   requires an empty systemd runtime directory and private mount propagation.
@@ -118,7 +119,8 @@ Bubblewrap package. Verify its version and provenance against the existing
 [backend procedure](BUBBLEWRAP-BACKPORT-EXPERIMENT.md). The local smoke
 does not configure APT or replace packages. Prepare distro binaries
 `python3`, `git`, `nodejs`, `npm`, `composer`, `php8.5-cli`,
-`php8.5-sqlite3`, `sudo`, and their normal system dependencies in the spare
+`php8.5-sqlite3`, `php8.5-mbstring`, `php8.5-xml`, `sudo`, and their
+normal system dependencies in the spare
 distribution. Store the checkout on the Linux filesystem.
 
 1. From PowerShell, confirm the target and WSL version with

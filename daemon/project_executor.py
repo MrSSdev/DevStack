@@ -51,6 +51,9 @@ from project_pilot import make_mounts_private, mapped_view, require_backend
 from project_runtime_identity import PROJECT_ID, verify_binding
 
 WORKSPACE = '/workspace'
+PHP_MODULES = ('pdo', 'pdo_sqlite', 'sqlite3', 'ctype', 'dom', 'fileinfo',
+               'iconv', 'mbstring', 'phar', 'posix', 'simplexml', 'tokenizer',
+               'xml', 'xmlreader', 'xmlwriter')
 TOOLS = frozenset({'/usr/bin/python3', '/usr/bin/php8.5', '/usr/bin/git',
                    '/usr/bin/node', '/usr/bin/npm', '/usr/bin/composer', '/usr/bin/sh'})
 # Run only trusted system Python before closing any FD Bubblewrap kept
@@ -245,8 +248,13 @@ def sandbox_argv(view_fd, git_fd, proof_fd, filter_fd, request):
             '--unshare-ipc', '--unshare-uts', '--disable-userns', '--cap-drop', 'ALL',
             '--die-with-parent', '--new-session', '--clearenv']
     for path in ('/usr/bin', '/usr/lib', '/usr/share/git-core', '/usr/share/nodejs',
-                 '/usr/share/php', '/etc/php/8.5/cli', '/etc/php/8.5/mods-available'):
+                 '/usr/share/php'):
         args += ['--ro-bind', path, path]
+    # Load only known distro modules for SQLite, Composer and Artisan.
+    # The host cli/conf.d can include unrelated services and extensions.
+    for index, name in enumerate(PHP_MODULES):
+        args += ['--ro-bind', f'/etc/php/8.5/mods-available/{name}.ini',
+                 f'/etc/php/devstack-cli/{index:02d}-{name}.ini']
     if Path('/usr/lib64').is_dir():
         args += ['--ro-bind', '/usr/lib64', '/usr/lib64', '--symlink', 'usr/lib64', '/lib64']
     if os.path.lexists('/usr/lib/wsl'):
@@ -272,6 +280,7 @@ def sandbox_argv(view_fd, git_fd, proof_fd, filter_fd, request):
         'GIT_TERMINAL_PROMPT': '0', 'COMPOSER_HOME': '/tmp/cache/composer',
         'COMPOSER_DISABLE_NETWORK': '1', 'npm_config_cache': '/tmp/cache/npm',
         'npm_config_offline': 'true', 'npm_config_update_notifier': 'false',
+        'PHP_INI_SCAN_DIR': '/etc/php/devstack-cli',
     }.items():
         args += ['--setenv', key, value]
     return [*args, '--', '/usr/bin/python3', '-I', '-S', '-c', EXEC_PAYLOAD, *request['argv']]
