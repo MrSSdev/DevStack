@@ -142,10 +142,20 @@ with socket.socket(socket.AF_UNIX) as s:
         raise SystemExit(10)
 raise SystemExit(0)
 '''
-    result = run(['/usr/bin/setpriv', '--reuid=' + str(account.pw_uid),
-                  '--regid=' + str(account.pw_gid), '--init-groups',
-                  '--no-new-privs', '--', '/usr/bin/python3', '-I', '-c',
-                  program, str(component.endpoint), '1' if cleanup else '0'])
+    args = ['/usr/bin/python3', '-I', '-c', program, str(component.endpoint),
+            '1' if cleanup else '0']
+    if component.registration is not None:
+        # The installed daemon is restricted by systemd. Have PID 1
+        # select the fixed socket peer before applying NoNewPrivileges,
+        # just as it does for the daemon's developer-identity workers.
+        result = run([SYSTEMD_RUN, '--quiet', '--wait', '--pipe', '--collect',
+                      '--uid=' + account.pw_name, '--service-type=exec',
+                      '--property=NoNewPrivileges=yes', '--property=RuntimeMaxSec=5s',
+                      *args])
+    else:
+        result = run(['/usr/bin/setpriv', '--reuid=' + str(account.pw_uid),
+                      '--regid=' + str(account.pw_gid), '--init-groups',
+                      '--no-new-privs', '--', *args])
     # Exit 10 is reserved for a verified missing/refused endpoint. Python
     # exceptions and setpriv failures (often exit 1) are not absence.
     if result.returncode not in (0, 10):

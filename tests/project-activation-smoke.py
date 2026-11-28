@@ -264,13 +264,22 @@ def browser_acceptance():
         assert any('/build/assets/' in path and status == 200 for path, status in assets), assets
         assert any('/flux/' in path and path.endswith('.js') and status == 200
                    for path, status in assets), assets
-        token = page.locator('meta[name=csrf-token]').get_attribute('content')
-        upload = page.request.post(BASE + '/isolation-upload',
-            headers={'X-CSRF-TOKEN': token},
-            multipart={'upload': {'name': 'proof.txt', 'mimeType': 'text/plain', 'buffer': b'upload-proof'}})
-        assert upload.ok, upload.text()
-        assert upload.json() == {'file': 'fixture.txt'}
-        assert page.request.get(BASE + '/storage/fixture.txt').body() == b'upload-proof'
+        upload = page.evaluate('''async () => {
+            const data = new FormData();
+            data.append('upload', new File(['upload-proof'], 'proof.txt', {type: 'text/plain'}));
+            const token = document.querySelector('meta[name=csrf-token]').content;
+            const response = await fetch('/isolation-upload', {
+                method: 'POST', headers: {'X-CSRF-TOKEN': token}, body: data,
+            });
+            return [response.status, await response.text()];
+        }''')
+        assert upload[0] == 200, upload
+        assert json.loads(upload[1]) == {'file': 'fixture.txt'}
+        asset = page.evaluate('''async () => {
+            const response = await fetch('/storage/fixture.txt');
+            return [response.status, await response.text()];
+        }''')
+        assert asset == [200, 'upload-proof'], asset
         browser.close()
     assert (PROJECT / 'storage/app/public/fixture.txt').stat().st_uid == os.getuid()
     run('php', '-r', '''
