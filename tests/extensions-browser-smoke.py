@@ -81,6 +81,7 @@ def exercise(browser):
     menu = page.get_by_role('navigation', name='Rozszerzenia')
     section_menu = page.get_by_role('navigation', name='Sekcje rozszerzenia')
 
+    assert detail()['state'] == 'absent', detail()
     page.goto(ORIGIN + EXTENSION)
     expect(page.get_by_text('Rozszerzenie nie jest zainstalowane.')).to_be_visible()
     expect(menu).to_have_count(0)
@@ -141,9 +142,13 @@ def exercise(browser):
     expect(page.get_by_text('Przyjęto synchronizację. Wynik pojawi się przy projektach.')).to_be_visible()
     wait_for(lambda: not legacy.is_symlink() and (plain / PLAYWRIGHT).is_symlink(), 'migration did not complete')
     assert personal.read_text() == 'fixture from developer'
-    mail_card.get_by_role('switch').click()
+    project_mode = mail_card.get_by_role('switch')
+    expect(project_mode).to_be_checked()
+    project_mode.click()
+    expect(project_mode).not_to_be_checked(timeout=15000)
     wait_for(lambda: not (local / MAIL).is_symlink(), 'project disable did not detach managed link')
-    mail_card.get_by_role('switch').click()
+    project_mode.click()
+    expect(project_mode).to_be_checked(timeout=15000)
     wait_for(lambda: (local / MAIL).is_symlink(), 'project re-enable did not attach skill')
     mail_inode = (local / MAIL).lstat().st_ino
     page.get_by_role('button', name='Synchronizuj wszystkie projekty').click()

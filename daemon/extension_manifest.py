@@ -241,16 +241,17 @@ def read_release(fd, extension_id):
 
 
 def discover_one(extension_id, base, marker):
-    try:
-        # Configuration paths are fixed direct children of protected /opt.
-        root = directory(base.parent)
+    # A missing installation remains absent even on a machine where the
+    # administrator has not prepared /opt for protected release publication.
+    with ExitStack() as paths:
         try:
+            root = os.open(base.parent, DIRECTORY)
+            paths.callback(os.close, root)
             parent = directory(base.name, root)
-        finally:
-            os.close(root)
-    except FileNotFoundError:
-        return {'state': 'absent'}
-    try:
+            paths.callback(os.close, parent)
+        except FileNotFoundError:
+            return {'state': 'absent'}
+        protected(os.fstat(root))
         with os.fdopen(open_file(parent, '.lock'), 'rb') as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -278,8 +279,6 @@ def discover_one(extension_id, base, marker):
                     os.close(release)
             finally:
                 os.close(released)
-    finally:
-        os.close(parent)
 
 
 @contextmanager

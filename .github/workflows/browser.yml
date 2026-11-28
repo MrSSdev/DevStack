@@ -55,6 +55,12 @@ jobs:
           # The product targets Ubuntu 26.04. The 24.04 CI image needs the
           # upstream PHP packaging repository for the same 8.5 FPM packages.
           sudo add-apt-repository -y ppa:ondrej/php
+          # Hosted runner images may relax /opt for preinstalled developer SDKs.
+          # The disposable product fixture uses standard protected /opt.
+          stat -c 'Fixture /opt: uid=%u mode=%a type=%F' /opt
+          test "$(stat -c %u /opt)" = 0
+          test ! -L /opt
+          sudo chmod go-w /opt
           mkdir -p "$HOME/projects"
           printf '2\nDISABLE\n' | sudo bash scripts/install.sh
           sudo bash scripts/install-mailpit.sh

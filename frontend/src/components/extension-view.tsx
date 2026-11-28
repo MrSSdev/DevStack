@@ -47,6 +47,11 @@ const statuses: Record<string, string> = {
   unsafe_directory: 'Nie można bezpiecznie otworzyć katalogu', directory_changed: 'Katalog projektu został zmieniony',
   missing: 'Brak katalogu projektu', linked: 'Zarządzane', detached: 'Odłączone',
 }
+const serviceStates: Record<string, string> = {
+  active: 'Usługa działa', inactive: 'Usługa zatrzymana', failed: 'Błąd usługi',
+  activating: 'Usługa uruchamia się', deactivating: 'Usługa zatrzymuje się',
+  reloading: 'Trwa odświeżanie usługi', unknown: 'Stan usługi niedostępny',
+}
 const events: Record<string, string> = {
   startup: 'Uruchomienie DevStack', project_created: 'Rejestracja projektu', framework_ready: 'Gotowy framework',
   project_changed: 'Zmiana konfiguracji projektu', project_removed: 'Usunięcie projektu',
@@ -83,7 +88,9 @@ function Overview({ extension, copy }: { extension: ActiveExtension; copy: (text
         <CardContent className="space-y-3 text-sm">
           <div className="flex flex-wrap gap-2"><Badge>{tool.installed ? 'Zainstalowano' : 'Brak plików'}</Badge>
             <Badge>{tool.ready ? 'Gotowe' : tool.service_state === 'not-installed' ? 'Brak obsługiwanej usługi' : 'Niegotowe'}</Badge></div>
-          <p className="text-muted-foreground">{tool.dependencies.join(' · ')}</p>
+          <p className="text-muted-foreground">{tool.dependencies.join(' · ')}
+            {tool.service_state && serviceStates[tool.service_state] ? ' · ' + serviceStates[tool.service_state] : ''}
+          </p>
           <code className="block break-all rounded-md bg-secondary p-2">{tool.example}</code>
           <div className="flex flex-wrap items-center gap-3">
             <a className="inline-flex items-center gap-1 rounded-sm underline focus-visible:outline-2 focus-visible:outline-ring" href={tool.documentation} target="_blank" rel="noreferrer">Dokumentacja <ExternalLink className="size-3" /></a>

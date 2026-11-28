@@ -40,7 +40,7 @@ def installed_service(service):
             return False
         fd = os.open(MAILPIT_VERSION, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         with os.fdopen(fd, 'rb') as version:
-            return stat.S_ISREG(os.fstat(version.fileno()).st_mode) and version.read(64).strip() == b'v1.34.0'
+            return stat.S_ISREG(os.fstat(version.fileno()).st_mode) and version.read(64) == b'v1.34.0\n'
     except OSError:
         return False
 
