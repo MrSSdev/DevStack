@@ -11,9 +11,9 @@ owner="$SUDO_USER"
 [[ "$(id -u "$owner")" == "$SUDO_UID" ]] || die 'Invalid invoking user.'
 home="$(getent passwd "$owner" | cut -d: -f6)"
 action="${1:-}"
-[[ $action == publish || $action == remove ]] || die 'Unknown operation.'
+[[ $action == publish || $action == remove || $action == rollback ]] || die 'Unknown operation.'
 [[ $action != publish || $# -eq 3 ]] || die 'Expected a stage and Node executable.'
-[[ $action != remove || $# -eq 1 ]] || die 'Unexpected arguments.'
+[[ $action == publish || $# -eq 1 ]] || die 'Unexpected arguments.'
 # Validate the candidate before creating any installation directories.
 if [[ $action == publish ]]; then
   stage="$2"
@@ -30,6 +30,7 @@ if [[ $action == publish ]]; then
 fi
 if [[ ! -e $base && ! -L $base ]]; then
   if [[ $action == remove ]]; then echo 'DevStack Tools is not installed.'; exit 0; fi
+  [[ $action == publish ]] || die 'No installed release to roll back.'
   mkdir -m 0755 -- "$base"
   printf '%s\n' 'devstack-tools-v1' > "$base/.managed"
   mkdir -m 0755 -- "$base/releases"
@@ -43,13 +44,20 @@ fi
   die 'Refusing to modify an unmanaged or unsafe /opt/devstack-tools.'
 # Shared by the launchers. Never kill a running job to replace its tools.
 exec 9<"$base/.lock"
-flock -xn 9 || die 'Tools are in use. Close active tests and CLI sessions first.'
+flock -x -w 2 9 || die 'Tools are in use. Close active tests and CLI sessions first.'
 previous=''
 if [[ -e $base/current || -L $base/current ]]; then
   [[ -L $base/current ]] || die 'current must be a managed symlink.'
   previous="$(readlink -f -- "$base/current")"
   [[ $previous =~ ^/opt/devstack-tools/releases/release-[a-zA-Z0-9]{8}$ && -d $previous && ! -L $previous ]] ||
     die 'Unsafe current release.'
+fi
+retained=''
+if [[ -e $base/previous || -L $base/previous ]]; then
+  [[ -L $base/previous ]] || die 'previous must be a managed symlink.'
+  retained="$(readlink -f -- "$base/previous")"
+  [[ $retained =~ ^/opt/devstack-tools/releases/release-[a-zA-Z0-9]{8}$ && -d $retained && ! -L $retained &&
+     "$(stat -c %u:%a -- "$retained")" == 0:755 ]] || die 'Unsafe rollback release.'
 fi
 for name in bin playwright browsers skills; do
   if [[ -e $base/$name || -L $base/$name ]]; then
@@ -78,12 +86,58 @@ if [[ $action == remove ]]; then
   echo 'DevStack Tools removed; project files, user data and OS packages were not changed.'
   exit 0
 fi
+point_release() {
+  local alias="$1" release="$2" link
+  # A root-only temporary directory keeps pointer replacement atomic.
+  link="$(mktemp -d "$base/.activate-XXXXXXXX")"
+  ln -s "releases/${release##*/}" "$link/link"
+  mv -Tf -- "$link/link" "$base/$alias"
+  rmdir -- "$link"
+}
+check_manifest() {
+  local release="$1" validator=/opt/devstack/daemon/extension_manifest.py
+  if [[ -f $validator && ! -L $validator && "$(stat -c %u:%a -- "$validator")" == 0:644 ]]; then
+    /usr/bin/python3 -IB "$validator" devstack-tools "$release" || return 1
+  fi
+  # The standalone installation checks the bundle and installed versions
+  # without importing code from the staged candidate as root.
+  /usr/bin/python3 -I - "$release" <<'PYTHON'
+import json, pathlib, sys
+
+base = pathlib.Path(sys.argv[1])
+
+def load(part):
+    with (base / part).open('rb') as f:
+        return json.loads(f.read(32769))
+
+manifest = load('manifest.json')
+if manifest['id'] != 'devstack-tools' or manifest['contract'] != 1 or manifest['core_contract'] != 1:
+    sys.exit('Unsupported Tools manifest contract.')
+if manifest['version'] != load('playwright/package.json')['version']:
+    sys.exit('Tools version mismatch.')
+tools = {tool['id']: tool['version'] for tool in manifest['tools']}
+for name, package in (('playwright-test', '@playwright/test'), ('playwright-cli', 'playwright')):
+    if tools[name] != load('playwright/node_modules/' + package + '/package.json')['version']:
+        sys.exit('Playwright version mismatch.')
+print(tools['devstack-mail'])
+PYTHON
+}
+if [[ $action == rollback ]]; then
+  [[ -n $previous && -n $retained && $previous != "$retained" ]] ||
+    die 'No previous verified release is available.'
+  if [[ -f $retained/manifest.json ]]; then
+    check_manifest "$retained" >/dev/null
+  fi
+  point_release current "$retained"
+  point_release previous "$previous"
+  echo "Activated $retained"
+  exit 0
+fi
 incoming="$(mktemp -d "$base/releases/release-XXXXXXXX")"
-next=''
-committed=false
 cleanup() {
-  [[ -z $next ]] || rm -f -- "$next"
-  if ! $committed; then rm -rf --one-file-system -- "$incoming"; fi
+  if [[ "$(readlink -f -- "$base/current")" != "$incoming" ]]; then
+    rm -rf --one-file-system -- "$incoming"
+  fi
 }
 trap cleanup EXIT
 # Preserve executable bits (GNU cp --no-preserve=all also drops them), but
@@ -102,22 +156,25 @@ find -P "$incoming" -type d -exec chmod 0755 {} +
   die 'Release ownership is not root.'
 [[ -d $incoming/mail && ! -L $incoming/mail && -x $incoming/bin/devstack-mail ]] ||
   die 'Invalid DevStack Mail installation.'
-for directory in skills skills/devstack-tools skills/devstack-tools/references; do
+for directory in skills skills/devstack-tools skills/devstack-tools/references skills/devstack-mail skills/devstack-playwright; do
   [[ -d $incoming/$directory && ! -L $incoming/$directory ]] ||
     die "Missing or unsafe skill directory: $directory"
 done
-for file in BUILD smoke.cjs bin/playwright bin/playwright-cli bin/devstack-mail \
+for file in BUILD manifest.json smoke.cjs bin/playwright bin/playwright-cli bin/devstack-mail \
   mail/cli.py mail/contract.py mail/mailpit.py mail/message.py playwright/package.json \
   skills/devstack-tools/SKILL.md skills/devstack-tools/references/mail.md \
+  skills/devstack-mail/SKILL.md skills/devstack-playwright/SKILL.md \
   playwright/package-lock.json playwright/node_modules/@playwright/test/cli.js; do
   [[ -f $incoming/$file && ! -L $incoming/$file ]] || die "Missing release file: $file"
 done
 [[ "$(cat "$incoming/BUILD")" =~ ^[0-9a-f]{64}$ ]] || die 'Invalid build identifier.'
 # Verify the relocated Python entry point and its imports without contacting
 # Mailpit. The optional mail service need not be installed or started.
+mail_version="$(check_manifest "$incoming")"
+[[ $mail_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Invalid declared DevStack Mail version.'
 runuser -u "$owner" -- env -i HOME="$home" PATH=/usr/bin:/bin \
   /usr/bin/python3 -IB "$incoming/mail/cli.py" --version |
-  grep -Ex 'devstack-mail [0-9]+\.[0-9]+\.[0-9]+'
+  grep -Fx "devstack-mail $mail_version"
 # Smoke the relocated candidate as the developer, not root. Preserve the old
 # active symlink unless this browser actually starts and closes successfully.
 runuser -u "$owner" -- env -i HOME="$home" PATH=/usr/local/bin:/usr/bin:/bin \
@@ -126,15 +183,12 @@ runuser -u "$owner" -- env -i HOME="$home" PATH=/usr/local/bin:/usr/bin:/bin \
 for name in bin playwright browsers skills; do
   if [[ ! -L $base/$name ]]; then ln -s "current/$name" "$base/$name"; fi
 done
-# Atomic activation on the same filesystem. The lock protects launchers.
-next="$base/.current-${incoming##*/}"
-ln -s "releases/${incoming##*/}" "$next"
-mv -Tf -- "$next" "$base/current"
-committed=true
-# No permanent duplicate browser copies. Only remove the previously managed
-# release, after activation; no project data is stored in either release.
-if [[ -n $previous && $previous != $incoming ]]; then
-  rm -rf --one-file-system -- "$previous" ||
-    echo "Warning: old release remains at $previous" >&2
+# Only a validated candidate reaches the active pointer. Keep one known-good
+# previous release so the terminal rollback can also roll back the catalogue.
+if [[ -n $previous ]]; then point_release previous "$previous"; fi
+point_release current "$incoming"
+if [[ -n $retained && $retained != "$previous" && $retained != "$incoming" ]]; then
+  rm -rf --one-file-system -- "$retained" ||
+    echo "Warning: old release remains at $retained" >&2
 fi
 echo "Activated $incoming"

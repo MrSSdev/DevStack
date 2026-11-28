@@ -103,6 +103,24 @@ access requires per-operation authorization tied to a trusted project
 registration and the agent session. See [DevStack Tools](extensions/devstack-tools/README.md)
 and the [AI integration plan](docs/PROJECT-ISOLATION-AI.md).
 
+### Installed extensions and project instructions
+
+Core discovers extensions only at approved locations and reads the active,
+root-owned release with bounded, non-following reads and a shared release
+lock. A manifest selects known schema components, data-only text and typed
+operations. The panel shows instruction Markdown as text and offers terminal
+commands only for copying. Authentication, CSRF, and the existing notification
+journal apply to the instruction controls. Installation and rollback stay
+with the trusted terminal publisher.
+
+Project writes use a restricted worker running as the configured developer.
+It checks descriptor-relative directories and recorded link identities.
+User-owned skills, existing manual links and AGENTS.md are outside managed
+file ownership. A user may explicitly migrate a verified legacy link.
+Declaring or installing an instruction confers no permission to use a tool.
+Do not expose the privileged socket, administrator panel session, direct
+Mailpit transport, or shared DevStack Mail command to managed isolated agents.
+
 ### Notification journal and PWA
 
 The authenticated, CSRF-protected notification API stores bounded events

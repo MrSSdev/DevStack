@@ -1,9 +1,8 @@
-# Project isolation and AI integration (design, not implemented)
+# Project isolation and AI integration
 
-This document defines the security requirements for future project isolation
-and AI configuration management. It does not grant access or describe an
-available sandbox. Existing installations remain trusted local development
-environments until the new boundary is implemented and verified.
+DevStack supports an opt-in isolated application runtime and a trusted
+developer instruction catalogue. This document also records design
+requirements for future managed agent sessions.
 
 ## Existing boundary
 
@@ -51,7 +50,7 @@ mechanism must not be bypassable by the native agent or its child processes.
   automatically controlled by the panel.
 - Prefer lightweight native enforcement when sufficient; evaluate stronger
   isolation based on concrete threat and test results. Bubblewrap is the selected candidate for isolated Linux tool execution;
-  its production policy and the project runtime identity are not implemented.
+  managed agent execution requires a separate production policy and identity.
 
 ## Runtime capability checks
 
@@ -950,3 +949,40 @@ mail view, including the usual Windows notification if enabled. Restart
 the isolated runtime, then verify recovery after the next normal WSL boot.
 Repeat the application check after deactivation if you want to restore
 ordinary routing.
+
+
+## ASUS workstation acceptance reported by the maintainer
+
+On ASUS ROG Flow Z13 with Ubuntu 26.04 on WSL2 the maintainer reported passing:
+
+- Bubblewrap 0.13.1 and ID-mapped mounts.
+- Isolated PHP-FPM and Nginx instances, including projects running concurrently.
+- HTTPS, NSS trust, Chromium and Playwright.
+- Laravel 13 with Livewire 4, Flux, built Vite assets and SQLite.
+- DevStack Mail and address verification, plus delivery of password-reset mail.
+- Mailpit and Windows notifications.
+- Fail-closed routing after stopping an isolated project.
+- Runtime restart and persistent data.
+- Deactivating and reactivating isolation.
+- Removing an isolated registration while preserving the source tree and SQLite.
+
+Open acceptance items are managed agent isolation, a full security audit,
+MariaDB and Redis across the isolation boundary, live Vite HMR, and automatic
+restoration of isolated runtimes after a full WSL restart.
+
+## Instruction catalogue and managed agent sessions
+
+The [extension system](EXTENSIONS.md) supplies instruction sources, declared
+audience, applicability rules and an Agent Skills adapter for trusted
+developers. It covers a local Laravel Playwright registration and mail
+verification workflow with unique recipients, exact origin and path checks,
+and preservation of the original signed URL. Instruction distribution and
+tool authorization are separate responsibilities.
+
+A future broker must authenticate project registration and agent session
+identity and enforce access for each requested operation. Managed sessions
+will receive only instructions matching the grants the runtime actually
+enforces. Shared Mailpit/DevStack Mail access remains unavailable until
+there is a broker. A project label, origin, recipient or discovered skill
+cannot substitute for authorization. Agent installation, native clients
+such as Codex and Qwen, and sandbox-specific CA trust remain future work.

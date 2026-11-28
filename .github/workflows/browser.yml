@@ -17,6 +17,8 @@ on:
       - 'scripts/notifications-worker.php'
       - 'scripts/install-mailpit.sh'
       - 'tests/browser-smoke.py'
+      - 'tests/extensions-browser-smoke.py'
+      - 'extensions/devstack-tools/**'
       - 'tests/windows-notification-systemd-smoke.py'
       - '.github/workflows/browser.yml'
   workflow_dispatch:
@@ -32,7 +34,7 @@ jobs:
   browser:
     name: Installed stack, Chromium, themes and SMTP
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,6 +106,10 @@ jobs:
           python3 -m venv /tmp/devstack-browser-venv
           /tmp/devstack-browser-venv/bin/pip install playwright==1.60.0
           /tmp/devstack-browser-venv/bin/python -m playwright install --with-deps chromium
+      - name: Verify declarative Tools UI and instruction lifecycle on the installed stack
+        env:
+          DEVSTACK_E2E_ISOLATED: '1'
+        run: /tmp/devstack-browser-venv/bin/python tests/extensions-browser-smoke.py
       - name: Exercise actual HTTPS, PHP, helper, services and Mailpit
         env:
           DEVSTACK_E2E_ISOLATED: '1'

@@ -48,7 +48,7 @@ For existing installations, follow the [update guide](docs/UPGRADING.md).
 
 ## Optional DevStack Tools
 
-[DevStack Tools](extensions/devstack-tools/README.md) provides a shared Playwright Test and agent CLI installation with one managed Chromium browser set. Install, update or remove this extension separately; it is not required by the DevStack core and does not install agents or change project permissions.
+[DevStack Tools](extensions/devstack-tools/README.md) provides shared Playwright Test, Playwright CLI, and DevStack Mail. Install, update, roll back, or remove it from the Ubuntu terminal. The optional Tools view shows active versions, instruction previews, project links, and automations. DevStack can attach applicable instructions to registered projects and keep their content current from the active release. See the [extension contract](docs/EXTENSIONS.md) for publishing and ownership details.
 
 ## Windows widgets
 

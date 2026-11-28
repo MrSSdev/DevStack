@@ -100,8 +100,8 @@ cp "$stage/smoke-original.cjs" "$stage/payload/smoke.cjs"
 printf '\nUpdated skill fixture.\n' >> "$stage/payload/$skill_ref"
 sudo -- /bin/bash "$src/publish.sh" publish "$stage" "$node_bin"
 second="$(readlink -f "$base/current")"
-[[ $second != "$first" && ! -e $first ]]
-[[ "$(find "$base/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]]
+[[ $second != "$first" && -d $first ]]
+[[ "$(find "$base/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ]]
 "$base/bin/devstack-mail" --version | grep -Fx 'devstack-mail 1.0.0'
 [[ "$(readlink -f "$project_skill/SKILL.md")" == "$second/skills/devstack-tools/SKILL.md" ]]
 grep -Fx 'Updated skill fixture.' "$project_skill/references/mail.md"
@@ -110,6 +110,13 @@ new_project_skill="$work/new-project/.agents/skills/devstack-tools"
 ln -sT "$base/skills/devstack-tools" "$new_project_skill"
 [[ "$(readlink -f "$new_project_skill/SKILL.md")" == "$second/skills/devstack-tools/SKILL.md" ]]
 cmp "$project_skill/references/mail.md" "$new_project_skill/references/mail.md"
+: Retain exactly one prior verified release and switch both directions.
+bash "$src/rollback.sh"
+[[ "$(readlink -f "$base/current")" == "$first" ]]
+! grep -qFx 'Updated skill fixture.' "$project_skill/references/mail.md"
+bash "$src/rollback.sh"
+[[ "$(readlink -f "$base/current")" == "$second" ]]
+grep -qFx 'Updated skill fixture.' "$project_skill/references/mail.md"
 # The exact npm registry lock, with integrity, is retained by the install.
 cat "$second/playwright/package-lock.json"
 cd "$src"

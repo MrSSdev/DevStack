@@ -34,6 +34,7 @@ final class DevStackNotices
         '/api/services/control' => ['service', '/#/dashboard', 'Polecenie usługi przyjęte', 'Sterowanie usługą', true, 'none', false],
         '/api/services/autostart' => ['settings', '/#/dashboard', 'Zapisano autostart usługi', 'Zapis autostartu usługi', false, 'none', false],
         '/api/ca/wsl' => ['settings', '/#/settings', 'Certyfikat CA w WSL', 'Kopiowanie certyfikatu CA do WSL', false, 'none', false],
+        '/api/extensions/instructions' => ['project', '/#/projects', 'Przyjęto synchronizację instrukcji', 'Synchronizacja instrukcji', false, 'none', false],
         '/api/preferences' => ['settings', '/#/settings', 'Zapisano ustawienia', 'Zapis ustawień', false, 'none', false],
         '/api/widget/services' => ['settings', '/#/settings', 'Zapisano ustawienia', 'Zapis ustawień', false, 'none', false],
         '/api/mail/delete' => ['mail', '/#/mail', 'Usunięto wiadomości', 'Usuwanie wiadomości', false, 'none', false],
@@ -270,6 +271,12 @@ final class DevStackNotices
             $enabled = $body['enabled'] ?? null;
             if (!is_string($service) || !preg_match('~^[a-z][a-z0-9-]{0,31}$~D',$service) || !is_bool($enabled)) return null;
             $description=$service . ' — ' . ($enabled?'włączenie':'wyłączenie');
+        } elseif ($key === '/api/extensions/instructions') {
+            $extension = $body['extension'] ?? null;
+            if (is_string($extension) && preg_match('~^[a-z][a-z0-9-]{0,39}$~D', $extension)) {
+                $route = '/#/extensions/' . $extension;
+            }
+            if ($ok) $kind = 'info';
         } elseif ($key === '/api/ca/wsl') {
             if ($body !== []) return null;
             $description=$ok?'Potwierdzono zaufanie do lokalnego CA DevStack.':'';

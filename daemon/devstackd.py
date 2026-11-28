@@ -2028,7 +2028,46 @@ def show_windows_notification(data: dict[str, Any]) -> dict[str, Any]:
                           file=sys.stderr, flush=True)
 
 
-OPS = {'notification_snapshot': notification_snapshot, 'show_windows_notification': show_windows_notification,
+_instruction_manager = None
+
+
+def instruction_manager():
+    global _instruction_manager
+    if _instruction_manager is None:
+        from extension_instructions import Manager
+
+        _instruction_manager = Manager(sys.modules[__name__])
+    return _instruction_manager
+
+
+def extension_navigation(data):
+    return instruction_manager().navigation(data)
+
+
+def extension_detail(data):
+    return instruction_manager().detail(data)
+
+
+def extension_preview(data):
+    return instruction_manager().preview(data)
+
+
+def extension_projects(data):
+    return instruction_manager().projects(data)
+
+
+def extension_summary(data):
+    return instruction_manager().summary(data)
+
+
+def extension_operation(data):
+    return instruction_manager().operate(data)
+
+
+OPS = {'extension_navigation': extension_navigation, 'extension_detail': extension_detail,
+       'extension_preview': extension_preview, 'extension_projects': extension_projects,
+       'extension_operation': extension_operation, 'extension_summary': extension_summary,
+       'notification_snapshot': notification_snapshot, 'show_windows_notification': show_windows_notification,
        'status': status, 'service_status': managed_service_status, 'create': create, 'reveal': reveal,
        'engine_tool_status': engine_tool_status, 'engine_tool_action': engine_tool_action,
        'test_project_database': test_project_database, 'delete_project': delete_project,
@@ -2053,7 +2092,7 @@ def handle(raw: bytes, *, serialize=False) -> bytes:
         if operation not in OPS:
             raise InputError('Nieobslugiwana operacja.')
         lock = nullcontext()
-        if serialize and operation in PROJECT_WRITERS | {'service_control'}:
+        if serialize and operation in PROJECT_WRITERS | {'service_control', 'extension_operation'}:
             from project_pilot import registry_lock
 
             lock = registry_lock()
@@ -2061,6 +2100,8 @@ def handle(raw: bytes, *, serialize=False) -> bytes:
             if operation in PROJECT_WRITERS and managed_services.action_pending():
                 raise InputError('Poczekaj na zakonczenie operacji uslugi.')
             response = {'ok': True, 'result': OPS[operation](request['data'])}
+            if _instruction_manager is not None and operation in PROJECT_WRITERS:
+                _instruction_manager.dirty = True
     except (InputError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         response = {'ok': False, 'error': str(exc)[:1200]}
     except Exception:
@@ -2092,11 +2133,14 @@ def serve() -> None:
     # This does not run while Ubuntu is stopped and creates no Windows listener.
     request_windows_hosts_sync()
     print('DevStack local helper listening', flush=True)
+    manager = instruction_manager()
     while True:
         if engine_busy():
             with registry_lock():
                 poll_engine_results()
-        server.settimeout(1 if engine_busy() else None)
+            manager.dirty = True
+        manager.tick()
+        server.settimeout(1 if engine_busy() else 3)
         try:
             conn, _ = server.accept()
         except socket.timeout:

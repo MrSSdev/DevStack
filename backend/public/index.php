@@ -138,6 +138,35 @@ try {
         session_write_close();
         $respond(200, ['ok' => true, 'result' => devstack_rpc('service_status', [])]);
     }
+    if ($method === 'GET' && preg_match('~^/api/extensions/project-summary/([a-z][a-z0-9-]{1,39})$~D', $path, $match)) {
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('extension_summary', ['slug' => $match[1]])]);
+    }
+    if ($method === 'GET' && $path === '/api/extensions') {
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('extension_navigation', [])]);
+    }
+    if ($method === 'GET' && preg_match('~^/api/extensions/([a-z][a-z0-9-]{0,39})(?:/(projects|instructions)(?:/([a-z][a-z0-9-]{0,39}))?)?$~D', $path, $match)) {
+        $data = ['extension' => $match[1]];
+        $resource = $match[2] ?? '';
+        if ($resource === 'instructions' && isset($match[3])) {
+            $data['instruction'] = $match[3];
+            $operation = 'extension_preview';
+        } elseif ($resource === 'projects' && !isset($match[3])) {
+            $offset = $_GET['offset'] ?? '0';
+            if (!is_string($offset) || !preg_match('~^[0-9]{1,6}$~D', $offset)) {
+                throw new InvalidArgumentException('Nieprawidłowa strona projektów.');
+            }
+            $data['offset'] = (int) $offset;
+            $operation = 'extension_projects';
+        } elseif ($resource === '') {
+            $operation = 'extension_detail';
+        } else {
+            throw new InvalidArgumentException('Nieznany zasób rozszerzenia.');
+        }
+        $respond(200, ['ok' => true, 'result' => devstack_rpc($operation, $data)]);
+    }
+    if ($method === 'POST' && $path === '/api/extensions/instructions') {
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('extension_operation', $body)]);
+    }
     if ($method === 'GET' && $path === '/api/state') {
         $state=devstack_rpc('status', []);
         try {

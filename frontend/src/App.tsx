@@ -22,15 +22,19 @@ import { MailInbox } from '@/components/mail-inbox'
 import { NotificationCenter, NotificationSettings, useNotificationCenter } from '@/components/notification-center'
 import { isNoticeRoute, notificationClient, notificationRouteHash, readNoticeOnClose, renewNotificationClient } from '@/lib/notification-client'
 import { PageHeader } from '@/components/page-header'
+import { ExtensionIcon, ExtensionView, ProjectInstructionSummary, type ExtensionNav } from '@/components/extension-view'
 import { ManagedServices, WidgetServiceSettings, type ManagedService } from '@/components/managed-services'
 
-type View = 'dashboard' | 'projects' | 'new' | 'project' | 'mail' | 'settings'
+type BuiltinView = 'dashboard' | 'projects' | 'new' | 'project' | 'mail' | 'settings'
+type View = BuiltinView | `extensions/${string}`
 const settingsTabs=[{id:'environment',label:'Środowisko'},{id:'installers',label:'Instalatory'},{id:'windows',label:'Windows'},{id:'widgets',label:'Widżety'},{id:'notifications',label:'Powiadomienia'},{id:'security',label:'Bezpieczeństwo'}] as const
 type SettingsTab=typeof settingsTabs[number]['id']
 
 // The native Windows Widgets link to /#/projects and /#/new. Keep this
 // routing entirely client-side: no new server endpoints or auth bypass.
 function viewFromHash(): View {
+  const extension = notificationRouteHash().match(/^#\/extensions\/([a-z][a-z0-9-]{0,39})$/)?.[1]
+  if(extension)return `extensions/${extension}`
   if(/^#\/mail\/[A-Za-z0-9]{22}$/.test(notificationRouteHash()))return 'mail'
   if(/^#\/project\/[a-z][a-z0-9-]{1,39}$/.test(notificationRouteHash()))return 'project'
   switch (notificationRouteHash()) {
@@ -54,7 +58,7 @@ type ToolInfo = { composer: boolean; installed: string|null; latest?: string|nul
 type EngineDefinition = { label:string; tool:string; webroot:string; default_option:string; option_label:string; option_hint:string; description:string; database_options?:{id:string;label:string}[]; database_hint?:string }
 type EngineJob = { id: string; engine?: string; action: string; state: string; message: string; slug?: string; log?: string; tool?: ToolInfo }
 type ServiceState = { services: Record<string,string>; managed_services?:ManagedService[]; service_action_pending?:boolean; mailpit?:string }
-type State = ServiceState & { engine_notice?:{id:string;show:boolean}|null; projects: Project[]; preferences: { theme: 'light'|'dark' }; engine_job?: EngineJob|null; engines?: Record<string,EngineDefinition>; engine_access_allowed?: boolean }
+type State = ServiceState & { extensions?: ExtensionNav[]; engine_notice?:{id:string;show:boolean}|null; projects: Project[]; preferences: { theme: 'light'|'dark' }; engine_job?: EngineJob|null; engines?: Record<string,EngineDefinition>; engine_access_allowed?: boolean }
 function serviceFields(state:ServiceState):ServiceState {
   return {services:state.services,managed_services:state.managed_services,service_action_pending:state.service_action_pending,mailpit:state.mailpit}
 }
@@ -185,7 +189,9 @@ export function App() {
   // Display persisted rules immediately; an edit belongs to one project only.
   // Do not clear or rehydrate the editor in a post-render effect.
   const rules=rulesDraft&&rulesDraft.slug===current?.slug?rulesDraft.value:nginxRules(current)
-  const title:Record<View,string>={dashboard:'Przegląd',projects:'Projekty',new:'Nowy projekt',project:current?.name??'Projekt',mail:'E-mail',settings:'Ustawienia'}
+  const extensionId=view.startsWith('extensions/')?view.slice('extensions/'.length):null
+  const extensionMenus=[...(server.extensions??[])].sort((a,b)=>a.menu.order-b.menu.order||a.id.localeCompare(b.id))
+  const title:Record<BuiltinView,string>={dashboard:'Przegląd',projects:'Projekty',new:'Nowy projekt',project:current?.name??'Projekt',mail:'E-mail',settings:'Ustawienia'}
 
   const refresh=useCallback(async(manual=false)=>{
     if(refreshRef.current)return
@@ -195,7 +201,11 @@ export function App() {
     const pending=manual?beginLocalNotice('Odświeżanie danych…'):undefined
     if(manual)setRefreshing(true)
     try {
-      const next=await request<State>('GET','/api/state')
+      const [state, extensions]=await Promise.all([
+        request<State>('GET','/api/state'),
+        request<ExtensionNav[]>('GET','/api/extensions').catch(()=>[]),
+      ])
+      const next={...state, extensions}
       if(client!==notificationClient||closingSession.current)return
       // Full refresh may have started before a confirmed service mutation
       // or a newer lightweight read. Do not replace their newer status.
@@ -624,14 +634,23 @@ export function App() {
       <div className="flex items-center justify-between px-1 pb-5"><div className="flex items-center gap-3"><img src={brandIcon} alt="" className="size-10 shrink-0"/><div><div className="font-semibold tracking-tight">DevStack</div><div className="text-[11px] text-muted-foreground">WSL2</div></div></div><Button size="icon" variant="ghost" className="lg:hidden" aria-label="Zamknij menu" onClick={()=>setNavOpen(false)}><X/></Button></div>
       <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Środowisko</p>
       <nav className="space-y-1" aria-label="Nawigacja główna"><button onClick={()=>go('dashboard')} className={linkStyle(view==='dashboard')}><LayoutDashboard className="size-4"/>Przegląd</button><button onClick={()=>go('projects')} className={linkStyle(view==='projects'||view==='project'||view==='new')}><FolderCode className="size-4"/>Projekty <span className="ml-auto text-xs opacity-70">{projects.length}</span></button><button onClick={()=>go('mail')} className={linkStyle(view==='mail')}><Mail className="size-4"/>E-mail</button></nav>
+      {extensionMenus.length>0&&<nav aria-label="Rozszerzenia" className="space-y-1">
+        <p className="px-3 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Rozszerzenia</p>
+        {extensionMenus.map(item=><button key={item.id} type="button" aria-current={extensionId===item.id?'page':undefined}
+          onClick={()=>go(`extensions/${item.id}`)} className={linkStyle(extensionId===item.id)}>
+          <ExtensionIcon name={item.menu.icon}/>{item.menu.label}
+        </button>)}
+      </nav>}
       <p className="px-3 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">System</p><button onClick={()=>go('settings')} className={linkStyle(view==='settings')}><Settings2 className="size-4"/>Ustawienia</button>
       <div className="mt-auto space-y-3 rounded-xl border bg-secondary/50 p-3"><div className="flex items-center gap-2 text-xs font-medium"><ShieldCheck className="size-4 text-emerald-600"/> Lokalnie · WSL2</div><div className="break-all text-xs text-muted-foreground">https://devstack.test</div>{passwordRequired?<Button className="w-full" variant="outline" size="sm" onClick={()=>{void logout()}}><LogOut/>Wyloguj</Button>:<Badge>Tryb bez hasła</Badge>}</div>
     </aside>
     <div className="flex min-h-dvh min-w-0 flex-col lg:pl-52" inert={!desktop&&navOpen}><header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur"><div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-2 px-3 sm:px-5"><div className="flex min-w-0 items-center gap-2"><Button size="icon" variant="ghost" ref={menuButton} className="lg:hidden" aria-label="Otwórz menu" aria-expanded={navOpen} aria-controls="main-navigation" onClick={()=>setNavOpen(true)}><Menu/></Button><a href="#/dashboard" onClick={e=>{e.preventDefault();go('dashboard')}} className="truncate rounded-sm text-sm font-semibold hover:underline focus-visible:outline-2 focus-visible:outline-ring" title="Strona główna">DevStack</a></div><div className="flex items-center gap-2"><Badge className="hidden md:inline-flex">Ubuntu 26.04 · WSL2</Badge><span className="hidden text-xs text-muted-foreground xl:inline" aria-live="polite">{lastRefreshed?'Aktualizacja: '+lastRefreshed.toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'Oczekiwanie na dane'}</span><NotificationCenter model={notifications} navigate={navigateNotice}/><Button variant="outline" size="icon" aria-label={refreshing?'Odświeżanie danych':'Odśwież dane usług i projektów'} title={refreshing?'Odświeżanie…':'Odśwież dane usług i projektów'} disabled={refreshing} onClick={()=>{void refresh(true)}}><RefreshCw className={refreshing?'animate-spin':''}/></Button><Button variant="outline" size="icon" aria-label={theme==='light'?'Włącz ciemny motyw':'Włącz jasny motyw'} title={savingTheme?'Zapisywanie motywu…':'Zmień i zapisz motyw'} disabled={savingTheme} onClick={()=>{void toggleTheme()}}>{theme==='light'?<Moon/>:<Sun/>}</Button></div></div></header>
       <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5">
-      {view!=='mail'&&<><PageHeader title={title[view]} actions={<>{view==='projects'&&<Button size="sm" onClick={()=>go('new')}><Plus/>Nowy projekt</Button>}{view==='new'&&<div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={()=>go('projects')}><ArrowLeft/>Projekty</Button><Button size="sm" type="submit" form="new-project-form" disabled={busy||engineBusy||(draft.local_mail&&(serviceStatusUnavailable||server.mailpit!=='active'))||(!!draftEngine&&(!engineAllowed||!kitReady))}><Plus/>{busy||engineBusy?'Tworzenie…':'Utwórz projekt'}</Button></div>}{view==='project'&&current&&<div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={()=>go('projects')}><ArrowLeft/>Projekty</Button><Button size="sm" variant="outline" onClick={()=>{void copy(`${current.https?'https':'http'}://${current.domain}`)}}><Copy/>URL</Button><Button size="sm" onClick={()=>window.open(`${current.https?'https':'http'}://${current.domain}`,'_blank','noopener,noreferrer')}><ExternalLink/>Otwórz stronę</Button></div>}{view==='settings'&&<nav aria-label="Kategorie ustawień" className="flex min-w-0 flex-wrap items-center gap-1">
+      {view!=='mail'&&!extensionId&&<><PageHeader title={title[view as BuiltinView]} actions={<>{view==='projects'&&<Button size="sm" onClick={()=>go('new')}><Plus/>Nowy projekt</Button>}{view==='new'&&<div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={()=>go('projects')}><ArrowLeft/>Projekty</Button><Button size="sm" type="submit" form="new-project-form" disabled={busy||engineBusy||(draft.local_mail&&(serviceStatusUnavailable||server.mailpit!=='active'))||(!!draftEngine&&(!engineAllowed||!kitReady))}><Plus/>{busy||engineBusy?'Tworzenie…':'Utwórz projekt'}</Button></div>}{view==='project'&&current&&<div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={()=>go('projects')}><ArrowLeft/>Projekty</Button><Button size="sm" variant="outline" onClick={()=>{void copy(`${current.https?'https':'http'}://${current.domain}`)}}><Copy/>URL</Button><Button size="sm" onClick={()=>window.open(`${current.https?'https':'http'}://${current.domain}`,'_blank','noopener,noreferrer')}><ExternalLink/>Otwórz stronę</Button></div>}{view==='settings'&&<nav aria-label="Kategorie ustawień" className="flex min-w-0 flex-wrap items-center gap-1">
           {settingsTabs.map(tab=><Button key={tab.id} size="sm" variant={settingsTab===tab.id?'default':'ghost'} aria-pressed={settingsTab===tab.id} onClick={()=>setSettingsTab(tab.id)}>{tab.label}</Button>)}
         </nav>}</>}/></>}
+      {extensionId&&<ExtensionView key={extensionId} id={extensionId} csrf={csrf} revision={lastRefreshed?.getTime()??0} copy={value=>{void copy(value)}}/>}
+      {view==='project'&&current&&extensionMenus.length>0&&<ProjectInstructionSummary key={current.slug} slug={current.slug} revision={lastRefreshed?.getTime()??0}/>}
       {view==='project'&&!current&&<Card><CardContent className="space-y-3 p-4"><p className="text-sm text-muted-foreground">{lastRefreshed?'Projekt nie jest dostępny.':'Wczytywanie projektu…'}</p><Button size="sm" variant="outline" onClick={()=>go('projects')}>Lista projektów</Button></CardContent></Card>}
       {view==='dashboard'&&<><div className="grid grid-cols-2 gap-3 xl:grid-cols-4"><Metric label="Projekty" value={String(projects.length)} foot="Domeny .test" icon={<FolderCode className="size-5"/>}/><Metric label="Aktywne usługi" value={serviceStatusUnavailable?'—':`${managed.filter(s=>s.state==='active').length}/${managed.length}`} foot="Uruchomione / wszystkie" icon={<Activity className="size-5"/>}/><Metric label="HTTPS" value={String(projects.filter(p=>p.https).length)} foot="Auto SSL" icon={<LockKeyhole className="size-5"/>}/><Metric label="Bazy danych" value={String(projects.filter(p=>p.database).length)} foot="MariaDB" icon={<Database className="size-5"/>}/></div>
         <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]"><ManagedServices services={managed} csrf={csrf} refresh={()=>refresh()} statusUnavailable={serviceStatusUnavailable} blocked={engineBusy||!!server.service_action_pending} onAutostartSaved={(id,enabled)=>{
