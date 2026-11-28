@@ -19,6 +19,8 @@ import tempfile
 
 PROJECT_ID = re.compile(r'[0-9a-f]{32}\Z')
 BASE = re.compile(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}\Z')
+EXECUTOR_FIXTURE = re.compile(r'devstack-executor-probe-[a-zA-Z0-9_]{8}\Z')
+EXECUTOR_SLOTS = {'d': 'developer-', 'e': 'session-'}
 USER = re.compile(r'dsrt-([ab])-[a-f0-9]{24}\Z')
 HOME = '/nonexistent'
 SHELL = '/usr/sbin/nologin'
@@ -30,7 +32,7 @@ class IdentityError(RuntimeError):
 
 
 def account_name(slot, project_id):
-    if slot not in ('a', 'b', 'p') or not isinstance(project_id, str) or not PROJECT_ID.fullmatch(project_id):
+    if slot not in ('a', 'b', 'p', 'd', 'e') or not isinstance(project_id, str) or not PROJECT_ID.fullmatch(project_id):
         raise IdentityError('Invalid registration identity')
     # 31 bytes, within Linux's login-name limit. The record and account
     # comment retain the full ID. Never adopt a truncated-name collision.
@@ -38,6 +40,8 @@ def account_name(slot, project_id):
 
 
 def comment(project_id, slot='a'):
+    if slot in EXECUTOR_SLOTS:
+        return 'DevStack executor fixture ' + EXECUTOR_SLOTS[slot] + project_id
     return ('DevStack pilot ' if slot == 'p' else 'DevStack fixture ') + project_id
 
 
@@ -67,6 +71,13 @@ def record_path(base, slot):
                 or not base.name.startswith('pilot-')
                 or not PROJECT_ID.fullmatch(base.name[6:])):
             raise IdentityError('Expected protected registered pilot journal')
+    elif slot in EXECUTOR_SLOTS:
+        prefix = EXECUTOR_SLOTS[slot]
+        if (os.geteuid() != 0 or base.parent.parent != Path('/var/lib')
+                or not EXECUTOR_FIXTURE.fullmatch(base.parent.name)
+                or not base.name.startswith(prefix)
+                or not PROJECT_ID.fullmatch(base.name[len(prefix):])):
+            raise IdentityError('Expected protected executor fixture journal')
     elif (slot not in ('a', 'b') or base.parent != Path('/var/lib')
           or not BASE.fullmatch(base.name)):
         raise IdentityError('Expected protected disposable fixture')
@@ -92,6 +103,8 @@ def read_record(base, slot):
         record = validate_record(json.loads(raw), slot)
         if slot == 'p' and base.name != 'pilot-' + record['project_id']:
             raise IdentityError('Pilot journal registration mismatch')
+        if slot in EXECUTOR_SLOTS and base.name != EXECUTOR_SLOTS[slot] + record['project_id']:
+            raise IdentityError('Executor fixture journal identity mismatch')
         return record
     except (ValueError, RecursionError):
         raise IdentityError('Unreadable identity record') from None
@@ -185,6 +198,12 @@ def provision_pilot(base, project_id):
             or base != Path('/var/lib/devstack') / ('pilot-' + project_id)):
         raise IdentityError('Expected authorized pilot registration')
     return _provision(base, 'p', project_id)
+
+
+def provision_executor_fixture(base, slot, identifier):
+    if slot not in EXECUTOR_SLOTS or base.name != EXECUTOR_SLOTS[slot] + identifier:
+        raise IdentityError('Expected matching disposable executor identity')
+    return _provision(base, slot, identifier)
 
 
 def _provision(base, slot, project_id):

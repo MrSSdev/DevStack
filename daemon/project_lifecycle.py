@@ -28,13 +28,15 @@ ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'SYSTEMD_COLORS': '0',
 BASE = re.compile(r'devstack-runtime-probe-[a-zA-Z0-9_]{8}\Z')
 # Apply the accepted WSL socket/syscall profile to the managed runtime
 # services, not to the developer, gateway, Windows agent or model.
-RUNTIME_SECURITY_PROPERTIES = (
+IO_URING_SYSCALLS = 'io_uring_setup io_uring_enter io_uring_register'
+RUNTIME_SECURITY_SETTINGS = (
     '--property=NoNewPrivileges=yes',
     '--property=SystemCallArchitectures=native',
     '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK',
-    '--property=SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register',
     '--property=SystemCallErrorNumber=ENOSYS',
 )
+RUNTIME_SECURITY_PROPERTIES = (*RUNTIME_SECURITY_SETTINGS,
+                               '--property=SystemCallFilter=~' + IO_URING_SYSCALLS)
 
 STOPPED = {'absent', 'inactive', 'failed'}
 LIVE = {'active', 'activating', 'deactivating', 'reloading', 'refreshing'}

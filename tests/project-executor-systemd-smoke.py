@@ -1,0 +1,470 @@
+#!/usr/bin/env python3
+"""Real systemd/IDMAP/Bubblewrap proof on two newly generated fixtures."""
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / 'daemon'))
+
+from project_executor import MODULES, Session
+from project_lifecycle import ENV, unit_state
+from project_mounts import reject_nested_mounts
+from project_runtime_identity import provision_executor_fixture, verify_binding
+from project_pilot import require_backend
+
+PYTHON = '/usr/bin/python3'
+EXPECT = 'synthetic baseline\n'
+ARTISAN = """<?php
+require __DIR__.'/vendor/autoload.php';
+$app = Illuminate\\Foundation\\Application::configure(basePath: __DIR__)->create();
+exit($app->handleCommand(new Symfony\\Component\\Console\\Input\\ArgvInput));
+"""
+CREATE = r'''
+import json
+from pathlib import Path
+import shutil
+import sys
+
+p = Path('.')
+for directory in ('bootstrap/cache', 'storage/framework/cache', 'storage/framework/views',
+                  'database', 'node-local', 'php-local'):
+    (p / directory).mkdir(parents=True)
+(p / 'source.txt').write_text(sys.argv[1])
+(p / 'script.sh').write_text('#!/bin/sh\nprintf "interpreted\\n"\n')
+shutil.copyfile('/usr/bin/true', p / 'native')
+for name in ('native', 'script.sh'):
+    (p / name).chmod(0o700)
+(p / 'package.json').write_text(json.dumps({
+    'name': 'executor-fixture', 'version': '1.0.0', 'private': True,
+    'scripts': {'proof': 'node node-proof.js'}, 'dependencies': {'proof-local': 'file:node-local'},
+}))
+(p / 'node-local/package.json').write_text('{"name":"proof-local","version":"1.0.0","main":"index.js"}')
+(p / 'node-local/index.js').write_text('module.exports = "node:local";')
+(p / 'node-proof.js').write_text('console.log(require("proof-local"));')
+(p / 'php-local/composer.json').write_text(json.dumps({
+    'name': 'fixture/local', 'version': '1.0.0',
+    'autoload': {'files': ['proof.php']},
+}))
+(p / 'php-local/proof.php').write_text('<?php function fixture_value() { return "composer:local"; }')
+(p / 'composer.json').write_text(json.dumps({
+    'name': 'fixture/controlled', 'require': {'fixture/local': '1.0.0'},
+    'repositories': [{'type': 'path', 'url': 'php-local', 'options': {'symlink': False}},
+                     {'packagist.org': False}],
+}))
+(p / 'composer-proof.php').write_text('<?php require "vendor/autoload.php"; echo fixture_value();')
+(p / 'probe.php').write_text("""<?php
+$db = new PDO('sqlite:database/test.sqlite');
+$db->exec('CREATE TABLE IF NOT EXISTS fixtures (id INTEGER PRIMARY KEY)');
+$db->exec('INSERT OR IGNORE INTO fixtures VALUES (1)');
+echo 'sqlite:' . $db->query('SELECT count(*) FROM fixtures')->fetchColumn();
+""")
+'''
+
+
+def command(*argv, **kwargs):
+    result = subprocess.run(argv, check=False, capture_output=True, text=True,
+                            timeout=45, env=ENV, **kwargs)
+    if result.returncode:
+        raise RuntimeError(f'{argv[0]} exited {result.returncode}: {result.stderr[-1200:]}')
+    return result.stdout
+
+
+def write_record(path, value):
+    path.write_text(json.dumps(value), encoding='utf-8')
+    path.chmod(0o600)
+
+
+def as_developer(identity, *argv, **kwargs):
+    return command('/usr/bin/setpriv', '--reuid=' + str(identity['uid']),
+                   '--regid=' + str(identity['gid']), '--clear-groups',
+                   '--no-new-privs', '--', '/usr/bin/env', '-i',
+                   'PATH=/usr/bin:/bin', 'HOME=/nonexistent', 'COMPOSER_DISABLE_NETWORK=1',
+                   *argv, **kwargs)
+
+
+def make_project(base, allocate):
+    key = secrets.token_hex(16)
+    developer = allocate(base / ('developer-' + key), 'd', key)
+    project = base / ('project-' + key)
+    project.mkdir(mode=0o700)
+    os.chown(project, developer['uid'], developer['gid'])
+    as_developer(developer, PYTHON, '-I', '-c', CREATE, EXPECT, cwd=project)
+    info = project.stat()
+    write_record(base / ('registration-' + key + '.json'),
+                 {'schema': 1, 'project_id': key, 'source': [info.st_dev, info.st_ino]})
+
+    # A root-owned standalone baseline, assembled without reading or running
+    # anything from either fixture. No Git metadata in the work tree.
+    git = base / ('git-' + key)
+    git.mkdir(mode=0o755)
+    git.chmod(0o755)
+    git_cmd = ['/usr/bin/git', '--git-dir=' + str(git)]
+    command(*git_cmd, 'init', '--bare', '--template=')
+    command(*git_cmd, 'config', 'core.hooksPath', '/dev/null')
+    command(*git_cmd, 'config', 'core.fsmonitor', 'false')
+    blob = command(*git_cmd, 'hash-object', '-w', '--stdin', input=EXPECT).strip()
+    command(*git_cmd, 'update-index', '--add', '--cacheinfo', '100644,' + blob + ',source.txt')
+    tree = command(*git_cmd, 'write-tree').strip()
+    commit = command(*git_cmd, '-c', 'user.name=DevStack fixture', '-c',
+                     'user.email=fixture@example.invalid', 'commit-tree', tree,
+                     '-m', 'Synthetic baseline').strip()
+    command(*git_cmd, 'update-ref', 'HEAD', commit)
+    git.chmod(0o755)
+    for directory, subdirs, filenames in os.walk(git):
+        for name in subdirs:
+            (Path(directory) / name).chmod(0o755)
+        for name in filenames:
+            (Path(directory) / name).chmod(0o644)
+    return key, project, developer
+
+
+def prepare_tools(base, fixture):
+    _, project, developer = fixture
+    scratch = base / 'dependency-prep'
+    scratch.mkdir(mode=0o700)
+    os.chown(scratch, developer['uid'], developer['gid'])
+    as_developer(developer, '/usr/bin/env', f'npm_config_cache={scratch}/npm',
+                 '/usr/bin/npm', 'install', '--offline', '--ignore-scripts',
+                 '--no-audit', '--no-fund', '--install-links', cwd=project)
+    as_developer(developer, '/usr/bin/env', f'COMPOSER_HOME={scratch}/composer',
+                 '/usr/bin/composer', '--no-plugins', '--no-scripts', '--no-interaction',
+                 'install', cwd=project)
+
+
+def add_artisan(fixture, archive):
+    _, project, developer = fixture
+    # A separate fixture for the actual Laravel vendor tree. Extract as the
+    # synthetic owner; the archive is an input, never a mount source.
+    with archive.open('rb') as stream:
+        as_developer(developer, '/usr/bin/tar', '--no-same-owner', '--no-same-permissions',
+                     '-xf', '-', '--', 'vendor', cwd=project, stdin=stream)
+    # Exercise Laravel's CLI in the synthetic application. E2.0 has
+    # already exercised the original starter kit's optional providers.
+    as_developer(developer, PYTHON, '-I', '-c', '''
+import json, pathlib, sys
+pathlib.Path("artisan").write_text(sys.argv[1])
+manifest = pathlib.Path("composer.json")
+config = json.loads(manifest.read_text())
+config["extra"] = {"laravel": {"dont-discover": ["*"]}}
+manifest.write_text(json.dumps(config))
+''', ARTISAN, cwd=project)
+
+
+def wait_for(predicate, label, timeout=12):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = predicate()
+        if result:
+            return result
+        time.sleep(0.05)
+    raise RuntimeError('Timed out waiting for ' + label)
+
+
+def proc_identity(pid):
+    try:
+        comm, data = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)
+        return comm, data.split()[19]
+    except FileNotFoundError:
+        return None
+
+
+def has_uid(pid, uid):
+    try:
+        return Path('/proc', pid).stat().st_uid == uid
+    except FileNotFoundError:
+        return False
+
+
+def cgroup_children(session):
+    assert unit_state(session) == 'active'
+    group = command('/usr/bin/systemctl', 'show', '-p', 'ControlGroup', '--value',
+                    '--', session.unit).strip()
+    assert group and group.endswith('/' + session.unit)
+    procs = Path('/sys/fs/cgroup' + group) / 'cgroup.procs'
+    pids = {int(pid): proc_identity(pid) for pid in procs.read_text().splitlines()}
+    assert any(info and info[0].endswith('(sleep') for info in pids.values()), pids
+    return procs, pids
+
+
+def assert_clean(session, processes=None):
+    session.stop()
+    assert '/run/' + session.runtime_directory not in Path('/proc/self/mountinfo').read_text()
+    if processes:
+        group, pids = processes
+        wait_for(lambda: not group.exists() or not group.read_text().strip(), 'empty cgroup')
+        assert all(info is None or proc_identity(pid) != info for pid, info in pids.items())
+
+
+def run_suite(base, archive, *, ci):
+    accounts = []
+    sessions = []
+    clients = []
+
+    def allocate(path, slot, key):
+        path.mkdir(mode=0o700)
+        record = provision_executor_fixture(path, slot, key)
+        accounts.append((path, slot))
+        return record
+
+    def start(fixture, sibling, mode, *, agent='fixture-agent-a',
+              profile='read', runtime=90, missing=None):
+        key, _, _ = fixture
+        other_path = sibling[1]
+        session = Session(base, secrets.token_hex(16))
+        identity = allocate(session.record, 'e', session.session_id)
+        request = {'schema': 1, 'session_id': session.session_id, 'project_id': missing or key,
+                   'agent_id': agent,
+                   'profile': profile,
+                   'argv': [PYTHON, '-I', '-S', '/run/devstack-proof.py', mode, str(base / 'host-home'),
+                            str(other_path), str(base / 'admin.sock'), EXPECT]}
+        write_record(session.record / 'launch.json', request)
+        output = session.record / 'output'
+        argv = session.service_argv(runtime_seconds=runtime)
+        argv[1:1] = ['--setenv=DEVSTACK_TEST_SECRET=host-only',
+                     '--property=OpenFile=' + str(base / 'canary') + ':fixture:read-only']
+        clients.append((session, subprocess.Popen(
+            argv, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)))
+        sessions.append(session)
+        return session, identity, output, clients[-1][1]
+
+    def finish(job, expected=0, failure=None):
+        session, _, output, process = job
+        logs, _ = process.communicate(timeout=110)
+        proof = output.read_text() if output.exists() else ''
+        if expected is not None:
+            assert (process.returncode == 0) == (expected == 0), (logs, proof)
+        if failure:
+            assert failure in proof, (logs, proof)
+        assert_clean(session)
+        return proof
+
+    def proof(job):
+        _, identity, output, _ = job
+        observation = json.loads(output.read_text().splitlines()[0])
+        assert (observation['uid'], observation['gid']) == (identity['uid'], identity['gid'])
+        for name, identifier in observation['namespaces'].items():
+            assert identifier != os.readlink('/proc/self/ns/' + name)
+        return observation
+
+    def ready(job):
+        def child_ready():
+            if job[3].poll() is not None:
+                finish(job)
+                raise RuntimeError('Executor exited before creating its child')
+            return job[2].exists() and 'child-ready' in job[2].read_text()
+
+        wait_for(child_ready, 'sandbox child')
+        return cgroup_children(job[0])
+
+    try:
+        a = make_project(base, allocate)
+        b = make_project(base, allocate)
+        prepare_tools(base, a)
+        if archive:
+            # Use the second fixture for Laravel so the standalone local
+            # Composer package in the first fixture remains independent.
+            add_artisan(b, archive)
+        with socket.socket(socket.AF_UNIX) as host_socket, socket.socket(socket.AF_UNIX) as abstract:
+            address = str(base / 'admin.sock')
+            host_socket.bind(address)
+            host_socket.listen()
+            abstract.bind('\0' + address)
+            abstract.listen()
+            (base / 'canary').write_text('host-only descriptor')
+            (base / 'host-home').mkdir(mode=0o700)
+            (base / 'host-home/credentials').write_text('synthetic private home')
+
+            holder = start(a, b, 'hold')
+            held_processes = ready(holder)
+            second = start(a, b, 'hold', agent='fixture-agent-b')
+            second_processes = ready(second)
+            third = start(b, a, 'hold', agent='fixture-agent-b')
+            third_processes = ready(third)
+            observations = [proof(job) for job in (holder, second, third)]
+            assert len({(p['uid'], p['gid']) for p in observations}) == 3
+            for name in observations[0]['namespaces']:
+                assert len({p['namespaces'][name] for p in observations}) == 3
+            assert_clean(holder[0], held_processes)
+            assert 'PASS: hold' not in finish(holder, expected=None)
+            assert unit_state(second[0]) == unit_state(third[0]) == 'active'
+            # An administrator replaces the source name while a session is
+            # active. A new launch must refuse it; the pinned view keeps
+            # seeing the contents of the original inode until exit.
+            _, project, developer = a
+            moved = project.with_name('moved-project')
+            project.rename(moved)
+            project.mkdir(mode=0o700)
+            try:
+                finish(start(a, b, 'read'), 1, 'mount source changed')
+                as_developer(developer, '/usr/bin/touch', 'finish', cwd=moved)
+                assert 'PASS: hold' in finish(second)
+                assert_clean(second[0], second_processes)
+            finally:
+                project.rmdir()
+                moved.rename(project)
+                (project / 'finish').unlink(missing_ok=True)
+            assert unit_state(third[0]) == 'active'
+            assert_clean(third[0], third_processes)
+            assert 'PASS: hold' not in finish(third, expected=None)
+            print('PASS: concurrent sessions, source pinning during replacement and independent stop', flush=True)
+
+            readonly = start(a, b, 'read')
+            assert 'PASS: read' in finish(readonly)
+            proof(readonly)
+            writable = start(a, b, 'write', profile='write-cli')
+            assert 'PASS: write' in finish(writable)
+            proof(writable)
+            created = project / 'created'
+            info = created.stat()
+            assert (info.st_uid, info.st_gid) == (developer['uid'], developer['gid'])
+            assert (project / 'database/test.sqlite').stat().st_uid == developer['uid']
+            assert as_developer(developer, '/usr/bin/cat', 'source.txt', cwd=project) == 'sandbox edit\n'
+            as_developer(developer, PYTHON, '-I', '-c',
+                         'from pathlib import Path; Path("created").write_text("owner edit")', cwd=project)
+            assert created.read_text() == 'owner edit'
+            as_developer(developer, PYTHON, '-I', '-c',
+                         'from pathlib import Path; import sys; Path("source.txt").write_text(sys.argv[1])',
+                         EXPECT, cwd=project)
+            assert (b[1] / 'source.txt').read_text() == EXPECT
+            assert 'PASS: read' in finish(start(b, a, 'read'))
+            wrote_b = start(b, a, 'write-second', profile='write-cli')
+            output_b = finish(wrote_b)
+            assert 'PASS: write-second' in output_b
+            proof(wrote_b)
+            assert ('PASS: actual Laravel Artisan' in output_b) == bool(archive)
+            owner_b = b[2]
+            created_b = (b[1] / 'created').stat()
+            assert (created_b.st_uid, created_b.st_gid) == (owner_b['uid'], owner_b['gid'])
+            assert as_developer(owner_b, '/usr/bin/cat', 'created', cwd=b[1]) == 'sandbox data\n'
+            print('PASS: RO/RW, tool subset, physical owner and developer edits', flush=True)
+
+            crash = start(a, b, 'crash')
+            crashed_processes = ready(crash)
+            as_developer(developer, '/usr/bin/touch', 'finish', cwd=project)
+            assert 'child-ready' in finish(crash, expected=1)
+            assert_clean(crash[0], crashed_processes)
+            (project / 'finish').unlink()
+            timeout = start(a, b, 'hold', runtime=8)
+            timed_processes = ready(timeout)
+            finish(timeout, expected=1)
+            assert_clean(timeout[0], timed_processes)
+            print('PASS: crash and RuntimeMaxSec remove descendant processes and mounts', flush=True)
+
+            finish(start(a, b, 'read', missing=secrets.token_hex(16)), 1, 'No such file')
+            registration = base / ('registration-' + a[0] + '.json')
+            data = json.loads(registration.read_text())
+            write_record(registration, {**data, 'project_id': b[0]})
+            try:
+                finish(start(a, b, 'read'), 1, 'Invalid synthetic project registration')
+            finally:
+                write_record(registration, data)
+            identity = base / ('developer-' + a[0]) / 'identity-d.json'
+            binding = identity.read_text()
+            try:
+                identity.write_text(json.dumps({**json.loads(binding), 'uid': 1}))
+                finish(start(a, b, 'read'), 1, 'account or group changed')
+            finally:
+                identity.write_text(binding)
+            for name, create in (
+                ('absolute-link', lambda path: path.symlink_to(b[1] / 'source.txt')),
+                ('hardlink', lambda path: os.link(project / 'source.txt', path)),
+                ('.git', lambda path: path.write_text('gitdir: ' + str(b[1]))),
+                ('foreign-owner', lambda path: path.write_text('root-owned')),
+            ):
+                path = project / name
+                create(path)
+                try:
+                    finish(start(a, b, 'read'), 1, 'Unsafe fixture tree metadata')
+                finally:
+                    path.unlink()
+            if ci:
+                nested = project / 'nested'
+                as_developer(developer, '/usr/bin/mkdir', 'nested', cwd=project)
+                command('/usr/bin/mount', '-n', '--bind', str(b[1]), str(nested))
+                try:
+                    finish(start(a, b, 'read'), 1, 'Nested project mount')
+                finally:
+                    command('/usr/bin/umount', '-n', str(nested))
+                    nested.rmdir()
+                print('PASS: nested fixture mount refused', flush=True)
+            # A system unit without PrivateMounts fails before creating a view.
+            unsafe = Session(base, secrets.token_hex(16))
+            allocate(unsafe.record, 'e', unsafe.session_id)
+            write_record(unsafe.record / 'launch.json',
+                         {**readonly[0].request(), 'session_id': unsafe.session_id})
+            sessions.append(unsafe)
+            argv = unsafe.service_argv()
+            argv.remove('--property=PrivateMounts=yes')
+            result = subprocess.run(argv, env=ENV, capture_output=True, timeout=20, check=False)
+            assert result.returncode and 'PrivateMounts is required' in (
+                unsafe.record / 'output').read_text()
+            assert_clean(unsafe)
+            print('PASS: missing registration, identity drift, replaced source, links, Git and incomplete setup refused',
+                  flush=True)
+    finally:
+        for session in sessions:
+            assert_clean(session)
+        for _, client in clients:
+            client.communicate(timeout=20)
+        reject_nested_mounts(base)
+        # Remove the synthetic developer's files before releasing its UID.
+        for project in (*base.glob('project-*'), base / 'dependency-prep'):
+            if project.exists():
+                shutil.rmtree(project)
+        for path, slot in reversed(accounts):
+            identity = verify_binding(path, slot)
+            assert not any(has_uid(pid, identity['uid'])
+                           for pid in os.listdir('/proc') if pid.isdecimal())
+            command('/usr/sbin/userdel', '--', identity['account'])
+
+
+def main():
+    if (not sys.flags.isolated or os.geteuid() != 0 or len(sys.argv) not in (2, 4)
+            or sys.argv[1] not in ('--ci', '--local')
+            or Path('/proc/1/comm').read_text().strip() != 'systemd'):
+        raise SystemExit('Use sudo python3 -I with --local (spare WSL) or --ci (hosted runner)')
+    wsl = 'microsoft' in Path('/proc/sys/kernel/osrelease').read_text().lower()
+    ci = sys.argv[1] == '--ci'
+    if ci:
+        if wsl or os.getenv('GITHUB_ACTIONS') != 'true' or os.getenv('RUNNER_ENVIRONMENT') != 'github-hosted':
+            raise SystemExit('Expected a disposable hosted CI runner')
+    elif not wsl or os.path.lexists('/etc/devstack'):
+        raise SystemExit('The local smoke requires a spare WSL distribution without DevStack')
+    if len(sys.argv) == 4 and sys.argv[2] != '--laravel-vendor':
+        raise SystemExit('Expected --laravel-vendor ARCHIVE')
+    archive = Path(sys.argv[3]) if len(sys.argv) == 4 else None
+    require_backend()
+    os.umask(0o077)
+    base = Path(tempfile.mkdtemp(prefix='devstack-executor-probe-', dir='/var/lib'))
+    base.chmod(0o711)
+    launcher = base / 'launcher'
+    launcher.mkdir(mode=0o700)
+    for name in MODULES:
+        shutil.copyfile(ROOT / 'daemon' / name, launcher / name)
+    proof = launcher / 'devstack-proof.py'
+    shutil.copyfile(ROOT / 'tests/project-executor-payload.py', proof)
+    proof.chmod(0o644)
+    try:
+        run_suite(base, archive, ci=ci)
+    except BaseException:
+        # Retain the protected records for root-only investigation if a unit
+        # or account could not be confirmed and removed.
+        print('Synthetic fixture diagnostics:', base, file=sys.stderr, flush=True)
+        for output in sorted(base.glob('session-*/output')):
+            print(output.parent.name, output.read_text()[-2500:], file=sys.stderr, flush=True)
+        raise
+    else:
+        shutil.rmtree(base)
+
+
+if __name__ == '__main__':
+    main()
