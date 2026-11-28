@@ -113,37 +113,50 @@ RO/RW flags, interop and host access denials, descriptors, syscall/socket
 filters, metadata and mount rejection, and cgroup cleanup. See the Actions
 checks on [PR #53](https://github.com/MrSSdev/DevStack/pull/53).
 
-For ASUS, run the WSL-specific mode in a spare Ubuntu 26.04 WSL2
-distribution without DevStack, with systemd enabled and an ext4 Linux
-workspace. Artificial nested host mounts are exercised only by CI. Use a reviewed
-checkout of the exact PR revision and the already reviewed APT-managed
-Bubblewrap package. Verify its version and provenance against the existing
-[backend procedure](BUBBLEWRAP-BACKPORT-EXPERIMENT.md). The local smoke
-does not configure APT or replace packages. Prepare distro binaries
-`python3`, `git`, `nodejs`, `npm`, `composer`, `php8.5-cli`,
-`php8.5-sqlite3`, `php8.5-intl`, `php8.5-mbstring`, `php8.5-xml`, `sudo`, and their
-normal system dependencies in the spare
-distribution. Store the checkout on the Linux filesystem.
+### Acceptance on the existing ASUS distribution
 
-1. From PowerShell, confirm the target and WSL version with
-   `wsl --list --verbose`, then enter the spare distribution explicitly
-   with `wsl -d <disposable-distribution>`. Confirm `ps -p 1 -o comm=`
-   reports `systemd`. Leave the daily DevStack distribution running as usual.
-2. From the reviewed checkout in that distribution, as the regular test
-   operator, run `bash tests/project-sandbox-probe.sh`. Stop the acceptance
-   if the probe fails.
-3. Run `sudo /usr/bin/python3 -I tests/project-executor-systemd-smoke.py --local`.
-   To include real Artisan, append `--laravel-vendor /path/to/vendor.tar`
-   using a trusted archive containing only `vendor/` previously prepared
-   from a throwaway Laravel installation. Never use an actual working
-   project's files or credentials as input.
-4. Verify the reported RO/RW, concurrent stop, crash/timeout and refusal
-   checks. Confirm `systemctl list-units --all 'devstack-executor-*.service'`
-   reports no live fixture units and that the fresh fixture path under
-   `/var/lib/devstack-executor-probe-*` was removed after success. On failure,
-   save the diagnostics and stop acceptance. If cleanup could not be
-   confirmed, terminate only the spare distribution using
-   `wsl --terminate <disposable-distribution>` from PowerShell.
+Use the existing Ubuntu-26.04 WSL2 distribution with systemd, an ext4 Linux
+filesystem and DevStack running. The test does not install packages or
+change APT, ACLs, service configuration or global security policy. It uses
+the reviewed, already installed Bubblewrap package and the distro Git, Node,
+npm, Composer, PHP 8.5 CLI and selected PHP modules. If a prerequisite is
+missing the script stops before allocating fixture resources. Verify the
+package version and provenance using the [backend procedure](BUBBLEWRAP-BACKPORT-EXPERIMENT.md).
 
-Do not run the backport CI script on the ASUS. It installs and restores
-packages and configures a disposable Linux runner for the E1/E2.0 tests.
+1. From PowerShell, check the distribution with `wsl --list --verbose`
+   and enter it with `wsl -d Ubuntu-26.04`. Use a reviewed checkout on the
+   Linux filesystem.
+2. As the normal developer, run the standalone namespace probe. Continue
+   only after it passes.
+
+   ```bash
+   bash tests/project-sandbox-probe.sh
+   ```
+
+3. Run the local acceptance from the same checkout as administrator.
+   Keep ordinary project operations and service configuration stable during
+   the comparison. The application's running services can stay active.
+
+   ```bash
+   sudo /usr/bin/python3 -I tests/project-executor-systemd-smoke.py --local
+   ```
+
+4. Check for `PASS: existing DevStack projects, configuration, services,
+   runtimes and accounts unchanged` and a successful exit. The script
+   detects configuration and registry changes through file metadata,
+   checks registered project roots without walking their contents, and
+   compares service invocation IDs and isolated runtime sockets. It
+   does not inspect application data, private key contents or the mailbox.
+
+The fixture uses a new, protected directory under
+`/var/lib/devstack-executor-probe-*`, locked temporary OS accounts and
+randomly named transient units. It checks their exact ownership before
+cleanup. If a check fails, keep the reported fixture diagnostics for
+review. Avoid resetting the distribution or removing units, accounts or
+directories by wildcard. A forcibly interrupted run can retain protected
+fixture state. Session units have bounded lifetimes.
+
+The local profile uses synthetic offline npm and Composer packages.
+Laravel Artisan with the preinstalled vendor tree and the artificial
+nested host mount test stay in the hosted CI profile. Run the backport
+installation and rollback script only on a disposable CI runner.

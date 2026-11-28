@@ -139,9 +139,13 @@ bash tests/project-activation-ci.sh
 # Reuse the trusted vendor dependencies already prepared for E2.0. The
 # executor receives only a detached copy in a new synthetic project.
 tar -C "$HOME/projects/isolation-livewire" --exclude=vendor/bin -cf "$work/executor-vendor.tar" vendor
+# Observe a real installed DevStack and live isolated PHP/HTTP pair around
+# the same fixture suite. This activation is for the disposable CI project.
+sudo python3 -I /opt/devstack/daemon/project_pilot.py activate isolation-sibling
 sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
     python3 -I tests/project-executor-systemd-smoke.py --ci \
     --laravel-vendor "$work/executor-vendor.tar"
+sudo python3 -I /opt/devstack/daemon/project_pilot.py deactivate isolation-sibling
 
 sudo apt-get -y --allow-downgrades --no-remove install "$original"
 test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$old_version"

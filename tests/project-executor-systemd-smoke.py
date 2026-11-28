@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Real systemd/IDMAP/Bubblewrap proof on two newly generated fixtures."""
+from contextlib import nullcontext
+import grp
 import json
 import os
 from pathlib import Path
+import pwd
+import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -13,10 +18,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / 'tests'))
 sys.path.insert(0, str(ROOT / 'daemon'))
 
-from project_executor import MODULES, Session
-from project_lifecycle import ENV, unit_state
+from project_executor import MODULES, PHP_MODULES, Session
+from project_executor_workstation import check_account_hooks, protect_workstation
+from project_isolation_preflight import protected_control, protected_parents
+from project_lifecycle import ENV, SYSTEMCTL, run, unit_state
 from project_mounts import reject_nested_mounts
 from project_runtime_identity import provision_executor_fixture, verify_binding
 from project_pilot import require_backend
@@ -91,12 +99,11 @@ def as_developer(identity, *argv, **kwargs):
                    *argv, **kwargs)
 
 
-def make_project(base, allocate):
+def make_project(base, allocate, create_owned_dir):
     key = secrets.token_hex(16)
     developer = allocate(base / ('developer-' + key), 'd', key)
     project = base / ('project-' + key)
-    project.mkdir(mode=0o700)
-    os.chown(project, developer['uid'], developer['gid'])
+    create_owned_dir(project, developer)
     as_developer(developer, PYTHON, '-I', '-c', CREATE, EXPECT, cwd=project)
     info = project.stat()
     write_record(base / ('registration-' + key + '.json'),
@@ -107,7 +114,8 @@ def make_project(base, allocate):
     git = base / ('git-' + key)
     git.mkdir(mode=0o755)
     git.chmod(0o755)
-    git_cmd = ['/usr/bin/git', '--git-dir=' + str(git)]
+    git_cmd = ['/usr/bin/env', 'GIT_CONFIG_NOSYSTEM=1', 'GIT_CONFIG_GLOBAL=/dev/null',
+               '/usr/bin/git', '-C', str(git), '--git-dir=' + str(git)]
     command(*git_cmd, 'init', '--bare', '--template=')
     command(*git_cmd, 'config', 'core.hooksPath', '/dev/null')
     command(*git_cmd, 'config', 'core.fsmonitor', 'false')
@@ -127,14 +135,17 @@ def make_project(base, allocate):
     return key, project, developer
 
 
-def prepare_tools(base, fixture):
+def prepare_tools(base, fixture, create_owned_dir):
     _, project, developer = fixture
     scratch = base / 'dependency-prep'
-    scratch.mkdir(mode=0o700)
-    os.chown(scratch, developer['uid'], developer['gid'])
+    create_owned_dir(scratch, developer)
+    npmrc = base / 'empty-npmrc'
+    npmrc.touch(exist_ok=False)
+    npmrc.chmod(0o644)
     as_developer(developer, '/usr/bin/env', f'npm_config_cache={scratch}/npm',
                  '/usr/bin/npm', 'install', '--offline', '--ignore-scripts',
-                 '--no-audit', '--no-fund', '--install-links', cwd=project)
+                 '--no-audit', '--no-fund', '--install-links',
+                 '--userconfig=/dev/null', f'--globalconfig={npmrc}', cwd=project)
     as_developer(developer, '/usr/bin/env', f'COMPOSER_HOME={scratch}/composer',
                  '/usr/bin/composer', '--no-plugins', '--no-scripts', '--no-interaction',
                  'install', cwd=project)
@@ -177,11 +188,28 @@ def proc_identity(pid):
         return None
 
 
-def has_uid(pid, uid):
-    try:
-        return Path('/proc', pid).stat().st_uid == uid
-    except FileNotFoundError:
-        return False
+def verify_unused_accounts(accounts):
+    if not accounts:
+        return
+    uids = {identity['uid'] for identity in accounts}
+    gids = {identity['gid'] for identity in accounts}
+    expected = {identity['account'] for identity in accounts}
+    if ({p.pw_name for p in pwd.getpwall() if p.pw_uid in uids or p.pw_gid in gids} != expected
+            or {g.gr_name for g in grp.getgrall() if g.gr_gid in gids} != expected
+            or any(grp.getgrnam(name).gr_mem for name in expected)):
+        raise RuntimeError('Temporary accounts or their groups are shared')
+    for process in Path('/proc').iterdir():
+        if not process.name.isdecimal():
+            continue
+        try:
+            lines = (process / 'status').read_text(errors='replace').splitlines()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        for line in lines:
+            key, _, value = line.partition(':')
+            if key in ('Uid', 'Gid', 'Groups') and (
+                    set(map(int, value.split())) & (uids if key == 'Uid' else gids)):
+                raise RuntimeError('A process retains a temporary credential')
 
 
 def cgroup_children(session):
@@ -196,24 +224,48 @@ def cgroup_children(session):
 
 
 def assert_clean(session, processes=None):
+    if unit_state(session) != 'absent':
+        args = [PYTHON, '-I', str(session.base / 'launcher/project_executor.py'),
+                str(session.base), session.session_id]
+        expected_command = ' ; argv[]=' + ' '.join(args) + ' ; '
+        result = run([SYSTEMCTL, 'show', '--value', '-p', 'ExecStart', '--', session.unit])
+        if unit_state(session) != 'absent' and (
+                result.returncode or expected_command not in result.stdout):
+            raise RuntimeError('Refusing cleanup of a different systemd command')
     session.stop()
     assert '/run/' + session.runtime_directory not in Path('/proc/self/mountinfo').read_text()
+    group = Path('/sys/fs/cgroup/system.slice') / session.unit / 'cgroup.events'
+    def empty():
+        try:
+            return 'populated 0' in group.read_text().splitlines()
+        except FileNotFoundError:
+            return True
+
+    wait_for(empty, 'empty executor cgroup')
     if processes:
         group, pids = processes
         wait_for(lambda: not group.exists() or not group.read_text().strip(), 'empty cgroup')
         assert all(info is None or proc_identity(pid) != info for pid, info in pids.items())
 
 
-def run_suite(base, archive, *, ci):
+def run_suite(base, archive, *, ci, check_base):
     accounts = []
     sessions = []
     clients = []
+    owned_dirs = {}
 
     def allocate(path, slot, key):
+        check_base()
         path.mkdir(mode=0o700)
         record = provision_executor_fixture(path, slot, key)
-        accounts.append((path, slot))
+        accounts.append((path, slot, record))
         return record
+
+    def create_owned_dir(path, owner):
+        check_base()
+        path.mkdir(mode=0o700)
+        os.chown(path, owner['uid'], owner['gid'], follow_symlinks=False)
+        owned_dirs[path] = path.lstat()
 
     def start(fixture, sibling, mode, *, agent='fixture-agent-a',
               profile='read', runtime=90, missing=None):
@@ -231,9 +283,9 @@ def run_suite(base, archive, *, ci):
         argv = session.service_argv(runtime_seconds=runtime)
         argv[1:1] = ['--setenv=DEVSTACK_TEST_SECRET=host-only',
                      '--property=OpenFile=' + str(base / 'canary') + ':fixture:read-only']
+        sessions.append(session)
         clients.append((session, subprocess.Popen(
             argv, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)))
-        sessions.append(session)
         return session, identity, output, clients[-1][1]
 
     def finish(job, expected=0, failure=None):
@@ -266,9 +318,9 @@ def run_suite(base, archive, *, ci):
         return cgroup_children(job[0])
 
     try:
-        a = make_project(base, allocate)
-        b = make_project(base, allocate)
-        prepare_tools(base, a)
+        a = make_project(base, allocate, create_owned_dir)
+        b = make_project(base, allocate, create_owned_dir)
+        prepare_tools(base, a, create_owned_dir)
         if archive:
             # Use the second fixture for Laravel so the standalone local
             # Composer package in the first fixture remains independent.
@@ -411,59 +463,144 @@ def run_suite(base, archive, *, ci):
             print('PASS: missing registration, identity drift, replaced source, links, Git and incomplete setup refused',
                   flush=True)
     finally:
+        check_base()
+        errors = []
         for session in sessions:
-            assert_clean(session)
+            try:
+                assert_clean(session)
+            except (AssertionError, OSError, ValueError, RuntimeError,
+                    subprocess.SubprocessError) as exc:
+                errors.append(exc)
+        if errors:
+            raise RuntimeError('Executor cleanup could not be confirmed') from errors[0]
         for _, client in clients:
             client.communicate(timeout=20)
+        identities = []
+        for path, slot, allocated in accounts:
+            identity = verify_binding(path, slot)
+            if identity != allocated:
+                raise RuntimeError('Temporary account binding changed')
+            identities.append(identity)
+        verify_unused_accounts(identities)
         reject_nested_mounts(base)
         # Remove the synthetic developer's files before releasing its UID.
-        for project in (*base.glob('project-*'), base / 'dependency-prep'):
-            if project.exists():
-                shutil.rmtree(project)
-        for path, slot in reversed(accounts):
-            identity = verify_binding(path, slot)
-            assert not any(has_uid(pid, identity['uid'])
-                           for pid in os.listdir('/proc') if pid.isdecimal())
+        for directory, created in owned_dirs.items():
+            current = directory.lstat()
+            if (not os.path.samestat(created, current) or not stat.S_ISDIR(current.st_mode)
+                    or (current.st_uid, current.st_gid) != (created.st_uid, created.st_gid)):
+                raise ValueError('Temporary source or scratch directory was replaced')
+        for directory in owned_dirs:
+            shutil.rmtree(directory)
+        for path, slot, identity in reversed(accounts):
+            if verify_binding(path, slot) != identity:
+                raise RuntimeError('Temporary account binding changed before removal')
             command('/usr/sbin/userdel', '--', identity['account'])
+            # Never adopt or delete a group left behind by system account tools.
+            for lookup in (pwd.getpwnam, grp.getgrnam):
+                try:
+                    lookup(identity['account'])
+                except KeyError:
+                    pass
+                else:
+                    raise RuntimeError('Temporary account or group was not removed')
 
 
-def main():
-    if (not sys.flags.isolated or os.geteuid() != 0 or len(sys.argv) not in (2, 4)
-            or sys.argv[1] not in ('--ci', '--local')
-            or Path('/proc/1/comm').read_text().strip() != 'systemd'):
-        raise SystemExit('Use sudo python3 -I with --local (spare WSL) or --ci (hosted runner)')
-    wsl = 'microsoft' in Path('/proc/sys/kernel/osrelease').read_text().lower()
-    ci = sys.argv[1] == '--ci'
-    if ci:
-        if wsl or os.getenv('GITHUB_ACTIONS') != 'true' or os.getenv('RUNNER_ENVIRONMENT') != 'github-hosted':
-            raise SystemExit('Expected a disposable hosted CI runner')
-    elif not wsl or os.path.lexists('/etc/devstack'):
-        raise SystemExit('The local smoke requires a spare WSL distribution without DevStack')
-    if len(sys.argv) == 4 and sys.argv[2] != '--laravel-vendor':
-        raise SystemExit('Expected --laravel-vendor ARCHIVE')
-    archive = Path(sys.argv[3]) if len(sys.argv) == 4 else None
-    require_backend()
-    os.umask(0o077)
-    base = Path(tempfile.mkdtemp(prefix='devstack-executor-probe-', dir='/var/lib'))
-    base.chmod(0o711)
-    launcher = base / 'launcher'
-    launcher.mkdir(mode=0o700)
-    for name in MODULES:
-        shutil.copyfile(ROOT / 'daemon' / name, launcher / name)
-    proof = launcher / 'devstack-proof.py'
-    shutil.copyfile(ROOT / 'tests/project-executor-payload.py', proof)
-    proof.chmod(0o644)
+def check_local(kernel):
+    release = Path('/etc/os-release').read_text()
+    if ('microsoft' not in kernel or 'wsl2' not in kernel
+            or not re.search(r'^ID="?ubuntu"?$', release, re.MULTILINE)
+            or not re.search(r'^VERSION_ID="?26\.04"?$', release, re.MULTILINE)
+            or command('/usr/bin/findmnt', '-n', '-o', 'FSTYPE', '-T', '/var/lib').strip() != 'ext4'):
+        raise ValueError('Use Ubuntu 26.04 WSL2 with an ext4 fixture filesystem')
+    for path in map(Path, ('/usr/bin/git', '/usr/bin/php8.5', '/usr/bin/node',
+                           '/usr/bin/npm', '/usr/bin/composer')):
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ValueError('Missing installed fixture tool: ' + path.name)
+    for name in PHP_MODULES:
+        if not Path('/etc/php/8.5/mods-available', name + '.ini').is_file():
+            raise ValueError('Missing installed PHP module: ' + name)
+    for path in map(Path, ('/usr/share/git-core', '/usr/share/nodejs',
+                           '/usr/share/php', '/usr/share/zoneinfo')):
+        if not path.is_dir():
+            raise ValueError('Missing installed runtime directory: ' + path.name)
+
+
+def run_fixture(archive, *, ci, guard_installed):
+    protected_parents(Path('/var/lib/fixture'))
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise RuntimeError('Descriptor-based fixture cleanup is unavailable')
+    base = None
+
+    def check_base():
+        protected_parents(base)
+        protected_control(base, directory=True)
+        current = base.lstat()
+        if not os.path.samestat(created, current) or current.st_mode != created.st_mode:
+            raise RuntimeError('Temporary fixture directory changed')
+
     try:
-        run_suite(base, archive, ci=ci)
+        with protect_workstation() if guard_installed else nullcontext():
+            base = Path(tempfile.mkdtemp(prefix='devstack-executor-probe-', dir='/var/lib'))
+            base.chmod(0o711)
+            created = base.lstat()
+            launcher = base / 'launcher'
+            launcher.mkdir(mode=0o700)
+            for name in MODULES:
+                shutil.copyfile(ROOT / 'daemon' / name, launcher / name)
+            proof = launcher / 'devstack-proof.py'
+            shutil.copyfile(ROOT / 'tests/project-executor-payload.py', proof)
+            proof.chmod(0o644)
+            run_suite(base, archive, ci=ci, check_base=check_base)
+        check_base()
+        reject_nested_mounts(base)
+        shutil.rmtree(base)
     except BaseException:
         # Retain the protected records for root-only investigation if a unit
         # or account could not be confirmed and removed.
-        print('Synthetic fixture diagnostics:', base, file=sys.stderr, flush=True)
-        for output in sorted(base.glob('session-*/output')):
-            print(output.parent.name, output.read_text()[-2500:], file=sys.stderr, flush=True)
+        if base is not None:
+            print('Synthetic fixture diagnostics:', base, file=sys.stderr, flush=True)
+            if ci:
+                check_base()
+                for output in sorted(base.glob('session-*/output')):
+                    print(output.parent.name, output.read_text()[-2500:], file=sys.stderr, flush=True)
         raise
+
+
+def interrupt(signum, frame):
+    raise KeyboardInterrupt(f'Test interrupted by signal {signum}')
+
+
+def main():
+    if (not sys.flags.isolated or sys.flags.optimize or os.geteuid() != 0
+            or sys.argv[1:2] not in (['--ci'], ['--local'])
+            or Path('/proc/1/comm').read_text().strip() != 'systemd'
+            or not os.path.samestat(os.stat('/proc/self/ns/mnt'), os.stat('/proc/1/ns/mnt'))):
+        raise SystemExit('Use sudo python3 -I from the systemd host with --local or --ci')
+    kernel = Path('/proc/sys/kernel/osrelease').read_text().lower()
+    ci = sys.argv[1] == '--ci'
+    archive = None
+    if ci:
+        if ('microsoft' in kernel or os.getenv('GITHUB_ACTIONS') != 'true'
+                or os.getenv('RUNNER_ENVIRONMENT') != 'github-hosted'):
+            raise SystemExit('Expected a disposable hosted CI runner')
+        if len(sys.argv) == 4 and sys.argv[2] == '--laravel-vendor':
+            archive = Path(sys.argv[3]).absolute()
+        elif len(sys.argv) != 2:
+            raise SystemExit('Expected --ci [--laravel-vendor ARCHIVE]')
     else:
-        shutil.rmtree(base)
+        if len(sys.argv) != 2:
+            raise SystemExit('--local takes no additional arguments')
+        check_local(kernel)
+    require_backend()
+    os.umask(0o077)
+    # Avoid the administrator's working directory and Git configuration.
+    os.chdir('/')
+    installed = Path('/opt/devstack/daemon/devstackd.py').is_file()
+    guard_installed = not ci or installed
+    if guard_installed:
+        check_account_hooks()
+    signal.signal(signal.SIGTERM, interrupt)
+    run_fixture(archive, ci=ci, guard_installed=guard_installed)
 
 
 if __name__ == '__main__':
