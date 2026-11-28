@@ -14,6 +14,11 @@ action="${1:-}"
 [[ $action == publish || $action == remove || $action == rollback ]] || die 'Unknown operation.'
 [[ $action != publish || $# -eq 3 ]] || die 'Expected a stage and Node executable.'
 [[ $action == publish || $# -eq 1 ]] || die 'Unexpected arguments.'
+# The extension directory itself can be renamed if its parent is writable.
+opt_mode="$(stat -c %a -- /opt)"
+[[ -d /opt && ! -L /opt && "$(stat -c %u -- /opt)" == 0 && $opt_mode =~ ^[0-7]{3,4}$ ]] &&
+  (( (8#$opt_mode & 8#022) == 0 )) || die 'Expected a protected /opt directory.'
+
 # Validate the candidate before creating any installation directories.
 if [[ $action == publish ]]; then
   stage="$2"
@@ -32,19 +37,28 @@ if [[ ! -e $base && ! -L $base ]]; then
   if [[ $action == remove ]]; then echo 'DevStack Tools is not installed.'; exit 0; fi
   [[ $action == publish ]] || die 'No installed release to roll back.'
   mkdir -m 0755 -- "$base"
-  printf '%s\n' 'devstack-tools-v1' > "$base/.managed"
+  marker="$(mktemp "$base/.marker-XXXXXXXX")"
+  printf '%s\n' 'devstack-tools-v1' > "$marker"
+  chmod 0644 "$marker"
+  mv -Tf -- "$marker" "$base/.managed"
   mkdir -m 0755 -- "$base/releases"
   : > "$base/.lock"
   chmod 0644 "$base/.lock"
 fi
 [[ -d $base && ! -L $base && "$(stat -c %u:%a -- "$base")" == 0:755 &&
-   -f $base/.managed && ! -L $base/.managed && "$(cat "$base/.managed")" == devstack-tools-v1 &&
+   -f $base/.managed && ! -L $base/.managed && "$(stat -c %u:%h -- "$base/.managed")" == 0:1 &&
    -f $base/.lock && ! -L $base/.lock && "$(stat -c %u:%a -- "$base/.lock")" == 0:644 &&
    -d $base/releases && ! -L $base/releases && "$(stat -c %u:%a -- "$base/releases")" == 0:755 ]] ||
   die 'Refusing to modify an unmanaged or unsafe /opt/devstack-tools.'
 # Shared by the launchers. Never kill a running job to replace its tools.
 exec 9<"$base/.lock"
 flock -x -w 2 9 || die 'Tools are in use. Close active tests and CLI sessions first.'
+# Upgrade markers created under an inherited default ACL. Check the existing
+# identity without accepting arbitrary text or following an unmanaged path.
+[[ "$(stat -c %s -- "$base/.managed")" == 18 && "$(head -c 18 -- "$base/.managed")" == devstack-tools-v1 ]] ||
+  die 'Unexpected installation marker.'
+chmod 0644 "$base/.managed"
+[[ "$(head -c 18 -- "$base/.managed")" == devstack-tools-v1 ]] || die 'Installation marker changed.'
 previous=''
 if [[ -e $base/current || -L $base/current ]]; then
   [[ -L $base/current ]] || die 'current must be a managed symlink.'

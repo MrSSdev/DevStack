@@ -40,7 +40,12 @@ jobs:
           node --check extensions/devstack-tools/smoke.cjs
           bash scripts/security-scan.sh
       - name: Real installation and lifecycle
-        run: bash extensions/devstack-tools/tests/installed-smoke.sh
+        run: |
+          # Standard product permissions while retaining runner ACL defaults.
+          test "$(stat -c %u /opt)" = 0
+          test ! -L /opt
+          sudo chmod go-w /opt
+          bash extensions/devstack-tools/tests/installed-smoke.sh
   mail:
     name: DevStack Mail unit tests and real read-only Mailpit
     runs-on: ubuntu-24.04

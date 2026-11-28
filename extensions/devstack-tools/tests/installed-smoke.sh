@@ -7,6 +7,7 @@ base=/opt/devstack-tools
 [[ ! -e $base && ! -L $base ]] || { echo 'Expected a fresh runner'; exit 1; }
 bash "$src/install.sh" --with-deps
 first="$(readlink -f "$base/current")"
+[[ "$(stat -c %u:%a "$base/.managed")" == 0:644 ]]
 [[ ! -w $first/playwright/package.json && ! -w $first/browsers ]]
 [[ "$(stat -c %u "$first")" == 0 ]]
 "$base/bin/playwright" --version | grep -Fx 'Version 1.65.1'
