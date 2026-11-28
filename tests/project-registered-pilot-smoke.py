@@ -142,7 +142,7 @@ def preparation_only():
     unit = 'devstack-mount-only-' + KEY + '-php'
     try:
         output = run('/usr/bin/systemd-run', '--quiet', '--wait', '--pipe',
-                     '--collect', '--service-type=exec', '--uid=root',
+                     '--collect', '--service-type=exec',
                      '--unit=' + unit, '--property=PrivateMounts=yes',
                      '--property=RuntimeDirectory=' + directory.name,
                      '--property=RuntimeDirectoryMode=0711',

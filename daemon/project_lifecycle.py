@@ -66,10 +66,6 @@ class Component:
     registration: str | None = None
 
     @property
-    def service_user(self):
-        return 'root' if self.registration is not None else self.user
-
-    @property
     def runtime_directory(self):
         if self.registration is None:
             return None
@@ -99,9 +95,10 @@ def parse_snapshot(result, component):
         if values.get('ActiveState') != 'inactive':
             raise LifecycleError('Inconsistent absent unit')
         return 'absent'
+    expected_users = (component.user,) if component.registration is None else ('', 'root')
     if (result.returncode != 0 or values.get('LoadState') != 'loaded'
             or values.get('Transient') != 'yes'
-            or values.get('User') != component.service_user
+            or values.get('User') not in expected_users
             or values.get('Description') != component.description):
         raise LifecycleError('Unowned or unreadable unit: ' + component.unit)
     state = values.get('ActiveState')
@@ -111,7 +108,7 @@ def parse_snapshot(result, component):
 
 
 def unit_state(component):
-    return parse_snapshot(run([SYSTEMCTL, 'show', '--no-pager',
+    return parse_snapshot(run([SYSTEMCTL, 'show', '--no-pager', '--all',
         '--property=Id,LoadState,ActiveState,Transient,User,Description',
         '--', component.unit]), component)
 
@@ -166,14 +163,18 @@ def start_component(component, argv):
         raise LifecycleError('Unexpected existing pilot runtime directory')
     if socket_probe(component, cleanup=True):
         raise LifecycleError('Endpoint already accepts connections')
-    profile = (['--property=RuntimeMaxSec=180s'] if component.registration is None else [
+    # A system unit runs as root by default. With explicit User=root and
+    # seccomp, systemd 260 drops CAP_SETUID while setting up credentials.
+    # The fixed pilot launcher needs it to write uid_map and drop its UID.
+    profile = (['--uid=' + component.user, '--property=RuntimeMaxSec=180s']
+               if component.registration is None else [
         '--property=PrivateMounts=yes',
         '--property=RuntimeDirectory=' + component.runtime_directory,
         '--property=RuntimeDirectoryMode=0711',
     ])
     result = run([SYSTEMD_RUN, '--quiet', '--collect', '--service-type=exec',
         '--unit=' + component.unit, '--description=' + component.description,
-        '--uid=' + component.service_user, *RUNTIME_SECURITY_PROPERTIES,
+        *RUNTIME_SECURITY_PROPERTIES,
         '--property=KillMode=control-group', '--property=UMask=0007',
         '--property=TimeoutStopSec=5s', *profile,
         *argv], timeout=15)

@@ -45,10 +45,12 @@ class RegisteredPilotTests(unittest.TestCase):
         component = Component('php', user, Path('/unused/php.sock'), self.key)
         self.assertEqual(component.runtime_directory, 'devstack-pilot-' + self.key + '-php')
         values = {'Id': component.unit, 'LoadState': 'loaded', 'ActiveState': 'active',
-                  'Transient': 'yes', 'User': 'root', 'Description': component.description}
+                  'Transient': 'yes', 'User': '', 'Description': component.description}
         def result():
             return subprocess.CompletedProcess([], 0, stdout=''.join(
                 f'{k}={v}\n' for k,v in values.items()), stderr='')
+        self.assertEqual(parse_snapshot(result(), component), 'active')
+        values['User'] = 'root'  # A unit started by an earlier pilot build.
         self.assertEqual(parse_snapshot(result(), component), 'active')
         values['User'] = user
         with self.assertRaises(LifecycleError):
