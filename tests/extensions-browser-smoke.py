@@ -430,7 +430,11 @@ def exercise(browser):
         mobile_card = mobile_page.get_by_role('region', name='DevStack Tools')
         mobile_mail = mobile_card.get_by_role('button', name=re.compile('DevStack Mail'))
         expect(mobile_mail).to_be_visible()
-        assert mobile_mail.bounding_box()['height'] >= 44
+        target = mobile_mail.evaluate('''element => ({
+            height: element.offsetHeight, viewport: innerWidth,
+            coarse: matchMedia('(any-pointer: coarse)').matches,
+        })''')
+        assert target['height'] >= 44, target
         assert mobile_page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
         mobile_page.screenshot(path=results / 'extensions-project-card-mobile.png', full_page=True)
         mobile_mail.tap()

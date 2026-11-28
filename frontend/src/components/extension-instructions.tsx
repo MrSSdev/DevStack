@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { request, runOperation } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 export type ProjectInstructionState = {
   id: string; slug: string; name: string; automatic: boolean; pending: boolean
@@ -20,7 +21,9 @@ export const instructionStatuses: Record<string, string> = {
   missing: 'Brak katalogu projektu', linked: 'Zarządzane', detached: 'Odłączone', selected: 'Dobrano',
 }
 
-export const shortcutStyle = 'pointer-coarse:min-h-11 pointer-coarse:min-w-11'
+// Narrow windows and hybrid computers can expose a fine primary pointer.
+export const touchHeight = 'max-sm:min-h-[44px] any-pointer-coarse:min-h-[44px]'
+export const shortcutStyle = cn(touchHeight, 'max-sm:min-w-[44px] any-pointer-coarse:min-w-[44px]')
 
 export function timeLabel(value: string) {
   return new Date(value).toLocaleString('pl-PL')
@@ -55,7 +58,7 @@ export function ProjectInstructionActions({ project, operations, pending, send, 
   const syncLabel = compact && !['error', 'unsafe_directory', 'directory_changed', 'missing'].includes(project.status)
     ? 'Synchronizuj instrukcje' : 'Ponów synchronizację'
   return <>
-    {operations.includes('set_automatic') && <label className={compact ? 'flex min-h-8 items-center gap-1.5 pl-1 text-xs pointer-coarse:min-h-11' : 'flex items-center gap-2'}>
+    {operations.includes('set_automatic') && <label className={compact ? cn('flex min-h-8 items-center gap-1.5 pl-1 text-xs', touchHeight) : 'flex items-center gap-2'}>
       <Switch disabled={disabled} checked={project.automatic} aria-label={'Automatyczne instrukcje w projekcie ' + project.name}
         onCheckedChange={enabled => send({ action: 'set_automatic', enabled, project: project.id })} />Automatycznie
     </label>}
