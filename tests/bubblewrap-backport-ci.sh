@@ -130,6 +130,13 @@ sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 \
 # home-directory project with the reviewed package, before rollback.
 sudo env GITHUB_ACTIONS=true python3 -I tests/project-registered-pilot-smoke.py
 bash tests/project-activation-ci.sh
+# Reuse the trusted vendor dependencies already prepared for E2.0. The
+# executor receives only a detached copy in a new synthetic project.
+sudo apt-get install -y --no-install-recommends nodejs npm
+tar -C "$HOME/projects/isolation-livewire" -cf "$work/executor-vendor.tar" vendor
+sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+    python3 -I tests/project-executor-systemd-smoke.py --ci \
+    --laravel-vendor "$work/executor-vendor.tar"
 
 sudo apt-get -y --allow-downgrades --no-remove install "$original"
 test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$old_version"

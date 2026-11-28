@@ -216,6 +216,16 @@ def launch_stage(name):
     print('Registered pilot preparation: ' + name, file=sys.stderr, flush=True)
 
 
+def make_mounts_private():
+    if os.path.samestat(os.stat('/proc/self/ns/mnt'), os.stat('/proc/1/ns/mnt')):
+        raise ValueError('PrivateMounts is required')
+    mount_command('/usr/bin/mount', '-n', '--make-rprivate', '/')
+    if any(any(word.startswith(('shared:', 'master:', 'propagate_from:'))
+               for word in line.split(' - ', 1)[0].split()[6:])
+           for line in Path('/proc/self/mountinfo').read_text().splitlines()):
+        raise ValueError('Mount propagation is not private')
+
+
 @contextmanager
 def prepare_runtime(project_id, kind):
     # Internal preparation shared by the fixed launcher and the disposable
@@ -232,13 +242,7 @@ def prepare_runtime(project_id, kind):
     if stat.S_IMODE(work.stat().st_mode) != 0o711 or any(work.iterdir()):
         raise ValueError('Expected empty systemd runtime directory')
     launch_stage('private-namespace')
-    if os.path.samestat(os.stat('/proc/self/ns/mnt'), os.stat('/proc/1/ns/mnt')):
-        raise ValueError('PrivateMounts is required')
-    mount_command('/usr/bin/mount', '-n', '--make-rprivate', '/')
-    if any(any(word.startswith(('shared:', 'master:', 'propagate_from:'))
-               for word in line.split(' - ', 1)[0].split()[6:])
-           for line in Path('/proc/self/mountinfo').read_text().splitlines()):
-        raise ValueError('Mount propagation is not private')
+    make_mounts_private()
 
     launch_stage('socket-and-config')
     sendmail = (kind == 'php' and spec['isolated'] and spec['settings']['local_mail']
