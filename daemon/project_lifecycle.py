@@ -164,8 +164,8 @@ def start_component(component, argv):
     if socket_probe(component, cleanup=True):
         raise LifecycleError('Endpoint already accepts connections')
     # A system unit runs as root by default. With explicit User=root and
-    # seccomp, systemd 260 drops CAP_SETUID while setting up credentials.
-    # The fixed pilot launcher needs it to write uid_map and drop its UID.
+    # seccomp, systemd's credential setup can drop CAP_SETUID. The pilot
+    # launcher needs that capability to write uid_map and drop its UID.
     profile = (['--uid=' + component.user, '--property=RuntimeMaxSec=180s']
                if component.registration is None else [
         '--property=PrivateMounts=yes',
