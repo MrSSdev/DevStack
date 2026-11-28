@@ -7,6 +7,7 @@ and RuntimeDirectory, not a persistent host mount publication broker.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import errno
 import json
 import os
@@ -181,11 +182,13 @@ def launch_stage(name):
     print('Registered pilot preparation: ' + name, file=sys.stderr, flush=True)
 
 
-def launch(project_id, kind):
-    # Must be the actual ExecStart process, not ExecStartPre: systemd gives
-    # each command its own mount namespace. Never attach a mount in PID 1's.
+@contextmanager
+def prepare_runtime(project_id, kind):
+    # Internal preparation shared by the fixed launcher and the disposable
+    # mount-only integration test. Never execute project code here.
+    if os.geteuid() != 0:
+        raise ValueError('Trusted administrator required for mount preparation')
     launch_stage('backend-and-registration')
-    require_backend()
     spec, _, developer = registered(None, project_id=project_id)
     identity = verify_binding(journal(project_id), 'p')
     mapping = IdMapping(developer.pw_uid, developer.pw_gid, identity['uid'], identity['gid'])
@@ -243,6 +246,16 @@ def launch(project_id, kind):
                         os.close(fd)
         launch_stage('runtime-argv')
         args = active.argv(sources)
+        yield args, sources, mapping
+    finally:
+        sources.close()
+
+
+def launch(project_id, kind):
+    # Must be the actual ExecStart process, not ExecStartPre: systemd gives
+    # each command its own mount namespace. Never attach a mount in PID 1's.
+    require_backend()
+    with prepare_runtime(project_id, kind) as (args, sources, mapping):
         # Root only prepares mounts and root-owned config; no project code
         # is evaluated. Irreversibly drop all IDs before bwrap or PHP/Nginx.
         launch_stage('drop-groups')
@@ -262,8 +275,6 @@ def launch(project_id, kind):
         launch_stage('exec-bubblewrap')
         os.chdir('/')
         exec_pinned(args, sources)
-    finally:
-        sources.close()
 
 
 def control(action, target):
