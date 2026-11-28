@@ -7,7 +7,7 @@ import secrets
 import socket
 import subprocess
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from playwright.sync_api import expect, sync_playwright
@@ -82,6 +82,10 @@ ROUTES = r'''
     return view('isolation-proof');
 });
 
+\Illuminate\Support\Facades\Route::get('/isolation-redirect', function () {
+    return redirect()->route('home');
+});
+
 \Illuminate\Support\Facades\Route::post('/isolation-upload', function (\Illuminate\Http\Request $request) {
     abort_unless(session('isolated-proof') === 'session-persisted', 409);
     return response()->json(['file' => $request->file('upload')->storeAs('', 'fixture.txt', 'public')]);
@@ -104,7 +108,7 @@ ROUTES = r'''
         'sibling' => file_exists(dirname(base_path()) . '/isolation-sibling/public/index.php'),
         'control' => file_exists('/run/devstack/control.sock'),
         'writable_source' => is_writable(base_path('routes/web.php')),
-    ], 200, ['X-Accel-Redirect' => '/isolation-hidden']);
+    ], 200, $request->boolean('accel') ? ['X-Accel-Redirect' => '/isolation-hidden'] : []);
 });
 
 \Illuminate\Support\Facades\Route::get('/isolation-mail', function (\Illuminate\Http\Request $request) {
@@ -172,8 +176,10 @@ def read_status(path='/', *, slug=SLUG, headers=()):
             '--max-time', '12', '-w', '\n%{http_code}']
     for header in headers:
         args += ['-H', header]
-    response = run(*args, f'https://{slug}.test{path}').stdout
-    body, status = response.rsplit('\n', 1)
+    response = run(*args, f'https://{slug}.test{path}', check=False)
+    if response.returncode:
+        return 0, response.stderr
+    body, status = response.stdout.rsplit('\n', 1)
     return int(status), body
 
 
@@ -181,6 +187,22 @@ def http(path='/', *, slug=SLUG, headers=()):
     code, text = read_status(path, slug=slug, headers=headers)
     assert code == 200, (path, code, text[-3000:])
     return text
+
+
+def wait_http(path='/', *, slug=SLUG):
+    # A newly created vhost may briefly present the previous worker's
+    # default certificate before Nginx applies its asynchronous reload.
+    response = None
+
+    def ready():
+        nonlocal response
+        response = read_status(path, slug=slug)
+        return response if response[0] == 200 else None
+
+    try:
+        return until(ready)[1]
+    except AssertionError:
+        raise AssertionError((slug, path, response)) from None
 
 
 def mailpit(path='/messages', *, ids=None):
@@ -298,9 +320,9 @@ def main():
     (sibling / 'public/index.php').write_text(SIBLING_PHP)
     for path in ('storage/app/public', 'database', 'bootstrap/cache'):
         (sibling / path).mkdir(parents=True)
-    assert json.loads(until(lambda: (lambda r: r[1] if r[0] == 200 else '')(
-        read_status(slug=SIBLING)))) == {'uid': os.getuid(), 'smtp': True}
+    assert json.loads(wait_http(slug=SIBLING)) == {'uid': os.getuid(), 'smtp': True}
 
+    print('Installing the official Livewire starter through the DevStack daemon', flush=True)
     create(SLUG, laravel=True)
     def scaffolded():
         result = registry().get(SLUG)
@@ -332,7 +354,7 @@ def main():
 
     assert 'isolation_id' not in original and legacy_pool.exists()
     assert pilot('status')['status'] == 'not-enrolled'
-    assert json.loads(http('/isolation-probe'))['uid'] == os.getuid()
+    assert json.loads(wait_http('/isolation-probe'))['uid'] == os.getuid()
     ordinary_config = run('sudo', 'cat', str(available)).stdout
     rpc('update_config', slug=SLUG, rules='client_max_body_size 32m;')
     assert 'HTTPS/public' in pilot('activate', success=False)
@@ -351,6 +373,7 @@ def main():
     assert all(not path.exists() for path in run_dirs)
     assert json.loads(http('/isolation-probe'))['uid'] == os.getuid()
 
+    print('Activating the registered project and retiring its legacy FPM pool', flush=True)
     assert pilot('activate')['isolated_https']
     assert pilot('activate')['project_id'] == key
     assert pilot('start')['status'] == 'running'
@@ -361,6 +384,9 @@ def main():
     assert 'fastcgi_pass' not in text and 'root ' not in text
     redirect = run('curl', '-sSI', '--noproxy', '*', f'http://{SLUG}.test/isolation-probe?x=1').stdout
     assert f'Location: {BASE}/isolation-probe?x=1' in redirect
+    framework_redirect = run('curl', '-sSI', '--noproxy', '*', '--cacert', CA,
+                             BASE + '/isolation-redirect').stdout
+    assert f'location: {BASE}' in framework_redirect.lower(), framework_redirect
     probe = json.loads(http('/isolation-probe?value=a%2Fb', headers=('X-Forwarded-For: 198.51.100.99',
                       'X-Forwarded-Proto: http', 'X-Forwarded-Host: forged.test')))
     assert probe['uid'] != os.getuid()
@@ -368,6 +394,7 @@ def main():
     assert (probe['scheme'], probe['host'], probe['forwarded']) == ('https', SLUG + '.test', '127.0.0.1')
     assert not any(probe['reachable'].values()), probe
     assert not any(probe[name] for name in ('sibling', 'control', 'writable_source')), probe
+    assert json.loads(http('/isolation-probe?accel=1'))['uid'] == probe['uid']
     assert 'izolowanego HTTPS' in rpc('update_config', success=False, slug=SLUG, rules='')
     assert 'izolowanego HTTPS' in rpc('update_full_config', success=False, slug=SLUG, full_config=ordinary_config)
 
@@ -383,7 +410,6 @@ $db->exec("INSERT INTO isolation_proof VALUES (3)");
     assert run('sudo', 'sha256sum', certificate).stdout == cert
     print('PASS: HTTPS, Laravel, Livewire, Flux/Vite, session, upload, SQLite and restricted host access', flush=True)
 
-    from urllib.parse import quote
     assert until(lambda: http('/isolation-smtp-state') == 'ready')
     try:
         assert json.loads(http('/isolation-mail?subject=' + quote(SUBJECT)))['sendmail']
@@ -444,14 +470,13 @@ $db->exec("INSERT INTO isolation_proof VALUES (3)");
     sibling_key = registry()[SIBLING]['project_id']
     assert not Path(f'/run/devstack-pilot-{sibling_key}-php/smtp').exists()
     assert pilot('deactivate', SIBLING)['status'] == 'ordinary'
-    assert until(lambda: read_status(slug=SIBLING)[0] == 200)
+    wait_http(slug=SIBLING)
 
     # Explicit return to ordinary, then a fresh activation and managed delete.
     assert pilot('deactivate')['status'] == 'ordinary'
     assert 'isolation_id' not in registry()[SLUG]
     assert not available.is_symlink() and legacy_pool.exists()
-    assert until(lambda: read_status('/isolation-probe')[0] == 200)
-    assert json.loads(http('/isolation-probe'))['uid'] == os.getuid()
+    assert json.loads(wait_http('/isolation-probe'))['uid'] == os.getuid()
     assert pilot('activate')['isolated_https']
     delete(SLUG)
     assert SLUG not in registry() and not available.exists() and not legacy_pool.exists()
@@ -460,8 +485,7 @@ $db->exec("INSERT INTO isolation_proof VALUES (3)");
     assert (PROJECT / 'database/database.sqlite').is_file()
     create(SLUG)
     assert registry()[SLUG]['project_id'] != key and 'isolation_id' not in registry()[SLUG]
-    assert until(lambda: read_status('/isolation-probe')[0] == 200)
-    assert json.loads(http('/isolation-probe'))['uid'] == os.getuid()
+    assert json.loads(wait_http('/isolation-probe'))['uid'] == os.getuid()
     print('PASS: fail-closed failure, identity/drift recovery, real update/rollback, deactivation and delete/recreate',
           flush=True)
 
