@@ -37,7 +37,9 @@ certutil -A -d "sql:$HOME/.pki/nssdb" -n DevStack-activation -t 'C,,' -i /usr/lo
 venv="$RUNNER_TEMP/devstack-activation-venv"
 python3 -m venv "$venv"
 "$venv/bin/pip" install playwright==1.60.0
-"$venv/bin/python" -m playwright install --with-deps chromium
+# The Ubuntu 26.04 image ships Chrome and its matching native libraries.
+export DEVSTACK_CHROMIUM="$(command -v google-chrome)"
+"$DEVSTACK_CHROMIUM" --version
 # Use the same canonical source location and real second-stage updater.
 mkdir "$HOME/projects/devstack-source"
 cp -a backend daemon framework-installers scripts "$HOME/projects/devstack-source/"

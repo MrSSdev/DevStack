@@ -27,6 +27,9 @@ import tempfile
 import time
 from typing import Any
 
+# Keep imports from writing inside the root-owned, replaceable code tree.
+sys.dont_write_bytecode = True
+
 CFG_FILE = pathlib.Path('/etc/devstack/server.json')
 STATE_FILE = pathlib.Path('/var/lib/devstack/projects.json')
 SECRET_FILE = pathlib.Path('/var/lib/devstack/credentials.json')

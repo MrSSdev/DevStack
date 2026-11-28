@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import socket
 import subprocess
 import time
@@ -218,7 +217,7 @@ def install_routes():
 
 def browser_acceptance():
     with sync_playwright() as play:
-        browser = play.chromium.launch()
+        browser = play.chromium.launch(executable_path=os.environ['DEVSTACK_CHROMIUM'])
         page = browser.new_page()
         page.context.route(re.compile(r'^https?://(?!isolation-livewire\.test(?:/|$))'),
                            lambda route: route.abort())

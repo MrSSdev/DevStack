@@ -333,7 +333,7 @@ def upgrade():
         result=update()
         assert result.returncode != 0 and 'Notification unit differs:' in result.stderr, result.stderr[-1500:]
         assert 'restoring previous installed application' in result.stderr
-        assert marker.read_text() == 'CI previous-code marker\n'
+        assert marker.is_file() and marker.read_text() == 'CI previous-code marker\n', result.stderr[-2500:]
         assert UNIT.read_text() == CORE_UNIT
         assert optional_snapshot('stopped') == before
     finally:

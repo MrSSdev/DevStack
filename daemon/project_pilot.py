@@ -14,6 +14,9 @@ import subprocess
 import sys
 import time
 
+# The root-owned installation is swapped by the updater.
+sys.dont_write_bytecode = True
+
 INSTALLED = Path('/opt/devstack/daemon/project_pilot.py')
 MODULES = (
     'project_pilot.py', 'project_isolation_preflight.py',
