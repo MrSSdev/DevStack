@@ -31,14 +31,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  browser:
-    name: Installed stack, Chromium, themes and SMTP
+  frontend:
+    name: Build browser fixture
     runs-on: ubuntu-24.04
-    timeout-minutes: 28
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build production UI
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm test && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devstack-browser-ui
+          path: backend/public/
+          if-no-files-found: error
+          retention-days: 1
+
+  browser:
+    name: Installed stack, Chromium (${{ matrix.group }})
+    needs: frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [tools, projects, mail, pwa, notifications, platform]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: devstack-browser-ui
+          path: backend/public
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
@@ -47,9 +77,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Build production UI
-        working-directory: frontend
-        run: npm ci --no-audit --no-fund && npm test && npm run build
       - name: Install real stack in the disposable runner
         run: |
           # The product targets Ubuntu 26.04. The 24.04 CI image needs the
@@ -82,6 +109,7 @@ jobs:
               f.write('DEVSTACK_E2E_PASSWORD=' + password + '\n')
           PY
       - name: Verify legacy web-state permissions during a real update
+        if: matrix.group == 'platform'
         run: |
           sudo systemctl stop devstack-notifications.timer
           sudo systemctl stop devstack-notifications.service
@@ -106,6 +134,7 @@ jobs:
           test ! -e /opt/devstack/push-helper.php
           test ! -e /opt/devstack/scripts/notification-push.py
       - name: Exercise the Windows notification RPC through real restricted systemd
+        if: matrix.group == 'platform'
         run: sudo env GITHUB_ACTIONS=true python3 tests/windows-notification-systemd-smoke.py
       - name: Install browser tooling
         run: |
@@ -113,15 +142,18 @@ jobs:
           /tmp/devstack-browser-venv/bin/pip install playwright==1.60.0
           /tmp/devstack-browser-venv/bin/python -m playwright install --with-deps chromium
       - name: Verify declarative Tools UI and instruction lifecycle on the installed stack
+        if: matrix.group == 'tools'
         env:
           DEVSTACK_E2E_ISOLATED: '1'
           NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/devstack-browser.crt
         run: /tmp/devstack-browser-venv/bin/python tests/extensions-browser-smoke.py
-      - name: Exercise actual HTTPS, PHP, helper, services and Mailpit
+      - name: Exercise the assigned regression group on the installed stack
+        if: matrix.group != 'tools'
         env:
+          DEVSTACK_BROWSER_GROUP: ${{ matrix.group }}
           DEVSTACK_E2E_ISOLATED: '1'
           NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/devstack-browser.crt
-        run: /tmp/devstack-browser-venv/bin/python tests/browser-smoke.py
+        run: /tmp/devstack-browser-venv/bin/python tests/browser-smoke.py --group "$DEVSTACK_BROWSER_GROUP"
       - name: Diagnostics on failure
         if: failure()
         run: |
@@ -130,7 +162,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: devstack-browser-verification
+          name: devstack-browser-verification-${{ matrix.group }}
           path: browser-results/
           if-no-files-found: warn
           retention-days: 1
