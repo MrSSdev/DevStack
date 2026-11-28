@@ -101,7 +101,68 @@ def stopped():
     assert all(not path.exists() for path in RUNDIRS), 'RuntimeDirectory not removed'
 
 
+def probe_mounts(key):
+    # This mode is a disposable CI test of the actual installed preparation
+    # function. It never invokes Bubblewrap or evaluates project code, and
+    # cannot be requested through the installed production CLI.
+    sys.path.insert(0, str(INSTALLED.parent))
+    from project_pilot import check_installation, prepare_runtime, registered
+    check_installation()
+    spec, _, developer = registered(None, project_id=key)
+    import re
+    if not re.fullmatch(r'dspilot-[0-9a-f]{10}', developer.pw_name):
+        raise AssertionError('Expected disposable pilot developer')
+    for kind in ('php', 'http'):
+        # The controller launches one service per kind, like the real pilot.
+        if sys.argv[3] != kind:
+            continue
+        with prepare_runtime(key, kind) as (args, sources, mapping):
+            info = os.fstat(sources.root)
+            assert (info.st_uid, info.st_gid) == mapping.runtime
+            assert os.fstatvfs(sources.root).f_flag & os.ST_RDONLY
+            assert set(sources.writable) == (
+                {'storage', 'bootstrap/cache', 'database'} if kind == 'php' else set())
+            for fd in sources.writable.values():
+                info = os.fstat(fd)
+                assert (info.st_uid, info.st_gid) == mapping.runtime
+                assert not os.fstatvfs(fd).f_flag & os.ST_RDONLY
+            assert args[0] == '/usr/bin/bwrap'
+        print('PASS: Actual service-private mount preparation:', kind, flush=True)
+
+
+def preparation_only():
+    sys.path.insert(0, str(INSTALLED.parent))
+    from project_pilot import journal
+    from project_runtime_identity import provision_pilot
+    from project_lifecycle import RUNTIME_SECURITY_PROPERTIES
+    base = journal(KEY)
+    base.mkdir(mode=0o700)
+    provision_pilot(base, KEY)
+    for kind, directory in zip(('php', 'http'), RUNDIRS):
+        unit = 'devstack-mount-only-' + KEY + '-' + kind
+        output = run('/usr/bin/systemd-run', '--quiet', '--wait', '--pipe',
+                     '--collect', '--service-type=exec', '--uid=root',
+                     '--unit=' + unit, '--property=PrivateMounts=yes',
+                     '--property=RuntimeDirectory=' + directory.name,
+                     '--property=RuntimeDirectoryMode=0711',
+                     '--property=UMask=0007', '--property=KillMode=control-group',
+                     '--property=RuntimeMaxSec=45s', *RUNTIME_SECURITY_PROPERTIES,
+                     '--setenv=GITHUB_ACTIONS=true',
+                     '/usr/bin/python3', '-I', str(Path(__file__).absolute()),
+                     '--probe-mounts', KEY, kind)
+        print(output, end='', flush=True)
+        stopped()
+    print('PASS: Preparation-only service namespaces removed; no Bubblewrap execution', flush=True)
+
+
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == '--probe-mounts':
+        if sys.argv[3] not in ('php', 'http'):
+            raise ValueError('Unexpected fixture component')
+        probe_mounts(sys.argv[2])
+        return
+    if sys.argv[1:] not in ([], ['--mount-only']):
+        raise ValueError('Unexpected fixture invocation')
     roots = (INSTALLED.parent.parent, CONFIG, STATE, HOME)
     if any(os.path.lexists(path) for path in roots + tuple(RUNDIRS)):
         raise AssertionError('Refusing to overwrite an existing installation or account')
@@ -157,6 +218,10 @@ other.mkdir()
         acl = run('/usr/bin/getfacl', '-p', str(PROJECT), str(PROJECT / 'public'),
                   str(PROJECT / 'storage'), str(PROJECT / 'database'))
         assert command('status')['status'] == 'not-enrolled'
+        if sys.argv[1:] == ['--mount-only']:
+            preparation_only()
+            assert registry_file.read_bytes() == before
+            return
         result = command('start')
         assert result['status'] == 'running' and result['project_id'] == KEY, result
         assert result['local_mail_setting'] and not result['smtp_in_preview']
