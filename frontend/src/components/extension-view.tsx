@@ -5,11 +5,15 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { request, runOperation } from '@/lib/api'
+import { request } from '@/lib/api'
+import {
+  InstructionPreview, ProjectInstructionActions, instructionStatuses as statuses, timeLabel,
+  useInstructionOperations, type Operation, type OperationData, type ProjectInstructionState,
+} from '@/components/extension-instructions'
 
 const icons = { wrench: Wrench, package: Package, book: BookOpen }
-type Icon = keyof typeof icons
-export type ExtensionNav = { id: string; menu: { label: string; icon: Icon; order: number }; title: string }
+export type ExtensionIconName = keyof typeof icons
+export type ExtensionNav = { id: string; menu: { label: string; icon: ExtensionIconName; order: number }; title: string }
 type Section = { id: string; label: string; kind: 'overview' | 'instructions' | 'projects' | 'automations' }
 type Tool = {
   id: string; name: string; description: string; version: string; installed: boolean; ready: boolean
@@ -19,12 +23,7 @@ type Instruction = {
   id: string; name: string; description: string; format: string; version: string; tools: string[]
   requires: string[]; reason: string; project_count: number; project_slugs: string[]
 }
-type ProjectRow = {
-  id: string; slug: string; name: string; technologies: string[]; services: string[]; automatic: boolean
-  status: string; last_sync: string | null; wanted: Record<string, string>; results: Record<string, string>
-  manual: string[]; conflicts: string[]; migratable: boolean
-}
-type Operation = 'sync' | 'set_automatic' | 'migrate'
+type ProjectRow = ProjectInstructionState & { technologies: string[]; services: string[] }
 type Automation = {
   id: string; label: string; description: string; events: string[]
   last_run: { event: string; at: string; projects: number; errors: number } | null
@@ -37,16 +36,8 @@ type ActiveExtension = {
   automatic: boolean; worker_error: boolean; lifecycle: { changed_at?: string; event?: string }
 }
 type Extension = ActiveExtension | { state: 'absent' | 'legacy' | 'busy' | 'invalid' | 'incompatible' }
-type OperationData = { action: Operation; project?: string; enabled?: boolean }
-type Summary = { id: string; title: string; status: string; count: number }
 type ProjectPage = { projects: ProjectRow[]; next: number | null }
 
-const statuses: Record<string, string> = {
-  pending: 'Oczekuje', synced: 'Zsynchronizowano', disabled: 'Wyłączone',
-  manual: 'Podłączono ręcznie', conflict: 'Konflikt', error: 'Błąd synchronizacji',
-  unsafe_directory: 'Nie można bezpiecznie otworzyć katalogu', directory_changed: 'Katalog projektu został zmieniony',
-  missing: 'Brak katalogu projektu', linked: 'Zarządzane', detached: 'Odłączone',
-}
 const serviceStates: Record<string, string> = {
   active: 'Usługa działa', inactive: 'Usługa zatrzymana', failed: 'Błąd usługi',
   activating: 'Usługa uruchamia się', deactivating: 'Usługa zatrzymuje się',
@@ -59,13 +50,9 @@ const events: Record<string, string> = {
   extension_rolled_back: 'Przywrócenie wydania', extension_removed: 'Usunięcie rozszerzenia', manual: 'Synchronizacja ręczna',
 }
 
-export function ExtensionIcon({ name }: { name: Icon }) {
+export function ExtensionIcon({ name }: { name: ExtensionIconName }) {
   const Icon = icons[name] ?? Package
   return <Icon className="size-4" aria-hidden="true" />
-}
-
-function timeLabel(value: string) {
-  return new Date(value).toLocaleString('pl-PL')
 }
 
 function Overview({ extension, copy }: { extension: ActiveExtension; copy: (text: string) => void }) {
@@ -100,21 +87,6 @@ function Overview({ extension, copy }: { extension: ActiveExtension; copy: (text
       </Card>)}
     </div>
   </>
-}
-
-function InstructionPreview({ url, build }: { url: string; build: string }) {
-  const [content, setContent] = useState('')
-  const [error, setError] = useState(false)
-  useEffect(() => {
-    const controller = new AbortController()
-    void request<{ text: string; build: string }>('GET', url, undefined, undefined, controller.signal)
-      .then(value => { if (!controller.signal.aborted && value.build === build) setContent(value.text) })
-      .catch(() => { if (!controller.signal.aborted) setError(true) })
-    return () => controller.abort()
-  }, [url, build])
-  return <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md bg-secondary p-3 text-xs" tabIndex={0}>
-    {error ? 'Nie udało się pobrać treści instrukcji.' : content || 'Wczytywanie instrukcji…'}
-  </pre>
 }
 
 function Instructions({ extension, url }: { extension: ActiveExtension; url: string }) {
@@ -170,18 +142,7 @@ function Projects({ extension, page, offset, setOffset, pending, send }: {
         {project.manual.length > 0 && <p>Powiązania ręczne · {project.manual.join(', ')}</p>}
         {project.conflicts.length > 0 && <p>Konflikty · {project.conflicts.join(', ')}</p>}
         <div className="flex flex-wrap items-center gap-3">
-          {extension.operations.includes('set_automatic') && <label className="flex items-center gap-2">
-            <Switch disabled={pending} checked={project.automatic} aria-label={'Automatyczne instrukcje w projekcie ' + project.name}
-              onCheckedChange={enabled => send({ action: 'set_automatic', enabled, project: project.id })} />Automatycznie
-          </label>}
-          {extension.operations.includes('sync') && <Button variant="outline" size="sm" disabled={pending}
-            onClick={() => send({ action: 'sync', project: project.id })}>Ponów synchronizację</Button>}
-          {extension.operations.includes('migrate') && project.migratable && project.automatic && extension.automatic &&
-            <Button variant="outline" size="sm" disabled={pending} onClick={() => {
-              if (window.confirm('Zastąpić ręczne dowiązanie do zbiorczego skilla automatycznie dobranymi instrukcjami?')) {
-                send({ action: 'migrate', project: project.id })
-              }
-            }}>Migruj ręczne dowiązanie</Button>}
+          <ProjectInstructionActions project={project} operations={extension.operations} pending={pending} send={send} />
         </div>
       </CardContent>
     </Card>)}
@@ -224,8 +185,8 @@ export function ExtensionView({ id, csrf, revision, copy }: { id: string; csrf: 
   const [page, setPage] = useState<ProjectPage>()
   const [error, setError] = useState(false)
   const [projectError, setProjectError] = useState(false)
-  const [pending, setPending] = useState(false)
   const [reload, setReload] = useState(0)
+  const { pending, send: operate } = useInstructionOperations(csrf, () => setReload(value => value + 1))
   const url = '/api/extensions/' + id
   const active = extension?.state === 'active' ? extension : undefined
   const section = active?.view.sections.find(item => item.id === selected) ?? active?.view.sections[0]
@@ -266,15 +227,7 @@ export function ExtensionView({ id, csrf, revision, copy }: { id: string; csrf: 
     setOffset(next)
   }
 
-  async function send(data: OperationData) {
-    setPending(true)
-    const result = await runOperation('/api/extensions/instructions', csrf, { extension: id, ...data }, {
-      title: 'Synchronizacja instrukcji',
-      onResult: () => ({ kind: 'info', title: 'Przyjęto synchronizację. Wynik pojawi się przy projektach.' }),
-    })
-    setPending(false)
-    if (result) setReload(value => value + 1)
-  }
+  const send = (data: OperationData) => { void operate(id, data) }
 
   if (!active || !section || error) return <>
     <PageHeader title="Rozszerzenie" />
@@ -303,24 +256,4 @@ export function ExtensionView({ id, csrf, revision, copy }: { id: string; csrf: 
       {section.kind === 'automations' && <Automations extension={active} pending={pending} send={send} />}
     </section>
   </>
-}
-
-export function ProjectInstructionSummary({ slug, revision }: { slug: string; revision: number }) {
-  const [summary, setSummary] = useState<Summary[]>([])
-  useEffect(() => {
-    const controller = new AbortController()
-    void request<Summary[]>('GET', '/api/extensions/project-summary/' + slug, undefined, undefined, controller.signal)
-      .then(value => { if (!controller.signal.aborted) setSummary(value) })
-      .catch(() => { if (!controller.signal.aborted) setSummary([]) })
-    return () => controller.abort()
-  }, [slug, revision])
-  if (!summary.length) return null
-  return <Card><CardHeader><CardTitle>Zarządzane instrukcje</CardTitle></CardHeader>
-    <CardContent className="space-y-2 text-sm">
-      {summary.map(item => <div key={item.id} className="flex flex-wrap items-center gap-2">
-        <a href={'#/extensions/' + item.id} className="rounded-sm underline focus-visible:outline-2 focus-visible:outline-ring">{item.title}</a>
-        <Badge>{statuses[item.status] ?? item.status}</Badge><span>{item.count} powiązań</span>
-      </div>)}
-    </CardContent>
-  </Card>
 }

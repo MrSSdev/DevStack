@@ -138,6 +138,10 @@ try {
         session_write_close();
         $respond(200, ['ok' => true, 'result' => devstack_rpc('service_status', [])]);
     }
+    if ($method === 'GET' && preg_match('~^/api/extensions/project-cards/([a-z][a-z0-9-]{1,39})$~D', $path, $match)) {
+        session_write_close();
+        $respond(200, ['ok' => true, 'result' => devstack_rpc('extension_project_cards', ['slug' => $match[1]])]);
+    }
     if ($method === 'GET' && preg_match('~^/api/extensions/project-summary/([a-z][a-z0-9-]{1,39})$~D', $path, $match)) {
         $respond(200, ['ok' => true, 'result' => devstack_rpc('extension_summary', ['slug' => $match[1]])]);
     }
@@ -149,6 +153,16 @@ try {
         $resource = $match[2] ?? '';
         if ($resource === 'instructions' && isset($match[3])) {
             $data['instruction'] = $match[3];
+            if (isset($_GET['project']) || isset($_GET['card'])) {
+                $projectId = $_GET['project'] ?? '';
+                $card = $_GET['card'] ?? '';
+                if (!is_string($projectId) || !preg_match('~^[0-9a-f]{32}$~D', $projectId) ||
+                    !is_string($card) || !preg_match('~^[a-z][a-z0-9-]{0,39}$~D', $card)) {
+                    throw new InvalidArgumentException('Nieprawidłowy kontekst instrukcji.');
+                }
+                $data['project'] = $projectId;
+                $data['card'] = $card;
+            }
             $operation = 'extension_preview';
         } elseif ($resource === 'projects' && !isset($match[3])) {
             $offset = $_GET['offset'] ?? '0';

@@ -1,6 +1,6 @@
 # DevStack Tools
 
-Optional, independently managed tools for local development. Version 0.2.0 contains Playwright Test and its built-in CLI (1.65.1), DevStack Mail (1.0.0), and a discoverable Agent Skill. The core installer/updater does not install this extension.
+Optional, independently managed tools for local development. Version 0.3.1 provides Playwright Test and its built-in CLI (1.65.1), DevStack Mail (1.0.0), and separate discoverable instructions for Playwright and Mail. The core installer/updater does not install this extension.
 
 ## Panel and project instructions
 
@@ -31,6 +31,26 @@ Uninstall removes the menu and the project's DevStack-owned links
 as the Core reconciler runs. It preserves manual links and project data
 and leaves Mailpit installed. The CLI and manually linked skills remain
 usable in a standalone Tools installation without DevStack Core.
+
+## Tools in project details
+
+With compatible Core, open any registered web project's details and use the
+compact **DevStack Tools** card. Select an instruction name to preview it in
+place. The status icons distinguish managed, manual, selected, pending, and
+conflicting instructions. Expand **Szczegóły instrukcji** to see selection
+reasons, counts, and the last synchronization time.
+
+Use the switch to set automatic management for the current project and the
+refresh button to synchronize or retry. When an exact legacy manual link can
+be migrated, the card offers the same confirmation and safeguards as the
+global Projects tab. A queued request reports acceptance and the card updates
+from Core as synchronization completes. The global Tools tabs remain
+available for managing multiple projects.
+
+Install a Core version with project cards before using the contextual controls.
+A rollback to Tools 0.3.0 hides the project card and leaves its global Tools view
+and established links available. The card returns when a compatible release
+with `project-cards.json` is reactivated.
 
 ## Install / update
 

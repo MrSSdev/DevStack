@@ -1,0 +1,21 @@
+{
+  "contract": 1,
+  "cards": [
+    {
+      "id": "tools",
+      "title": "DevStack Tools",
+      "icon": "wrench",
+      "slot": "project-details",
+      "order": 100,
+      "requires": ["web"],
+      "sections": [
+        {
+          "id": "project-instructions",
+          "label": "Instrukcje projektowe",
+          "kind": "instructions",
+          "operations": ["set_automatic", "sync", "migrate"]
+        }
+      ]
+    }
+  ]
+}

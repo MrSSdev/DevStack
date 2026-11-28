@@ -9,6 +9,7 @@ bash "$src/install.sh" --with-deps
 first="$(readlink -f "$base/current")"
 [[ "$(stat -c %u:%a "$base/.managed")" == 0:644 ]]
 [[ ! -w $first/playwright/package.json && ! -w $first/browsers ]]
+[[ -f $first/project-cards.json && ! -w $first/project-cards.json ]]
 [[ "$(stat -c %u "$first")" == 0 ]]
 "$base/bin/playwright" --version | grep -Fx 'Version 1.65.1'
 "$base/bin/devstack-mail" --version | grep -Fx 'devstack-mail 1.0.0'
