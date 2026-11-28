@@ -98,6 +98,11 @@ check_manifest() {
   local release="$1" validator=/opt/devstack/daemon/extension_manifest.py
   if [[ -f $validator && ! -L $validator && "$(stat -c %u:%a -- "$validator")" == 0:644 ]]; then
     /usr/bin/python3 -IB "$validator" devstack-tools "$release" || return 1
+  elif [[ -f "$(dirname -- "${BASH_SOURCE[0]}")/../../daemon/extension_manifest.py" ]]; then
+    local source_validator
+    source_validator="$(realpath -- "$(dirname -- "${BASH_SOURCE[0]}")/../../daemon/extension_manifest.py")"
+    runuser -u "$owner" -- env -i HOME="$home" PATH=/usr/bin:/bin \
+      /usr/bin/python3 -IB "$source_validator" devstack-tools "$release" || return 1
   fi
   # The standalone installation checks the bundle and installed versions
   # without importing code from the staged candidate as root.
@@ -164,7 +169,7 @@ for file in BUILD manifest.json smoke.cjs bin/playwright bin/playwright-cli bin/
   mail/cli.py mail/contract.py mail/mailpit.py mail/message.py playwright/package.json \
   skills/devstack-tools/SKILL.md skills/devstack-tools/references/mail.md \
   skills/devstack-mail/SKILL.md skills/devstack-playwright/SKILL.md \
-  playwright/package-lock.json playwright/node_modules/@playwright/test/cli.js; do
+  playwright/chromium-path playwright/package-lock.json playwright/node_modules/@playwright/test/cli.js; do
   [[ -f $incoming/$file && ! -L $incoming/$file ]] || die "Missing release file: $file"
 done
 [[ "$(cat "$incoming/BUILD")" =~ ^[0-9a-f]{64}$ ]] || die 'Invalid build identifier.'

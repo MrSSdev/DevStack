@@ -91,6 +91,16 @@ if $deps; then
   "$node_bin" "$cli" install-deps chromium
 fi
 "$node_bin" "$cli" install --no-shell chromium
+"$node_bin" - <<'JS' > chromium-path
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require('@playwright/test');
+const root = path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH);
+const executable = path.relative(root, fs.realpathSync(chromium.executablePath()));
+if (!/^browsers\/chromium-/.test(executable))
+  throw new Error('Chromium executable is outside the staged browser directory.');
+process.stdout.write(executable + '\n');
+JS
 # The staged client's cache registration is not meaningful after relocation.
 rm -rf -- "$payload/browsers/.links"
 cd "$src"

@@ -132,6 +132,13 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(old.is_symlink())
         self.assertTrue(self.link.is_symlink())
 
+    def test_manual_links_are_visible_with_automation_disabled(self):
+        self.skills.mkdir(parents=True)
+        self.link.symlink_to(TARGET)
+        self.plan.update(enabled=False, links={}, inspect={'devstack-playwright': TARGET})
+        self.assertEqual(self.reconcile()['observed'], {'devstack-playwright': 'manual'})
+        self.assertTrue(self.link.is_symlink())
+
     def test_conflict_or_directory_escape_preserves_user_content(self):
         outside = self.root / 'outside'
         outside.mkdir()

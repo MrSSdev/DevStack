@@ -5,7 +5,8 @@ description: Use when a trusted local DevStack test expects an email after regis
 
 # DevStack Mail
 
-Use [the command contract and examples](../devstack-tools/references/mail.md).
+Use the command contract and examples in
+`/opt/devstack-tools/skills/devstack-tools/references/mail.md`.
 Run `/opt/devstack-tools/bin/devstack-mail status --json` first. A stopped Mailpit
 blocks mail assertions until the developer makes it available.
 

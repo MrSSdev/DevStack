@@ -97,9 +97,9 @@ def run_worker(core, batch):
         if identity is not None and (not isinstance(identity, list) or len(identity) != 2 or
                                      any(type(part) is not int or part < 0 for part in identity)):
             raise ValueError('Invalid project directory identity.')
-        for field in ('links', 'legacy'):
+        for field in ('links', 'legacy', 'observed'):
             values = report.get(field, {})
-            if not isinstance(values, dict) or not set(values) <= set(batch[key][field]) or any(
+            if not isinstance(values, dict) or not set(values) <= set(batch[key]['inspect' if field == 'observed' else field]) or any(
                 value not in STATUSES for value in values.values()
             ):
                 raise ValueError('Invalid instruction link status.')
@@ -251,7 +251,7 @@ class Manager:
                     rule_owners.setdefault(name, set()).add(key)
 
         batch = {}
-        for key in sorted(set(projects) | set(state['projects'])):
+        for key in sorted(set(projects) | set(state['projects']), key=lambda key: (key in projects, key)):
             slug, project = projects.get(key, ('', None))
             row = state['projects'].get(key)
             if project is not None and project.get('engine_status', 'ready') != 'ready':
@@ -272,7 +272,7 @@ class Manager:
                 triggers |= allows(extensions, 'startup')
             if audit:
                 triggers |= allows(extensions, 'startup')
-            links, wanted, legacy, ready = {}, set(), {}, {}
+            links, wanted, legacy, ready, inspect = {}, set(), {}, {}, {}
             for extension_id, info in extensions.items():
                 current = row['extensions'].get(extension_id)
                 if not current and info['state'] != 'active':
@@ -294,7 +294,13 @@ class Manager:
                 collision = any(rule_owners.get(name, set()) - {extension_id} for name in selected)
                 current['wanted'] = selected
                 authorized = set(selected) if enabled and not collision else set()
+                names = []
                 if info['state'] == 'active' and project is not None:
+                    for item in info['instructions']:
+                        name = item['id']
+                        if rule_owners[name] == {extension_id}:
+                            inspect[name] = skills_target(extension_id, name)
+                            names.append(name)
                     for name in info['legacy']:
                         if rule_owners[name] == {extension_id}:
                             legacy[name] = {'target': skills_target(extension_id, name),
@@ -313,7 +319,7 @@ class Manager:
                 ready[extension_id] = {
                     'enabled': enabled, 'collision': collision,
                     'installed': info['state'] == 'active',
-                    'legacy': info.get('legacy', []), 'names': list(current['links']),
+                    'legacy': info.get('legacy', []), 'names': list(current['links']), 'inspect': names,
                     'event': event if event and extension_id in allows(extensions, event) else
                              state['extensions'].get(extension_id, {}).get('event') if extension_id in extension_events else
                              'manual' if current.get('pending') else 'startup',
@@ -323,7 +329,7 @@ class Manager:
             row['fingerprint'] = fingerprint
             row['planned'] = ready
             batch[key] = {'slug': row['slug'], 'identity': row['identity'], 'enabled': bool(wanted), 'desired': sorted(wanted),
-                          'links': links, 'legacy': legacy}
+                          'links': links, 'legacy': legacy, 'inspect': inspect}
             if len(batch) == 64:
                 self.dirty = True
                 break
@@ -380,6 +386,7 @@ class Manager:
                             del row['extensions'][extension_id]
                             continue
                 current.pop('pending', None)
+                results.update({name: value for name, value in report.get('observed', {}).items() if name in plan['inspect']})
                 conflicts = sorted(name for name, result in results.items() | manual.items() if result == 'conflict')
                 if plan['collision']:
                     conflicts.append('Identyfikator instrukcji używany przez inne rozszerzenie')
@@ -416,7 +423,7 @@ class Manager:
         state = self.load()
         mailpit = installed_service('mailpit')
         mail_status = self.core.mailpit_status() if mailpit else 'not-installed'
-        tools = [{**tool, 'ready': tool['installed'] and (not tool['service'] or mail_status == 'active'),
+        tools = [{**tool, 'ready': tool['runtime_ready'] and (not tool['service'] or mail_status == 'active'),
                   'service_state': mail_status if tool['service'] else None} for tool in extension['tools']]
         users = {item['id']: [] for item in extension['instructions']}
         for key, (slug, project) in registered(self.core).items():

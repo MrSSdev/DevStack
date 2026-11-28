@@ -111,7 +111,7 @@ def validate(raw, extension_id):
         plain(command['label'], 60)
         plain(command['command'], 250)
     tool_ids = set()
-    for tool in keyed(raw['tools'], 'id name description version files service dependencies documentation example'):
+    for tool in keyed(raw['tools'], 'id name description version files service readiness dependencies documentation example'):
         tool_ids.add(tool['id'])
         plain(tool['name'])
         plain(tool['description'], 500)
@@ -121,6 +121,7 @@ def validate(raw, extension_id):
         for name in files:
             path_parts(name)
         require(tool['service'] is None or isinstance(tool['service'], str) and tool['service'] in SERVICES)
+        require(tool['readiness'] in (None, 'chromium'))
         for dependency in items(tool['dependencies'], 8):
             plain(dependency)
         url(tool['documentation'])
@@ -204,6 +205,16 @@ def unique_object(pairs):
     return result
 
 
+def chromium_ready(fd):
+    try:
+        path = read(fd, 'playwright/chromium-path', 250).strip()
+        require(path.startswith('browsers/chromium-'))
+        with os.fdopen(open_file(fd, path), 'rb') as executable:
+            return bool(os.fstat(executable.fileno()).st_mode & 0o111)
+    except FileNotFoundError:
+        return False
+
+
 def read_release(fd, extension_id):
     build = read(fd, 'BUILD', 65).strip()
     match(re.compile(r'[0-9a-f]{64}\Z'), build)
@@ -224,7 +235,8 @@ def read_release(fd, extension_id):
                 os.close(open_file(fd, path))
             except FileNotFoundError:
                 installed = False
-        tools.append({**tool, 'installed': installed})
+        ready = installed and (tool['readiness'] != 'chromium' or chromium_ready(fd))
+        tools.append({**tool, 'installed': installed, 'runtime_ready': ready})
     return {**manifest, 'build': build, 'state': 'active', 'instructions': instructions, 'tools': tools}
 
 
@@ -314,7 +326,7 @@ if __name__ == '__main__':
         candidate = directory(sys.argv[2])
         try:
             details = read_release(candidate, sys.argv[1])
-            require(all(tool['installed'] for tool in details['tools']))
+            require(all(tool['runtime_ready'] for tool in details['tools']))
         finally:
             os.close(candidate)
     except (OSError, ValueError, RecursionError) as error:

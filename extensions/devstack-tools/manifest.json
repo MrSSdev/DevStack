@@ -76,7 +76,8 @@
         "Chromium i biblioteki systemowe"
       ],
       "documentation": "https://github.com/MrSSdev/DevStack/tree/main/extensions/devstack-tools#playwright-test",
-      "example": "/opt/devstack-tools/bin/playwright test"
+      "example": "/opt/devstack-tools/bin/playwright test",
+      "readiness": "chromium"
     },
     {
       "id": "playwright-cli",
@@ -94,7 +95,8 @@
         "Chromium i biblioteki systemowe"
       ],
       "documentation": "https://github.com/MrSSdev/DevStack/tree/main/extensions/devstack-tools#playwright-cli",
-      "example": "/opt/devstack-tools/bin/playwright-cli --help"
+      "example": "/opt/devstack-tools/bin/playwright-cli --help",
+      "readiness": "chromium"
     },
     {
       "id": "devstack-mail",
@@ -111,7 +113,8 @@
         "Mailpit v1.34.0"
       ],
       "documentation": "https://github.com/MrSSdev/DevStack/tree/main/extensions/devstack-tools#devstack-mail",
-      "example": "/opt/devstack-tools/bin/devstack-mail status --json"
+      "example": "/opt/devstack-tools/bin/devstack-mail status --json",
+      "readiness": null
     }
   ],
   "instructions": [

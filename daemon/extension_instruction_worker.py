@@ -171,6 +171,15 @@ def run_project(projects, root_mount, plan):
                         results[name] = result
                 except OSError:
                     results[name] = 'error'
+            observed = {}
+            for name, target in plan.get('inspect', {}).items():
+                check(NAME, name)
+                check(TARGET, target)
+                if name in plan['links']:
+                    continue
+                info, actual_target = entry(skills, name)
+                if info is not None:
+                    observed[name] = 'manual' if actual_target == target else 'conflict'
             migration_failed = False
             if attach and migration and all(results.get(name) in {'linked', 'manual'} for name in plan['desired']):
                 for name, (receipt, target) in migration.items():
@@ -181,7 +190,7 @@ def run_project(projects, root_mount, plan):
                         migration_failed = True
             state = 'error' if migration_failed or 'error' in results.values() else 'complete'
             return {'state': state, 'identity': actual, 'links': results, 'legacy': legacy,
-                    'legacy_receipts': legacy_receipts, 'prepared': prepared}
+                    'legacy_receipts': legacy_receipts, 'prepared': prepared, 'observed': observed}
     except FileNotFoundError:
         return {'state': 'missing'}
     except OSError:

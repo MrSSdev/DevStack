@@ -31,7 +31,7 @@ feature is unused.
 | `menu` | Null for no sidebar entry, or a label, integer sort order, `wrench`/`package`/`book` icon and declared view ID. |
 | `view` | Stable view ID, title and ordered sections with stable IDs, labels and a supported component kind. |
 | `terminal` | Labeled commands presented as plain text for the user to copy. |
-| `tools` | Tool IDs, name, description, version, protected relative installation markers, optional known service, dependency labels, HTTPS documentation URL and copyable example. |
+| `tools` | Tool IDs, name, description, version, protected relative installation markers, optional fixed Chromium readiness probe or known service, dependency labels, HTTPS documentation URL and copyable example. |
 | `instructions` | Instruction IDs, title, description, format, related tools, eligibility facts, selection explanation and intended audience. |
 | `legacy` | Retained Agent Skills IDs eligible for explicit migration from an exact manual symlink. |
 | `automations` | Named `reconcile_instructions` rules connected to supported lifecycle events. |

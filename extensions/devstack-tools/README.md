@@ -62,7 +62,8 @@ No routine core update, frontend build or service restart. An identical build is
   browsers/     -> current/browsers
   skills/       -> current/skills
   current       -> releases/release-...
-  releases/     root-owned, one active package/browser release
+  previous      -> previously verified release, when available
+  releases/     root-owned active and previous package/browser releases
 ~~~
 
 Do not modify the managed directories as root outside the installer. Tools are read-only to ordinary users. Project code, browser profiles, sessions and test reports remain outside the installation. No project gets its own downloaded Chromium copy.
