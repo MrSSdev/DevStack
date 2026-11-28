@@ -103,6 +103,10 @@ def exercise(browser):
         expect(page.get_by_role('heading', name=re.compile(tool))).to_be_visible()
     first_build = detail()['build']
     assert detail()['version'] == '0.3.0'
+    assert all(tool['installed'] and tool['ready'] for tool in detail()['tools'])
+    results = Path('browser-results')
+    results.mkdir(exist_ok=True)
+    page.screenshot(path=results / 'extensions-overview.png', full_page=True)
     legacy_inode = legacy.lstat().st_ino
     wait_for(lambda: project(PLAIN)['migratable'], 'manual skill missing')
     assert legacy.lstat().st_ino == legacy_inode and not (plain / PLAYWRIGHT).is_symlink()
@@ -131,6 +135,7 @@ def exercise(browser):
     plain_card = page.locator('[data-slot=card]').filter(has=page.get_by_role('link', name=PLAIN, exact=True))
     mail_card = page.locator('[data-slot=card]').filter(has=page.get_by_role('link', name=LOCAL, exact=True))
     expect(plain_card.get_by_text('Podłączono ręcznie', exact=True)).to_be_visible()
+    page.screenshot(path=results / 'extensions-projects.png', full_page=True)
     page.once('dialog', lambda prompt: prompt.accept())
     plain_card.get_by_role('button', name='Migruj ręczne dowiązanie').click()
     expect(page.get_by_text('Przyjęto synchronizację. Wynik pojawi się przy projektach.')).to_be_visible()
@@ -231,6 +236,7 @@ def exercise(browser):
         expect(mobile_page.get_by_role('heading', name='DevStack Tools', exact=True)).to_be_visible()
         expect(mobile_page.locator('html')).to_have_class(re.compile('dark'))
         assert mobile_page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+        mobile_page.screenshot(path=results / 'extensions-mobile-dark.png', full_page=True)
         mobile_page.get_by_role('button', name='Włącz jasny motyw').tap()
         expect(mobile_page.locator('html')).not_to_have_class(re.compile('dark'))
 
@@ -246,9 +252,7 @@ def exercise(browser):
     delete(PLAIN)
     assert not errors, errors
     assert (PROJECTS / LOCAL).exists()
-    results = Path('browser-results')
-    results.mkdir(exist_ok=True)
-    page.screenshot(path=results / 'extensions-desktop.png', full_page=True)
+    page.screenshot(path=results / 'extensions-uninstalled.png', full_page=True)
     context.close()
 
 

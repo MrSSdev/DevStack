@@ -138,6 +138,9 @@ function Projects({ extension, page, offset, setOffset, pending, send }: {
 }) {
   return <>
     {extension.operations.includes('sync') && <div><Button variant="outline" disabled={pending} onClick={() => send({ action: 'sync' })}><RefreshCw />Synchronizuj wszystkie projekty</Button></div>}
+    {!extension.automatic && <p className="text-sm text-muted-foreground">
+      Zarządzanie dla rozszerzenia jest wyłączone. Ustawienia projektów będą stosowane po jego włączeniu.
+    </p>}
     {!page && <p role="status">Wczytywanie projektów…</p>}
     {page?.projects.length === 0 && <p className="text-sm text-muted-foreground">Brak projektów na tej stronie.</p>}
     {page?.projects.map(project => <Card key={project.id}>
@@ -196,7 +199,7 @@ function Automations({ extension, pending, send }: { extension: ActiveExtension;
       </CardContent>
     </Card>
     {extension.automations.map(item => <Card key={item.id}><CardHeader>
-      <CardTitle>{item.label} <Badge>{extension.automatic ? 'Włączona' : 'Wyłączona'}</Badge></CardTitle>
+      <CardTitle>{item.label} <Badge>{extension.automatic || item.events.some(event => event === 'project_removed' || event === 'extension_removed') ? 'Włączona' : 'Wyłączona'}</Badge></CardTitle>
       <CardDescription>{item.description}</CardDescription>
     </CardHeader><CardContent className="space-y-1 text-sm text-muted-foreground">
       <p>{item.events.map(event => events[event] ?? event).join(' · ')}</p>

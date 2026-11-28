@@ -2138,7 +2138,7 @@ def serve() -> None:
         if engine_busy():
             with registry_lock():
                 poll_engine_results()
-            manager.dirty = True
+            manager.dirty |= not engine_busy()
         manager.tick()
         server.settimeout(1 if engine_busy() else 3)
         try:

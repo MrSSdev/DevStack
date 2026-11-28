@@ -197,8 +197,14 @@ class ManagerTests(unittest.TestCase):
             with patch.object(instructions, 'discover', return_value=active), \
                  patch.object(instructions, 'installed_service', return_value=True), \
                  patch.object(instructions, 'run_worker', side_effect=adapter):
-                write(registry, registered(prior))
+                configuring = registered(prior)
+                configuring['webapp'].update(engine='laravel', engine_status='configuring')
+                write(registry, configuring)
                 manager.reconcile(0)
+                self.assertFalse((project_root / '.agents').exists())
+                configuring['webapp']['engine_status'] = 'ready'
+                write(registry, configuring)
+                manager.reconcile(1)
                 self.assertEqual(manager.load()['projects'][prior]['extensions']['devstack-tools']['status'], 'error')
                 manager.reconcile(3)
                 skill = project_root / '.agents/skills/devstack-mail'

@@ -1,5 +1,6 @@
 """Core reconciliation and public state for the declarative extension contract."""
 
+from bisect import bisect_right
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -180,6 +181,8 @@ class Manager:
         self.dirty = True
         self.next_poll = 0
         self.next_audit = 0
+        self.audit_pending = set()
+        self.cursor = None
         self.error = False
 
     @property
@@ -207,9 +210,12 @@ class Manager:
             from project_pilot import registry_lock
 
             self.error = False
-            with registry_lock(), pin_publications() as pinned:
+            with registry_lock(blocking=False), pin_publications() as pinned:
                 if pinned:
                     self.reconcile(clock)
+        except BlockingIOError:
+            # Project creation or the terminal isolation tool holds the lock.
+            return
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             self.error = True
             # This worker never logs project content, command output or paths.
@@ -225,9 +231,9 @@ class Manager:
             return
         projects = registered(self.core, identities=active)
         mailpit = installed_service('mailpit')
-        audit = clock >= self.next_audit
-        if audit:
+        if clock >= self.next_audit:
             self.next_audit = clock + 30
+            self.audit_pending = set(projects)
 
         extension_events = set()
         for key, info in extensions.items():
@@ -244,6 +250,10 @@ class Manager:
                     state['extensions'].pop(key, None)
                 if key in allows(extensions, event) or event == 'extension_removed':
                     extension_events.add(key)
+                    for row in state['projects'].values():
+                        current = row['extensions'].get(key)
+                        if current:
+                            current['release_event'] = event
         rule_owners = {}
         for key, info in extensions.items():
             if info['state'] == 'active':
@@ -251,7 +261,12 @@ class Manager:
                     rule_owners.setdefault(name, set()).add(key)
 
         batch = {}
-        for key in sorted(set(projects) | set(state['projects']), key=lambda key: (key in projects, key)):
+        keys = sorted((key in projects, key) for key in set(projects) | set(state['projects']))
+        position = bisect_right(keys, self.cursor) if self.cursor else 0
+        self.cursor = None
+        for registered_now, key in keys[position:] + keys[:position]:
+            audit = key in self.audit_pending
+            self.audit_pending.discard(key)
             slug, project = projects.get(key, ('', None))
             row = state['projects'].get(key)
             if project is not None and project.get('engine_status', 'ready') != 'ready':
@@ -285,7 +300,7 @@ class Manager:
                     continue
                 if project is not None and info['state'] == 'active' and not (
                     extension_id in triggers or current.get('pending') or current['status'] in {'pending', 'error'}
-                    or extension_id in row.get('planned', {})
+                    or extension_id in row.get('planned', {}) or current.get('release_event')
                 ):
                     continue
                 enabled = (project is not None and info['state'] == 'active' and current['automatic']
@@ -316,13 +331,19 @@ class Manager:
                         continue
                     links[name] = details
                 wanted |= authorized
+                if event and (project is None or extension_id in allows(extensions, event)):
+                    reason = event
+                elif current.get('pending'):
+                    reason = 'manual'
+                elif current.get('release_event') or extension_id in extension_events:
+                    reason = current.get('release_event') or state['extensions'].get(extension_id, {}).get('event', 'startup')
+                else:
+                    reason = 'startup'
                 ready[extension_id] = {
                     'enabled': enabled, 'collision': collision,
                     'installed': info['state'] == 'active',
                     'legacy': info.get('legacy', []), 'names': list(current['links']), 'inspect': names,
-                    'event': event if event and extension_id in allows(extensions, event) else
-                             state['extensions'].get(extension_id, {}).get('event') if extension_id in extension_events else
-                             'manual' if current.get('pending') else 'startup',
+                    'event': reason,
                 }
             if not ready:
                 continue
@@ -331,6 +352,7 @@ class Manager:
             batch[key] = {'slug': row['slug'], 'identity': row['identity'], 'enabled': bool(wanted), 'desired': sorted(wanted),
                           'links': links, 'legacy': legacy, 'inspect': inspect}
             if len(batch) == 64:
+                self.cursor = (registered_now, key)
                 self.dirty = True
                 break
         if not batch:
@@ -381,6 +403,7 @@ class Manager:
                         if result == 'detached' or (result in {'manual', 'conflict'} and name not in batch[key]['desired']):
                             current['links'].pop(name, None)
                     current.pop('migrate', None)
+                    current.pop('release_event', None)
                     if retired or not plan['installed'] and not current['links']:
                         if retired:
                             del row['extensions'][extension_id]

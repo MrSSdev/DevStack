@@ -47,6 +47,7 @@ jobs:
       - name: Backend unit tests
         run: |
           python3 -m unittest discover -s tests -v
+          sudo python3 -B -m unittest discover -s tests -p test_extension_instructions.py -v
           php tests/php-security.php
           php tests/php-mail-preview.php
           php tests/php-notifications.php
