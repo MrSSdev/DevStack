@@ -11,6 +11,7 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -227,10 +228,10 @@ def assert_clean(session, processes=None):
     if unit_state(session) != 'absent':
         args = [PYTHON, '-I', str(session.base / 'launcher/project_executor.py'),
                 str(session.base), session.session_id]
-        expected_command = ' ; argv[]=' + ' '.join(args) + ' ; '
+        expected_command = '{ path=' + PYTHON + ' ; argv[]=' + ' '.join(args) + ' ; '
         result = run([SYSTEMCTL, 'show', '--value', '-p', 'ExecStart', '--', session.unit])
         if unit_state(session) != 'absent' and (
-                result.returncode or expected_command not in result.stdout):
+                result.returncode or not result.stdout.startswith(expected_command)):
             raise RuntimeError('Refusing cleanup of a different systemd command')
     session.stop()
     assert '/run/' + session.runtime_directory not in Path('/proc/self/mountinfo').read_text()
@@ -248,7 +249,7 @@ def assert_clean(session, processes=None):
         assert all(info is None or proc_identity(pid) != info for pid, info in pids.items())
 
 
-def run_suite(base, archive, *, ci, check_base):
+def run_suite(base, archive, *, ci, check_base, guard_installed):
     accounts = []
     sessions = []
     clients = []
@@ -491,6 +492,8 @@ def run_suite(base, archive, *, ci, check_base):
                 raise ValueError('Temporary source or scratch directory was replaced')
         for directory in owned_dirs:
             shutil.rmtree(directory)
+        if guard_installed:
+            check_account_hooks()
         for path, slot, identity in reversed(accounts):
             if verify_binding(path, slot) != identity:
                 raise RuntimeError('Temporary account binding changed before removal')
@@ -550,7 +553,7 @@ def run_fixture(archive, *, ci, guard_installed):
             proof = launcher / 'devstack-proof.py'
             shutil.copyfile(ROOT / 'tests/project-executor-payload.py', proof)
             proof.chmod(0o644)
-            run_suite(base, archive, ci=ci, check_base=check_base)
+            run_suite(base, archive, ci=ci, check_base=check_base, guard_installed=guard_installed)
         check_base()
         reject_nested_mounts(base)
         shutil.rmtree(base)
