@@ -466,6 +466,10 @@ def exercise(browser):
     register(LOCAL, True)
     wait_for(lambda: (local / MAIL).is_symlink(), 'recreated project not synchronized')
     assert project(LOCAL)['id'] != original
+    # The test registered the project outside the browser. Synchronize the
+    # panel before asserting the recreated project's route across rollbacks.
+    with page.expect_response(lambda response: response.url.endswith('/api/state') and response.ok):
+        refresh()
     response = context.request.post(ORIGIN + '/api/extensions/instructions', headers=headers,
                                     data={'extension': 'devstack-tools', 'action': 'sync', 'project': original, 'card': 'tools'})
     assert not response.ok
