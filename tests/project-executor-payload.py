@@ -33,11 +33,12 @@ def boundary(host_home, sibling, admin_socket, expected):
     for name in os.listdir('/proc/self/fd'):
         if int(name) > 2:
             try:
-                os.fstat(int(name))
+                # An FD that crossed exec must be inheritable. The system
+                # interpreter can open its own CLOEXEC FDs during startup.
+                if os.get_inheritable(int(name)):
+                    leaked.append((name, os.readlink('/proc/self/fd/' + name)))
             except OSError as exc:
                 assert exc.errno == errno.EBADF
-            else:
-                leaked.append(name)
     assert not leaked, ('unexpected inherited descriptors', leaked)
     assert not (set(os.environ) & {'DEVSTACK_TEST_SECRET', 'LISTEN_FDS', 'SSH_AUTH_SOCK',
                                   'XDG_RUNTIME_DIR', 'WSL_INTEROP', 'WSLENV'})

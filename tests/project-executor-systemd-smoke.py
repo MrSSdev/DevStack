@@ -217,7 +217,7 @@ def run_suite(base, archive, *, ci):
         request = {'schema': 1, 'session_id': session.session_id, 'project_id': missing or key,
                    'agent_id': agent,
                    'profile': profile,
-                   'argv': [PYTHON, '-I', '/run/devstack-proof.py', mode, str(base / 'host-home'),
+                   'argv': [PYTHON, '-I', '-S', '/run/devstack-proof.py', mode, str(base / 'host-home'),
                             str(other_path), str(base / 'admin.sock'), EXPECT]}
         write_record(session.record / 'launch.json', request)
         output = session.record / 'output'
