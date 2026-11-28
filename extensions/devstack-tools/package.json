@@ -1,8 +1,8 @@
 {
   "name": "devstack-tools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Optional shared Playwright tools for DevStack",
+  "description": "Optional shared Playwright and local mail tools for DevStack",
   "engines": {
     "node": ">=22"
   },

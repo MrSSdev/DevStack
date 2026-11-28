@@ -36,7 +36,9 @@ if [[ -f /opt/devstack/daemon/devstackd.py ]]; then
   sudo -- /usr/bin/python3 -I /opt/devstack/daemon/devstackd.py --trust-wsl-ca
 fi
 # Hash the actual distribution files, not the DevStack commit or project tree.
-files=(package.json install.sh publish.sh update.sh uninstall.sh smoke.cjs bin/playwright bin/playwright-cli)
+mail_files=(mail/cli.py mail/contract.py mail/mailpit.py mail/message.py)
+files=(package.json install.sh publish.sh update.sh uninstall.sh smoke.cjs
+  bin/playwright bin/playwright-cli bin/devstack-mail "${mail_files[@]}")
 for file in "${files[@]}"; do
   [[ -f "$src/$file" && ! -L "$src/$file" ]] || { echo "Missing/unsafe source: $file" >&2; exit 1; }
 done
@@ -48,10 +50,11 @@ fi
 stage="$(mktemp -d /tmp/devstack-tools.XXXXXXXX)"
 trap 'rm -rf -- "$stage"' EXIT
 payload="$stage/payload"
-mkdir -p "$payload/playwright" "$payload/browsers" "$payload/bin"
+mkdir -p "$payload/playwright" "$payload/browsers" "$payload/bin" "$payload/mail"
 cp -- "$src/package.json" "$payload/playwright/package.json"
 cp -- "$src/smoke.cjs" "$payload/smoke.cjs"
-cp -- "$src/bin/playwright" "$src/bin/playwright-cli" "$payload/bin/"
+cp -- "$src/bin/playwright" "$src/bin/playwright-cli" "$src/bin/devstack-mail" "$payload/bin/"
+for file in "${mail_files[@]}"; do cp -- "$src/$file" "$payload/$file"; done
 chmod 0755 "$payload/bin/"*
 printf '%s\n' "$build" > "$payload/BUILD"
 cd "$payload/playwright"
@@ -88,4 +91,4 @@ fi
 rm -rf -- "$payload/browsers/.links"
 cd "$src"
 sudo -- /bin/bash "$src/publish.sh" publish "$stage" "$node_bin"
-echo "DevStack Tools installed: $base/bin/playwright and $base/bin/playwright-cli"
+echo "DevStack Tools installed in $base/bin: playwright, playwright-cli, devstack-mail"

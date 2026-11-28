@@ -1,0 +1,16 @@
+#!/bin/bash
+set -Eeuo pipefail
+export PATH=/usr/bin:/bin
+base=/opt/devstack-tools
+
+unavailable() {
+  printf '%s\n' '{"schema_version":1,"operation":null,"ok":false,"error":{"code":"tools_unavailable","message":"DevStack Tools is unavailable or being updated."}}'
+  exit 7
+}
+
+{ exec 9<"$base/.lock"; } 2>/dev/null || unavailable
+flock -s -w 5 9 || unavailable
+release="$(readlink -f -- "$base/current")" || unavailable
+[[ $release =~ ^/opt/devstack-tools/releases/release-[a-zA-Z0-9]{8}$ &&
+   -f $release/mail/cli.py ]] || unavailable
+exec /usr/bin/python3 -IB "$release/mail/cli.py" "$@"

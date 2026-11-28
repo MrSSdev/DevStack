@@ -404,6 +404,29 @@ Browser contexts and request interception are not sufficient network or OS
 isolation for untrusted scripts. Test actual Chromium launch, child process
 cleanup, filesystem and network denials.
 
+### Local developer mail and future agent grants
+
+DevStack Mail provides a versioned `status`, `search`, `wait` and `get`
+interface for the trusted developer's common mailbox. The CLI uses an
+adapter so a future, authorized mailbox provider can return the same
+message model. The developer adapter reads shared Mailpit directly.
+When mounting Playwright for a managed agent, expose the selected browser
+and Playwright tooling only. Keep the developer mail adapter, shared
+Mailpit HTTP API and mailbox storage outside the agent's boundary.
+
+Before enabling agent mail, implement and verify a broker that derives a
+stable registration ID and agent/session identity from trusted execution
+context. Require an active grant for that pair on every request and
+resolve each message ID against the same authorized scope, including
+repeat lookups and every poll in a wait. Recipient, subject, origin and
+client-supplied project selectors refine a granted search. They cannot
+grant access. Establish reliable project ownership of admitted messages
+before exposing them. Validate simultaneous agents, deletion and
+recreation of projects, cross-project ID denial, and independent revocation
+of one session while another keeps working. Cancel outstanding waits on
+revocation and keep message bodies and links out of broker diagnostics.
+[DevStack Tools](../extensions/devstack-tools/README.md)
+
 The current network-denied PHP fixture is not the final developer network.
 Provide narrowly scoped project HTTP(S) routing, WebSocket upgrade/HMR,
 localhost and DNS resolution for the assigned project without access to
