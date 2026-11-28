@@ -234,6 +234,8 @@ def exercise(browser):
     expect(legacy_button).to_be_focused()
     expect(page).to_have_url(ORIGIN + '/#/project/' + CONTEXT)
     migration = card.get_by_role('button', name='Migruj ręczne dowiązanie')
+    header_action = page.get_by_role('button', name='Otwórz stronę', exact=True).filter(has_text='Otwórz stronę')
+    assert 24 <= migration.evaluate('element => element.offsetHeight') < header_action.evaluate('element => element.offsetHeight')
     page.once('dialog', lambda prompt: prompt.dismiss())
     migration.click()
     assert contextual_legacy.is_symlink()
@@ -250,6 +252,10 @@ def exercise(browser):
     expect(card.get_by_text('Ostatnia synchronizacja', exact=False)).not_to_be_visible()
     expect(card.get_by_text(re.compile(r'BUILD|Dokumentacja|1\.65\.1'))).to_have_count(0)
     assert card.bounding_box()['height'] <= 88
+    header_height = header_action.evaluate('element => element.offsetHeight')
+    for control in (card.get_by_role('switch'), card.get_by_role('button', name='Synchronizuj instrukcje'),
+                    card.get_by_role('button', name='Szczegóły instrukcji'), mail_button):
+        assert 24 <= control.evaluate('element => element.offsetHeight') < header_height
     page.screenshot(path=results / 'extensions-project-card.png', full_page=True)
     card.get_by_role('button', name='Szczegóły instrukcji').click()
     expect(card.get_by_text('Ostatnia synchronizacja', exact=False)).to_be_visible()
@@ -430,11 +436,13 @@ def exercise(browser):
         mobile_card = mobile_page.get_by_role('region', name='DevStack Tools')
         mobile_mail = mobile_card.get_by_role('button', name=re.compile('DevStack Mail'))
         expect(mobile_mail).to_be_visible()
-        target = mobile_mail.evaluate('''element => ({
-            height: element.offsetHeight, viewport: innerWidth,
-            coarse: matchMedia('(any-pointer: coarse)').matches,
-        })''')
-        assert target['height'] >= 44, target
+        assert mobile_page.evaluate("matchMedia('(any-pointer: coarse)').matches")
+        mobile_header_height = mobile_page.get_by_role('button', name='Otwórz stronę', exact=True).filter(
+            has_text='Otwórz stronę').evaluate('element => element.offsetHeight')
+        for control in (mobile_card.get_by_role('switch'), mobile_card.get_by_role('button', name='Synchronizuj instrukcje'),
+                        mobile_card.get_by_role('button', name='Szczegóły instrukcji'), mobile_mail):
+            target = control.evaluate('element => ({height: element.offsetHeight, width: element.offsetWidth})')
+            assert 24 <= target['height'] < mobile_header_height and target['width'] >= 24, target
         assert mobile_page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
         mobile_page.screenshot(path=results / 'extensions-project-card-mobile.png', full_page=True)
         mobile_mail.tap()
