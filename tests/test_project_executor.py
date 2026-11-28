@@ -42,7 +42,9 @@ class ProjectExecutorTests(unittest.TestCase):
                          ['--bind-fd', '4'])
         self.assertEqual([value for value in read if value != '--ro-bind-fd'],
                          [value for value in write if value not in ('--ro-bind-fd', '--bind-fd')])
-        self.assertEqual(read[-3:], ['--', '/usr/bin/git', 'status'])
+        command = read[read.index('--') + 1:]
+        self.assertEqual(command[:4], ['/usr/bin/python3', '-I', '-S', '-c'])
+        self.assertEqual(command[5:], ['/usr/bin/git', 'status'])
 
     def test_whole_fixture_checks_nodes_at_any_depth(self):
         mapping = SimpleNamespace(developer=(os.getuid(), os.getgid()))

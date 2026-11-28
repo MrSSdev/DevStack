@@ -129,10 +129,15 @@ sudo env GITHUB_ACTIONS=true DEVSTACK_RUNTIME_CI=1 \
 # Exercise the installed administrator entry point against a real registered
 # home-directory project with the reviewed package, before rollback.
 sudo env GITHUB_ACTIONS=true python3 -I tests/project-registered-pilot-smoke.py
+
+# Prove the Linux boundary independently from the full Laravel/browser
+# regression. Recheck with the trusted, preinstalled vendor copy below.
+sudo apt-get install -y --no-install-recommends nodejs npm composer
+sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+    python3 -I tests/project-executor-systemd-smoke.py --ci
 bash tests/project-activation-ci.sh
 # Reuse the trusted vendor dependencies already prepared for E2.0. The
 # executor receives only a detached copy in a new synthetic project.
-sudo apt-get install -y --no-install-recommends nodejs npm
 tar -C "$HOME/projects/isolation-livewire" -cf "$work/executor-vendor.tar" vendor
 sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
     python3 -I tests/project-executor-systemd-smoke.py --ci \

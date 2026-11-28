@@ -53,6 +53,20 @@ from project_runtime_identity import PROJECT_ID, verify_binding
 WORKSPACE = '/workspace'
 TOOLS = frozenset({'/usr/bin/python3', '/usr/bin/php8.5', '/usr/bin/git',
                    '/usr/bin/node', '/usr/bin/npm', '/usr/bin/composer', '/usr/bin/sh'})
+# Run only trusted system Python before closing any FD Bubblewrap kept
+# across its own setup. No site hooks or project imports are evaluated.
+EXEC_PAYLOAD = '''
+import errno, os, sys
+for name in os.listdir('/proc/self/fd'):
+    fd = int(name)
+    if fd > 2:
+        try:
+            os.close(fd)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+os.execv(sys.argv[1], sys.argv[1:])
+'''
 EXECUTOR_PROPERTIES = (
     # Bubblewrap needs IPv4 for loopback setup. Its payload receives a
     # second filter restricting sockets to AF_UNIX in the private netns.
@@ -260,7 +274,7 @@ def sandbox_argv(view_fd, git_fd, proof_fd, filter_fd, request):
         'npm_config_offline': 'true', 'npm_config_update_notifier': 'false',
     }.items():
         args += ['--setenv', key, value]
-    return [*args, '--', *request['argv']]
+    return [*args, '--', '/usr/bin/python3', '-I', '-S', '-c', EXEC_PAYLOAD, *request['argv']]
 
 
 def drop_credentials(mapping):

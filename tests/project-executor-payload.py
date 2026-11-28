@@ -29,8 +29,16 @@ def denied(action, errors):
 
 
 def boundary(host_home, sibling, admin_socket, expected):
-    assert [int(fd) for fd in os.listdir('/proc/self/fd') if int(fd) > 3] == []
-    denied(lambda: os.fstat(3), {errno.EBADF})
+    leaked = []
+    for name in os.listdir('/proc/self/fd'):
+        if int(name) > 2:
+            try:
+                os.fstat(int(name))
+            except OSError as exc:
+                assert exc.errno == errno.EBADF
+            else:
+                leaked.append(name)
+    assert not leaked, ('unexpected inherited descriptors', leaked)
     assert not (set(os.environ) & {'DEVSTACK_TEST_SECRET', 'LISTEN_FDS', 'SSH_AUTH_SOCK',
                                   'XDG_RUNTIME_DIR', 'WSL_INTEROP', 'WSLENV'})
     assert os.read(0, 1) == b''
