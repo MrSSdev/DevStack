@@ -74,8 +74,18 @@ def boundary(host_home, sibling, admin_socket, expected):
     assert ctypes.get_errno() in (errno.EPERM, errno.ENOSPC, errno.EUSERS)
     # Same architecture-independent libc interfaces used by the workloads.
     assert libc.ptrace(0, 0, 0, 0) == -1 and ctypes.get_errno() == errno.ENOSYS
-    assert subprocess.run(['/usr/bin/sudo', '-n', '/usr/bin/id'], capture_output=True,
-                          timeout=5).returncode
+    denied(lambda: os.setuid(0), {errno.EPERM})
+    # Some distributions expose sudo via a host alternatives symlink.
+    # Check that the alias or any visible packaged implementation denies
+    # escalation with the sandbox's capabilities, mounts and policy.
+    for binary in ('/usr/bin/sudo', '/usr/bin/sudo-rs', '/usr/bin/sudo.ws'):
+        try:
+            result = subprocess.run([binary, '-n', '/usr/bin/id'], capture_output=True,
+                                    timeout=5)
+        except OSError as exc:
+            assert exc.errno in (errno.ENOENT, errno.EACCES)
+        else:
+            assert result.returncode
     home = Path.home()
     assert home == Path('/tmp/home') and not list(home.iterdir())
     assert not list(Path('/tmp/cache').iterdir())
