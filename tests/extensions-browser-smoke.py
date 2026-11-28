@@ -97,6 +97,18 @@ def exercise(browser):
     legacy = plain / 'devstack-tools'
     legacy.symlink_to(TOOLS / 'skills/devstack-tools')
     command('bash', str(SRC / 'install.sh'))
+    installed = detail()
+    if installed['state'] != 'active':
+        command('sudo', 'stat', '-c', '%n %F uid=%u mode=%a', '/opt', str(TOOLS),
+                *(str(TOOLS / name) for name in ('.managed', '.lock', 'current', 'skills', 'releases')))
+        probe = ('/usr/bin/python3', '-IB', '-c',
+                 "import sys; sys.path.insert(0, '/opt/devstack/daemon'); "
+                 "from extension_manifest import REGISTRY, discover_one; "
+                 "print(discover_one('devstack-tools', *REGISTRY['devstack-tools'])['state'])")
+        command('sudo', *probe, check=False)
+        pid = subprocess.check_output(['systemctl', 'show', '--property=MainPID', '--value', 'devstackd'], text=True).strip()
+        command('sudo', 'nsenter', '--mount', '--target', pid, *probe, check=False)
+    assert installed['state'] == 'active', installed
     refresh()
     expect(menu.get_by_role('button', name='Tools')).to_be_visible(timeout=20000)
     expect(page.get_by_role('heading', name='DevStack Tools', exact=True)).to_be_visible(timeout=20000)
