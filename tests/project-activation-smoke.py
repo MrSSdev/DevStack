@@ -245,12 +245,13 @@ def browser_acceptance():
                            lambda route: route.abort())
         assert page.goto(BASE).ok
         responses = []
-        page.on('response', responses.append)
+        page.on('response', lambda response: responses.append(response))
         assert page.goto(BASE + '/isolation-proof').ok
         expect(page.get_by_role('heading', name='Isolation acceptance')).to_be_visible()
         with page.expect_response(lambda r: r.request.method == 'POST'
-                                  and 'livewire' in urlparse(r.url).path):
+                                  and 'livewire' in urlparse(r.url).path) as update:
             page.get_by_role('button', name='Increment').click()
+        assert update.value.ok, update.value.text()
         expect(page.locator('#isolation-count')).to_have_text('incremented-7')
         assert any(cookie['name'].endswith('_session') for cookie in page.context.cookies())
         assert any('/build/assets/' in response.url and response.ok for response in responses)
@@ -264,6 +265,12 @@ def browser_acceptance():
         assert upload.json() == {'file': 'fixture.txt'}
         assert page.request.get(BASE + '/storage/fixture.txt').body() == b'upload-proof'
         browser.close()
+    assert (PROJECT / 'storage/app/public/fixture.txt').stat().st_uid == os.getuid()
+    run('php', '-r', '''
+$db = new PDO("sqlite:database/database.sqlite");
+if ((int)$db->query("SELECT sum(n) FROM isolation_proof")->fetchColumn() !== 7) exit(1);
+$db->exec("INSERT INTO isolation_proof VALUES (3)");
+''', cwd=PROJECT)
 
 
 def create(slug, *, laravel=False):
@@ -398,17 +405,20 @@ def main():
     assert 'izolowanego HTTPS' in rpc('update_config', success=False, slug=SLUG, rules='')
     assert 'izolowanego HTTPS' in rpc('update_full_config', success=False, slug=SLUG, full_config=ordinary_config)
 
-    browser_acceptance()
-    assert (PROJECT / 'storage/app/public/fixture.txt').stat().st_uid == os.getuid()
-    run('php', '-r', '''
-$db = new PDO("sqlite:database/database.sqlite");
-if ((int)$db->query("SELECT sum(n) FROM isolation_proof")->fetchColumn() !== 7) exit(1);
-$db->exec("INSERT INTO isolation_proof VALUES (3)");
-''', cwd=PROJECT)
+    browser_error = None
+    try:
+        browser_acceptance()
+    except Exception as exc:
+        # SMTP and service recovery are independent of the browser fixture.
+        # Keep their results and still fail the workflow for a browser error.
+        browser_error = exc
+        print('Browser acceptance failed:', exc, flush=True)
+    else:
+        print('PASS: Laravel, Livewire, Flux/Vite, session, upload and SQLite', flush=True)
     assert (PROJECT / '.env').read_bytes() == env
     assert run('getfacl', '-p', *acl_paths).stdout == acl
     assert run('sudo', 'sha256sum', certificate).stdout == cert
-    print('PASS: HTTPS, Laravel, Livewire, Flux/Vite, session, upload, SQLite and restricted host access', flush=True)
+    print('PASS: HTTPS, isolated routing, unchanged ACL, TLS and environment, and restricted host access', flush=True)
 
     assert until(lambda: http('/isolation-smtp-state') == 'ready')
     try:
@@ -488,6 +498,8 @@ $db->exec("INSERT INTO isolation_proof VALUES (3)");
     assert json.loads(wait_http('/isolation-probe'))['uid'] == os.getuid()
     print('PASS: fail-closed failure, identity/drift recovery, real update/rollback, deactivation and delete/recreate',
           flush=True)
+    if browser_error is not None:
+        raise browser_error
 
 
 if __name__ == '__main__':
