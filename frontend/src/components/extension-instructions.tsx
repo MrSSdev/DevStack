@@ -21,9 +21,12 @@ export const instructionStatuses: Record<string, string> = {
   missing: 'Brak katalogu projektu', linked: 'Zarządzane', detached: 'Odłączone', selected: 'Dobrano',
 }
 
-// Narrow windows and hybrid computers can expose a fine primary pointer.
+// Keep larger touch targets in the preview dialog, not the compact project card.
 export const touchHeight = 'max-sm:min-h-[44px] any-pointer-coarse:min-h-[44px]'
 export const shortcutStyle = cn(touchHeight, 'max-sm:min-w-[44px] any-pointer-coarse:min-w-[44px]')
+// Project shortcuts stay smaller than the standard h-8 page-header actions,
+// including on hybrid/touch devices. Keep at least a 24px control target.
+export const compactIconStyle = 'size-7 rounded-md [&_svg]:size-3.5'
 
 export function timeLabel(value: string) {
   return new Date(value).toLocaleString('pl-PL')
@@ -58,17 +61,18 @@ export function ProjectInstructionActions({ project, operations, pending, send, 
   const syncLabel = compact && !['error', 'unsafe_directory', 'directory_changed', 'missing'].includes(project.status)
     ? 'Synchronizuj instrukcje' : 'Ponów synchronizację'
   return <>
-    {operations.includes('set_automatic') && <label className={compact ? cn('flex min-h-8 items-center gap-1.5 pl-1 text-xs', touchHeight) : 'flex items-center gap-2'}>
+    {operations.includes('set_automatic') && <label className={compact ? 'flex min-h-7 items-center gap-1.5 pl-1 text-xs' : 'flex items-center gap-2'}>
       <Switch disabled={disabled} checked={project.automatic} aria-label={'Automatyczne instrukcje w projekcie ' + project.name}
+        className={compact ? 'h-6 w-10 [&>span]:size-4 [&>span[data-state=checked]]:translate-x-[18px]' : undefined}
         onCheckedChange={enabled => send({ action: 'set_automatic', enabled, project: project.id })} />Automatycznie
     </label>}
     {operations.includes('sync') && <Button type="button" variant="outline" size={compact ? 'icon' : 'sm'} disabled={disabled}
-      title={syncLabel} aria-label={syncLabel} className={compact ? shortcutStyle : undefined}
+      title={syncLabel} aria-label={syncLabel} className={compact ? compactIconStyle : undefined}
       onClick={() => send({ action: 'sync', project: project.id })}>
       {compact ? <RefreshCw /> : syncLabel}
     </Button>}
     {operations.includes('migrate') && project.migratable && <Button type="button" variant="outline" size="sm" disabled={disabled}
-      className={compact ? shortcutStyle : undefined} onClick={() => {
+      className={compact ? 'h-7 px-2 text-xs' : undefined} onClick={() => {
         if (window.confirm('Zastąpić ręczne dowiązanie do zbiorczego skilla automatycznie dobranymi instrukcjami?')) {
           send({ action: 'migrate', project: project.id })
         }

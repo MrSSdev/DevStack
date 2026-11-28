@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Check, ChevronDown, CircleDashed, Clock3, Link, Pause, TriangleAlert, X } from 'lucide-react'
 import { ExtensionIcon, type ExtensionIconName } from '@/components/extension-view'
 import {
-  InstructionPreview, ProjectInstructionActions, instructionStatuses, shortcutStyle, timeLabel, touchHeight,
+  InstructionPreview, ProjectInstructionActions, compactIconStyle, instructionStatuses, shortcutStyle, timeLabel,
   useInstructionOperations, type Operation, type ProjectInstructionState,
 } from '@/components/extension-instructions'
 import { Button } from '@/components/ui/button'
@@ -108,7 +108,7 @@ function ProjectInstructionSection({ extension, card, section, sending }: {
           const label = instructionStatuses[state]
           return <li key={item.id} className="min-w-0">
             <button type="button" title={label} onClick={() => setPreview(item.id)}
-              className={cn('inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-left wrap-anywhere hover:bg-secondary focus-visible:outline-2 focus-visible:outline-ring', touchHeight)}>
+              className="inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-left wrap-anywhere hover:bg-secondary focus-visible:outline-2 focus-visible:outline-ring">
               <Icon aria-hidden="true" className={cn('size-3.5 shrink-0', state === 'linked' ? 'text-emerald-700 dark:text-emerald-400'
                 : ['conflict', 'error'].includes(state) ? 'text-destructive' : 'text-muted-foreground')} />
               <span>{item.name}</span><span className="sr-only"> · {label}</span>
@@ -117,7 +117,7 @@ function ProjectInstructionSection({ extension, card, section, sending }: {
         })}
         {rows.length === 0 && <li className="text-muted-foreground">Brak instrukcji</li>}
       </ul>
-      <Button type="button" size="icon" variant="ghost" className={cn('size-7', shortcutStyle)}
+      <Button type="button" size="icon" variant="ghost" className={compactIconStyle}
         aria-label="Szczegóły instrukcji" aria-expanded={expanded} aria-controls={detail} title="Szczegóły instrukcji"
         onClick={() => setExpanded(value => !value)}>
         <ChevronDown className={cn(expanded && 'rotate-180')} />
